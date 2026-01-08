@@ -1,0 +1,8 @@
+fn main() {
+  let flag = true
+  if flag {
+    if false { ret 0 } else { ret 1 }
+  } else {
+    ret 2
+  }
+}

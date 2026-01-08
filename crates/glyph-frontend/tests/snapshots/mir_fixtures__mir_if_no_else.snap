@@ -1,0 +1,49 @@
+---
+source: crates/glyph-frontend/tests/mir_fixtures.rs
+expression: out.mir
+---
+MirModule {
+    functions: [
+        MirFunction {
+            name: "main",
+            ret_type: None,
+            params: [],
+            locals: [],
+            blocks: [
+                MirBlock {
+                    insts: [
+                        If {
+                            cond: Bool(
+                                true,
+                            ),
+                            then_bb: BlockId(
+                                1,
+                            ),
+                            else_bb: BlockId(
+                                2,
+                            ),
+                        },
+                    ],
+                },
+                MirBlock {
+                    insts: [
+                        Return(
+                            Some(
+                                Int(
+                                    1,
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+                MirBlock {
+                    insts: [
+                        Return(
+                            None,
+                        ),
+                    ],
+                },
+            ],
+        },
+    ],
+}

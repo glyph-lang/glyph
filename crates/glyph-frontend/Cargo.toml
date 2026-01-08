@@ -1,0 +1,16 @@
+[package]
+name = "glyph-frontend"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+miette.workspace = true
+glyph-core = { path = "../glyph-core" }
+
+[dev-dependencies]
+insta.workspace = true
+proptest.workspace = true

@@ -1,0 +1,18 @@
+[package]
+name = "glyph-backend"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[features]
+default = []
+codegen = ["dep:llvm-sys"]
+
+[dependencies]
+anyhow.workspace = true
+glyph-core = { path = "../glyph-core" }
+llvm-sys = { version = "201", optional = true }
+
+[dev-dependencies]
+insta.workspace = true

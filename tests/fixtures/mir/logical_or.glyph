@@ -1,0 +1,4 @@
+fn main() {
+  let a = false
+  ret a || true
+}

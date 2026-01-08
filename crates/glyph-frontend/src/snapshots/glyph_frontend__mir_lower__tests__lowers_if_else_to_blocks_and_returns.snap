@@ -1,0 +1,48 @@
+---
+source: crates/glyph-frontend/src/mir_lower.rs
+assertion_line: 180
+expression: blocks
+---
+[
+    MirBlock(
+        MirBlock {
+            insts: [
+                If {
+                    cond: Bool(true),
+                    then_bb: BlockId(
+                        1,
+                    ),
+                    else_bb: BlockId(
+                        2,
+                    ),
+                },
+            ],
+        },
+    ),
+    MirBlock(
+        MirBlock {
+            insts: [
+                Return(
+                    Some(
+                        Int(
+                            1,
+                        ),
+                    ),
+                ),
+            ],
+        },
+    ),
+    MirBlock(
+        MirBlock {
+            insts: [
+                Return(
+                    Some(
+                        Int(
+                            0,
+                        ),
+                    ),
+                ),
+            ],
+        },
+    ),
+]

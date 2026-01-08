@@ -1,0 +1,87 @@
+---
+source: crates/glyph-frontend/src/parser.rs
+expression: out.module
+---
+Module {
+    items: [
+        Function(
+            Function {
+                name: Ident(
+                    "add",
+                ),
+                params: [
+                    Param {
+                        name: Ident(
+                            "a",
+                        ),
+                        ty: Some(
+                            Ident(
+                                "i",
+                            ),
+                        ),
+                        span: Span {
+                            start: 7,
+                            end: 11,
+                        },
+                    },
+                    Param {
+                        name: Ident(
+                            "b",
+                        ),
+                        ty: None,
+                        span: Span {
+                            start: 13,
+                            end: 14,
+                        },
+                    },
+                ],
+                ret_type: None,
+                body: Block {
+                    span: Span {
+                        start: 16,
+                        end: 29,
+                    },
+                    stmts: [
+                        Ret(
+                            Some(
+                                Binary {
+                                    op: Add,
+                                    lhs: Ident(
+                                        Ident(
+                                            "a",
+                                        ),
+                                        Span {
+                                            start: 22,
+                                            end: 23,
+                                        },
+                                    ),
+                                    rhs: Ident(
+                                        Ident(
+                                            "b",
+                                        ),
+                                        Span {
+                                            start: 26,
+                                            end: 27,
+                                        },
+                                    ),
+                                    span: Span {
+                                        start: 22,
+                                        end: 27,
+                                    },
+                                },
+                            ),
+                            Span {
+                                start: 18,
+                                end: 27,
+                            },
+                        ),
+                    ],
+                },
+                span: Span {
+                    start: 0,
+                    end: 29,
+                },
+            },
+        ),
+    ],
+}

@@ -1,0 +1,147 @@
+---
+source: crates/glyph-frontend/src/parser.rs
+expression: out.module
+---
+Module {
+    items: [
+        Function(
+            Function {
+                name: Ident(
+                    "f",
+                ),
+                params: [],
+                ret_type: None,
+                body: Block {
+                    span: Span {
+                        start: 7,
+                        end: 54,
+                    },
+                    stmts: [
+                        Let {
+                            name: Ident(
+                                "x",
+                            ),
+                            ty: None,
+                            value: Some(
+                                Call {
+                                    callee: Ident(
+                                        Ident(
+                                            "foo",
+                                        ),
+                                        Span {
+                                            start: 17,
+                                            end: 20,
+                                        },
+                                    ),
+                                    args: [
+                                        Lit(
+                                            Int(
+                                                1,
+                                            ),
+                                            Span {
+                                                start: 21,
+                                                end: 22,
+                                            },
+                                        ),
+                                        Lit(
+                                            Int(
+                                                2,
+                                            ),
+                                            Span {
+                                                start: 24,
+                                                end: 25,
+                                            },
+                                        ),
+                                    ],
+                                    span: Span {
+                                        start: 17,
+                                        end: 26,
+                                    },
+                                },
+                            ),
+                            span: Span {
+                                start: 9,
+                                end: 26,
+                            },
+                        },
+                        Ret(
+                            Some(
+                                If {
+                                    cond: Ident(
+                                        Ident(
+                                            "x",
+                                        ),
+                                        Span {
+                                            start: 34,
+                                            end: 35,
+                                        },
+                                    ),
+                                    then_block: Block {
+                                        span: Span {
+                                            start: 36,
+                                            end: 41,
+                                        },
+                                        stmts: [
+                                            Expr(
+                                                Ident(
+                                                    Ident(
+                                                        "x",
+                                                    ),
+                                                    Span {
+                                                        start: 38,
+                                                        end: 39,
+                                                    },
+                                                ),
+                                                Span {
+                                                    start: 38,
+                                                    end: 39,
+                                                },
+                                            ),
+                                        ],
+                                    },
+                                    else_block: Some(
+                                        Block {
+                                            span: Span {
+                                                start: 47,
+                                                end: 52,
+                                            },
+                                            stmts: [
+                                                Expr(
+                                                    Lit(
+                                                        Int(
+                                                            0,
+                                                        ),
+                                                        Span {
+                                                            start: 49,
+                                                            end: 50,
+                                                        },
+                                                    ),
+                                                    Span {
+                                                        start: 49,
+                                                        end: 50,
+                                                    },
+                                                ),
+                                            ],
+                                        },
+                                    ),
+                                    span: Span {
+                                        start: 31,
+                                        end: 52,
+                                    },
+                                },
+                            ),
+                            Span {
+                                start: 27,
+                                end: 52,
+                            },
+                        ),
+                    ],
+                },
+                span: Span {
+                    start: 0,
+                    end: 54,
+                },
+            },
+        ),
+    ],
+}

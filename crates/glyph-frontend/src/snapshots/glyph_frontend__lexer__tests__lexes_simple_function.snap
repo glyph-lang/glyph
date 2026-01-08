@@ -1,0 +1,132 @@
+---
+source: crates/glyph-frontend/src/lexer.rs:207
+expression: out.tokens
+---
+[
+    Token {
+        kind: Fn,
+        span: Span {
+            start: 0,
+            end: 2,
+        },
+    },
+    Token {
+        kind: Ident,
+        span: Span {
+            start: 3,
+            end: 6,
+        },
+    },
+    Token {
+        kind: LParen,
+        span: Span {
+            start: 6,
+            end: 7,
+        },
+    },
+    Token {
+        kind: Ident,
+        span: Span {
+            start: 7,
+            end: 8,
+        },
+    },
+    Token {
+        kind: Colon,
+        span: Span {
+            start: 8,
+            end: 9,
+        },
+    },
+    Token {
+        kind: Ident,
+        span: Span {
+            start: 10,
+            end: 11,
+        },
+    },
+    Token {
+        kind: Comma,
+        span: Span {
+            start: 11,
+            end: 12,
+        },
+    },
+    Token {
+        kind: Ident,
+        span: Span {
+            start: 13,
+            end: 14,
+        },
+    },
+    Token {
+        kind: Colon,
+        span: Span {
+            start: 14,
+            end: 15,
+        },
+    },
+    Token {
+        kind: Ident,
+        span: Span {
+            start: 16,
+            end: 17,
+        },
+    },
+    Token {
+        kind: RParen,
+        span: Span {
+            start: 17,
+            end: 18,
+        },
+    },
+    Token {
+        kind: LBrace,
+        span: Span {
+            start: 19,
+            end: 20,
+        },
+    },
+    Token {
+        kind: Ret,
+        span: Span {
+            start: 21,
+            end: 24,
+        },
+    },
+    Token {
+        kind: Ident,
+        span: Span {
+            start: 25,
+            end: 26,
+        },
+    },
+    Token {
+        kind: Plus,
+        span: Span {
+            start: 27,
+            end: 28,
+        },
+    },
+    Token {
+        kind: Ident,
+        span: Span {
+            start: 29,
+            end: 30,
+        },
+    },
+    Token {
+        kind: RBrace,
+        span: Span {
+            start: 31,
+            end: 32,
+        },
+    },
+    Token {
+        kind: Eof,
+        span: Span {
+            start: 32,
+            end: 32,
+        },
+    },
+]

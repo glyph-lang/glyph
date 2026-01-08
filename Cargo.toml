@@ -1,0 +1,26 @@
+[workspace]
+members = [
+  "crates/glyph-core",
+  "crates/glyph-frontend",
+  "crates/glyph-backend",
+  "crates/glyph-cli",
+  "crates/glyphfmt",
+  "crates/glyphlsp",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Glyph Authors"]
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "1"
+insta = { version = "1", features = ["glob"] }
+proptest = "1"
+miette = { version = "7", features = ["fancy"] }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

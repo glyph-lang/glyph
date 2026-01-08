@@ -1,0 +1,112 @@
+---
+source: crates/glyph-frontend/tests/mir_fixtures.rs
+expression: out.mir
+---
+MirModule {
+    functions: [
+        MirFunction {
+            name: "main",
+            ret_type: None,
+            params: [],
+            locals: [
+                Local {
+                    name: Some(
+                        "flag",
+                    ),
+                    ty: None,
+                },
+            ],
+            blocks: [
+                MirBlock {
+                    insts: [
+                        Assign {
+                            local: LocalId(
+                                0,
+                            ),
+                            value: ConstBool(
+                                true,
+                            ),
+                        },
+                        If {
+                            cond: Local(
+                                LocalId(
+                                    0,
+                                ),
+                            ),
+                            then_bb: BlockId(
+                                1,
+                            ),
+                            else_bb: BlockId(
+                                2,
+                            ),
+                        },
+                    ],
+                },
+                MirBlock {
+                    insts: [
+                        If {
+                            cond: Bool(
+                                false,
+                            ),
+                            then_bb: BlockId(
+                                4,
+                            ),
+                            else_bb: BlockId(
+                                5,
+                            ),
+                        },
+                    ],
+                },
+                MirBlock {
+                    insts: [
+                        Return(
+                            Some(
+                                Int(
+                                    2,
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+                MirBlock {
+                    insts: [
+                        Return(
+                            None,
+                        ),
+                    ],
+                },
+                MirBlock {
+                    insts: [
+                        Return(
+                            Some(
+                                Int(
+                                    0,
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+                MirBlock {
+                    insts: [
+                        Return(
+                            Some(
+                                Int(
+                                    1,
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+                MirBlock {
+                    insts: [
+                        Goto(
+                            BlockId(
+                                3,
+                            ),
+                        ),
+                    ],
+                },
+            ],
+        },
+    ],
+}

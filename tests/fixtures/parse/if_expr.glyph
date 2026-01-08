@@ -1,0 +1,7 @@
+fn choose(flag: bool) {
+  if flag {
+    ret 1
+  } else {
+    ret 0
+  }
+}
