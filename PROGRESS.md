@@ -223,6 +223,35 @@ INSTA_UPDATE=always cargo test
 
 ## 📝 Recent Changes
 
+### January 8, 2026 - Late Evening
+
+**Implemented Struct Parsing (Phases 1-2):**
+
+1. **AST Extension (Phase 1)**
+   - Added `StructDef` and `FieldDef` types
+   - Extended `Item` enum with `Struct` variant
+   - Added `Expr::StructLit` and `Expr::FieldAccess`
+   - Created 5 unit tests for AST construction
+
+2. **Parser Implementation (Phase 2)**
+   - Implemented `parse_struct()` for struct definitions
+   - Implemented `parse_struct_lit()` for struct literals
+   - Extended `parse_call_or_primary()` for field access (`.` operator)
+   - Updated main parse loop to handle `struct` keyword
+   - Created 3 parser test fixtures (all passing)
+
+3. **Verified Correctness**
+   - All 28 tests passing (12 frontend + 5 AST + 11 MIR)
+   - Can parse: `struct Point { x: i32, y: i32 }`
+   - Can parse: `Point { x: 10, y: 20 }`
+   - Can parse: `p.x` and `p.y`
+   - No breaking changes to existing functionality
+
+4. **Committed to Git**
+   - Initial commit with full working compiler
+   - 64 files, 6015 lines of code
+   - Complete LLVM backend + struct parsing foundation
+
 ### January 8, 2026 - Evening Update
 
 **Implemented Implicit Returns:**
