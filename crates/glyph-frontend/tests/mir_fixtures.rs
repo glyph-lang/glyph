@@ -114,3 +114,17 @@ fn mir_struct_return() {
     let out = compile_source(&src, FrontendOptions { emit_mir: true });
     assert_debug_snapshot!(out.mir);
 }
+
+#[test]
+fn mir_call_basic() {
+    let src = run_fixture("call_basic.glyph");
+    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    assert_debug_snapshot!(out.mir);
+}
+
+#[test]
+fn mir_call_recursive() {
+    let src = run_fixture("call_recursive.glyph");
+    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    assert_debug_snapshot!(out.mir);
+}

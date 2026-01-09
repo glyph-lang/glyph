@@ -112,7 +112,7 @@ impl CodegenContext {
             let llvm_func = *functions
                 .get(&func.name)
                 .ok_or_else(|| anyhow!("missing declared function {}", func.name))?;
-            self.codegen_function_body(func, llvm_func, &functions)?;
+            self.codegen_function_body(func, llvm_func, &functions, mir_module)?;
         }
 
         Ok(())
@@ -171,6 +171,7 @@ impl CodegenContext {
         func: &MirFunction,
         llvm_func: LLVMValueRef,
         functions: &HashMap<String, LLVMValueRef>,
+        mir_module: &MirModule,
     ) -> Result<()> {
         // Create basic blocks
         let mut bb_map: HashMap<BlockId, LLVMBasicBlockRef> = HashMap::new();
@@ -226,7 +227,7 @@ impl CodegenContext {
         for (i, block) in func.blocks.iter().enumerate() {
             let bb = bb_map.get(&BlockId(i as u32)).unwrap();
             unsafe { LLVMPositionBuilderAtEnd(self.builder, *bb) };
-            self.codegen_block(func, block, &local_map, &bb_map, functions)?;
+            self.codegen_block(func, block, &local_map, &bb_map, functions, mir_module)?;
         }
 
         Ok(())
@@ -239,9 +240,10 @@ impl CodegenContext {
         local_map: &HashMap<LocalId, LLVMValueRef>,
         bb_map: &HashMap<BlockId, LLVMBasicBlockRef>,
         functions: &HashMap<String, LLVMValueRef>,
+        mir_module: &MirModule,
     ) -> Result<()> {
         for inst in &block.insts {
-            self.codegen_inst(func, inst, local_map, bb_map, functions)?;
+            self.codegen_inst(func, inst, local_map, bb_map, functions, mir_module)?;
         }
         Ok(())
     }
@@ -253,11 +255,12 @@ impl CodegenContext {
         local_map: &HashMap<LocalId, LLVMValueRef>,
         bb_map: &HashMap<BlockId, LLVMBasicBlockRef>,
         functions: &HashMap<String, LLVMValueRef>,
+        mir_module: &MirModule,
     ) -> Result<()> {
         unsafe {
             match inst {
                 MirInst::Assign { local, value } => {
-                    let val = self.codegen_rvalue(value, func, local_map, functions)?;
+                    let val = self.codegen_rvalue(value, func, local_map, functions, mir_module)?;
                     let local_ptr = local_map
                         .get(local)
                         .ok_or_else(|| anyhow!("undefined local {:?}", local))?;
@@ -303,6 +306,7 @@ impl CodegenContext {
         func: &MirFunction,
         local_map: &HashMap<LocalId, LLVMValueRef>,
         functions: &HashMap<String, LLVMValueRef>,
+        mir_module: &MirModule,
     ) -> Result<LLVMValueRef> {
         unsafe {
             match rvalue {
@@ -416,14 +420,20 @@ impl CodegenContext {
                         .copied()
                         .ok_or_else(|| anyhow!("unknown function {}", name))?;
 
+                    // Find the MIR function to get its type signature
+                    let target_func = mir_module
+                        .functions
+                        .iter()
+                        .find(|f| f.name == *name)
+                        .ok_or_else(|| anyhow!("function {} not found in MIR module", name))?;
+
+                    // Build the LLVM function type from the MIR function signature
+                    let fn_ty = self.llvm_function_type(target_func)?;
+
+                    // Codegen arguments
                     let mut llvm_args: Vec<LLVMValueRef> = Vec::new();
                     for arg in args {
                         llvm_args.push(self.codegen_value(arg, func, local_map)?);
-                    }
-
-                    let fn_ty = LLVMGetElementType(LLVMTypeOf(callee));
-                    if fn_ty.is_null() {
-                        bail!("failed to get llvm function type for {}", name);
                     }
 
                     let call_name = CString::new("call")?;
