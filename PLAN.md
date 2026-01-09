@@ -23,7 +23,7 @@ Status key: `[ ]` not started, `[~]` in progress, `[x]` done.
 - [x] M3: MIR lowering stable; glyphfmt/glyphlsp minimal stubs (locals, consts, binary temps; if/else blocks + logical short-circuit lowering in place; MIR fixtures/snapshots added)
 - [x] M4: LLVM IR lowering for core constructs; snapshot IR tests - COMPLETE
 - [x] M5: CLI `build/check/run` end-to-end fixture tests - COMPLETE
-- [~] M6: Struct support (AST + Parser complete; MIR/Codegen in progress)
+- [x] M6: Struct support - COMPLETE (all 6 phases: AST, Parser, Resolver, MIR, Codegen, Integration)
 
 ## TDD & fixtures
 - [ ] Fixture tree under `tests/fixtures/{lex,parse,resolution,typeck,borrow,mir,ir,cli}`
@@ -47,40 +47,51 @@ Status key: `[ ]` not started, `[~]` in progress, `[x]` done.
 - [x] Struct AST nodes (StructDef, FieldDef, StructLit, FieldAccess)
 - [x] Struct parsing (definitions, literals, field access)
 
-## Next Session: Struct Support Continuation
-**Status:** Phases 1-2 complete (AST + Parser)
+## Struct Support: COMPLETE ✅
+**Status:** All 6 phases complete and committed
 
-**Remaining Work:**
-- [ ] Phase 3: Type Resolution (~2-3 hours)
-  - Create `resolver.rs` with struct type registry
-  - Build `StructType` metadata
-  - Collect struct definitions in first pass
-  - Resolve field types
-  
-- [ ] Phase 4: MIR Extension (~3-4 hours)
-  - Add StructLit and FieldAccess to Rvalue enum
-  - Add struct_types to MirModule
-  - Lower struct expressions to MIR
-  - Create MIR test fixtures
-  
-- [ ] Phase 5: LLVM Codegen (~4-5 hours)
-  - Register LLVM struct types
-  - Codegen struct literals (alloca + GEP + store)
-  - Codegen field access (GEP + load)
-  - JIT execution tests
-  
-- [ ] Phase 6: Integration (~2-3 hours)
-  - Wire resolver into frontend pipeline
-  - End-to-end tests
-  - Documentation updates
+**Completed Work:**
+- [x] Phase 1-2: AST Extension + Parser
+  - Struct definitions, literals, field access parsing
+  - 3 parser test fixtures
 
-**Design Decisions Made:**
-- Stack-allocated structs only (no heap, no pointers in Phase 1)
-- Copy semantics (like C structs)
-- Type::Named already exists for struct types
-- All tokens already in lexer - no changes needed
+- [x] Phase 3: Type Resolution
+  - resolver.rs with StructType registry
+  - Two-pass resolution with validation
+  - 6 unit tests for error detection
 
-**Test Strategy:**
-- TDD with snapshot tests via `insta`
-- Fixtures for each phase
-- End-to-end JIT execution tests
+- [x] Phase 4: MIR Extension
+  - StructLit and FieldAccess Rvalue variants
+  - struct_types in MirModule
+  - 3 MIR snapshot tests + 2 unit tests
+
+- [x] Phase 5: LLVM Codegen
+  - Two-pass struct registration (LLVMStructCreateNamed + SetBody)
+  - GEP-based field access codegen
+  - 3 integration tests verifying LLVM IR
+
+- [x] Phase 6: Integration
+  - Full pipeline working (Lex → Parse → Resolve → MIR → LLVM)
+  - 20+ tests passing
+  - Documentation updated
+
+**Example Working Code:**
+```glyph
+struct Point { x: i32, y: i32 }
+fn main() -> i32 {
+  let p = Point { x: 10, y: 20 }
+  ret p.x + p.y  // compiles and generates correct LLVM IR
+}
+```
+
+## Next Session: Function Call Implementation
+
+**Status:** Parser supports calls, MIR has placeholder, needs full implementation
+
+**Planned Phases:**
+1. Research & Design (~2 hours) - Understand current state, design approach
+2. MIR Lowering (~2-3 hours) - Implement lower_call(), function registry
+3. LLVM Codegen (~2-3 hours) - LLVMBuildCall, parameter passing
+4. Testing (~1-2 hours) - Unit tests, integration tests, recursion tests
+
+**Est. Total:** 7-10 hours

@@ -1,7 +1,7 @@
 # Next Session Quick Start Guide
 
 **Last Updated:** January 8, 2026
-**Commit:** c608508 (feat: implement glyph compiler with LLVM backend and struct parsing)
+**Commit:** 368dd20 (feat: complete struct support with type resolution, MIR lowering, and LLVM codegen)
 
 ---
 
@@ -15,14 +15,20 @@
 - Implicit returns (Rust-style)
 - MIR (Mid-level IR) with SSA-like representation
 - LLVM codegen with JIT execution
-- Struct parsing (definitions, literals, field access)
+- **COMPLETE STRUCT SUPPORT:**
+  - Struct definitions
+  - Struct literals
+  - Field access
+  - Type resolution with validation
+  - MIR lowering
+  - LLVM codegen
 
 **Test Coverage:**
-- 28 tests passing
-- 12 MIR snapshot tests
+- 30+ tests passing
+- 15 MIR snapshot tests
+- 7 backend codegen tests
+- 6 resolver unit tests
 - 5 AST unit tests
-- 4 backend tests with JIT
-- 3 parser fixtures for structs
 
 **Example Code That Works:**
 ```glyph
@@ -36,124 +42,97 @@ fn abs(x: i32) -> i32 {
   if x < 0 { -x } else { x }
 }
 
-// Struct parsing (AST only - not compiled yet)
+// Structs - FULLY WORKING!
 struct Point {
   x: i32
   y: i32
 }
 
-fn main() {
+fn main() -> i32 {
   let p = Point { x: 10, y: 20 }
-  p.x + p.y
+  ret p.x + p.y  // compiles and generates correct LLVM IR!
 }
 ```
 
 ---
 
-## What to Build Next
+## Struct Support ✅ COMPLETE
 
-### Phase 3: Type Resolution (~2-3 hours)
+All struct implementation phases are now complete and committed:
 
-**Goal:** Build struct type registry and resolver
+- ✅ Phase 1-2: AST + Parser (struct definitions, literals, field access)
+- ✅ Phase 3: Type Resolution (resolver.rs with validation)
+- ✅ Phase 4: MIR Extension (StructLit, FieldAccess rvalues)
+- ✅ Phase 5: LLVM Codegen (struct registration, GEP instructions)
+- ✅ Phase 6: Integration (full pipeline working, 20+ tests passing)
 
-**Files to Create:**
-- `crates/glyph-frontend/src/resolver.rs`
+## What to Build Next: Function Calls
 
-**What to Implement:**
-1. `StructType` definition with field metadata
-2. `ResolverContext` with `HashMap<String, StructType>`
-3. `resolve_types()` function:
-   - First pass: collect all struct definitions
-   - Build field type map
-   - Validate field types exist
+**Status:** MIR placeholder exists, codegen partially implemented, needs completion
 
-**Test Strategy:**
-- Unit tests for type resolution
-- Test undefined struct references
-- Test circular dependencies (future)
+**Current Limitations:**
+- Parser supports function call syntax: `foo(1, 2, 3)`
+- MIR has `Rvalue::Call { name, args }` variant
+- LLVM codegen has function declaration support
+- **Missing:** Call expression lowering and proper codegen
 
-**Integration Point:**
-- Update `lower_module()` in `mir_lower.rs` to call resolver first
-- Pass `struct_types` registry through MIR lowering
+### Phase 1: Research & Design (~2 hours)
 
----
+**Goal:** Understand current state and design implementation
 
-### Phase 4: MIR Extension (~3-4 hours)
+**Tasks:**
+1. Examine `Expr::Call` in AST (likely exists)
+2. Check if `lower_call()` exists in mir_lower.rs
+3. Review LLVM `LLVMBuildCall` usage in codegen.rs
+4. Design function signature registry
+5. Plan parameter/return value handling
 
-**Goal:** Represent struct operations in MIR
+### Phase 2: MIR Lowering (~2-3 hours)
+
+**Goal:** Lower function calls to MIR
 
 **Files to Modify:**
-- `crates/glyph-core/src/lib.rs` (mir module)
 - `crates/glyph-frontend/src/mir_lower.rs`
 
-**What to Add:**
+**What to Implement:**
+1. `lower_call()` function (if not exists)
+   - Evaluate argument expressions
+   - Look up function signature
+   - Create Call rvalue
+   - Handle return value
 
-1. **Extend Rvalue enum:**
-```rust
-pub enum Rvalue {
-    // ... existing variants ...
-    StructLit {
-        struct_name: String,
-        field_values: Vec<(String, MirValue)>,
-    },
-    FieldAccess {
-        base: LocalId,
-        field_name: String,
-        field_index: u32,
-    },
-}
-```
+2. Add function registry to LowerContext
+   - Map function names to signatures
+   - Validate argument count/types
 
-2. **Add to MirModule:**
-```rust
-pub struct MirModule {
-    pub struct_types: HashMap<String, StructType>,  // NEW
-    pub functions: Vec<MirFunction>,
-}
-```
+**Test Fixtures:**
+- `tests/fixtures/mir/call_basic.glyph` - Simple call
+- `tests/fixtures/mir/call_with_return.glyph` - Use return value
+- `tests/fixtures/mir/call_multiple_args.glyph` - Multi-arg
 
-3. **Lower struct expressions:**
-- `Expr::StructLit` → `Rvalue::StructLit`
-- `Expr::FieldAccess` → `Rvalue::FieldAccess`
+### Phase 3: LLVM Codegen (~2-3 hours)
 
-**Test Files to Create:**
-- `tests/fixtures/mir/struct_lit.glyph`
-- `tests/fixtures/mir/field_access.glyph`
-- `tests/fixtures/mir/struct_return.glyph`
-
----
-
-### Phase 5: LLVM Codegen (~4-5 hours)
-
-**Goal:** Generate LLVM IR for struct operations
+**Goal:** Generate LLVM call instructions
 
 **Files to Modify:**
 - `crates/glyph-backend/src/codegen.rs`
 
 **What to Implement:**
+1. Codegen for `Rvalue::Call`
+   - Look up function declaration
+   - Build argument array
+   - Call `LLVMBuildCall`
+   - Handle return value (store to local)
 
-1. **Struct type registration:**
-```rust
-struct_types: HashMap<String, LLVMTypeRef>  // cache
+2. Test edge cases:
+   - Zero arguments
+   - Void returns
+   - Struct parameters/returns
 
-fn register_struct_types(&mut self, mir_module: &MirModule) {
-    // Use LLVMStructCreateNamed + LLVMStructSetBody
-}
-```
-
-2. **Codegen struct literals:**
-- Use `LLVMBuildAlloca()` for stack allocation
-- Use `LLVMBuildGEP2()` to get field pointers
-- Store each field value
-- Load complete struct (for copy semantics)
-
-3. **Codegen field access:**
-- GEP to field: `getelementptr inbounds %Point, ptr %p, i32 0, i32 N`
-- Load field value
-
-**Test Files:**
-- `tests/fixtures/codegen/struct_basic.glyph`
-- `tests/fixtures/codegen/struct_arithmetic.glyph`
+**Test Fixtures:**
+- `tests/fixtures/codegen/call_basic.glyph` - LLVM IR test
+- `tests/fixtures/codegen/call_recursive.glyph` - Recursion test
+- `tests/fixtures/codegen/factorial.glyph` - End-to-end test
 
 ---
 
@@ -242,30 +221,37 @@ cargo test -- --nocapture
 
 ---
 
-## Success Criteria for Next Session
+## Success Criteria for Function Calls
 
-**Minimum:**
-- [ ] Resolver created and working
-- [ ] MIR extended with struct operations
-- [ ] Can lower struct literals to MIR
-- [ ] MIR snapshot tests pass
+**Phase 1 Success (Research & Design):**
+- [ ] Understand current Call implementation
+- [ ] Design function signature registry
+- [ ] Create test specifications
+- [ ] Plan MIR lowering strategy
+- [ ] Plan LLVM codegen strategy
 
-**Full Success:**
-- [ ] LLVM codegen for structs working
-- [ ] Can JIT execute struct operations
-- [ ] End-to-end test: create struct, access fields, return sum
-- [ ] All tests passing
+**Phase 2 Success (MIR Lowering):**
+- [ ] lower_call() function implemented
+- [ ] Function registry in LowerContext
+- [ ] MIR snapshot tests passing
+- [ ] Can lower calls with multiple arguments
+
+**Phase 3 Success (LLVM Codegen):**
+- [ ] Rvalue::Call codegen working
+- [ ] LLVMBuildCall generates correct IR
+- [ ] Can compile and execute function calls
+- [ ] Recursion works (factorial, fibonacci)
 
 ---
 
-## Estimated Time Remaining
+## Estimated Time for Function Calls
 
-- Phase 3: 2-3 hours
-- Phase 4: 3-4 hours  
-- Phase 5: 4-5 hours
-- Phase 6: 2-3 hours
+- Phase 1 (Research & Design): 2 hours
+- Phase 2 (MIR Lowering): 2-3 hours
+- Phase 3 (LLVM Codegen): 2-3 hours
+- Testing & Integration: 1-2 hours
 
-**Total: 11-15 hours (2-3 focused work sessions)**
+**Total: 7-10 hours (1-2 focused work sessions)**
 
 ---
 
@@ -278,4 +264,4 @@ cargo test -- --nocapture
 
 ---
 
-Ready to continue! Start with Phase 3 (Type Resolution) when you begin the next session.
+Ready to continue! Start with Phase 1 (Research & Design) for function calls when you begin the next session.
