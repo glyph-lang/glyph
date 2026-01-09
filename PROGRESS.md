@@ -1,6 +1,6 @@
 # Glyph Implementation Progress
 
-**Last Updated:** January 8, 2026 (Evening - Struct Support COMPLETE)
+**Last Updated:** January 9, 2026 (Function Calls COMPLETE)
 
 ## 🎉 Major Milestone Achieved!
 
@@ -76,9 +76,9 @@ glyph-cli run myfile.glyph
 
 ## 📊 Test Coverage
 
-- **30+ passing unit tests** across all modules
-- **15 MIR snapshot tests** for lowering validation (including implicit returns and structs)
-- **7 backend codegen tests** including struct LLVM IR generation
+- **35+ passing unit tests** across all modules
+- **17 MIR snapshot tests** for lowering validation (including function calls, structs, implicit returns)
+- **10 backend codegen tests** including function calls and struct LLVM IR generation
 - **Parser fixture tests** for syntax validation
 - **Property-based tests** for lexer span correctness
 - **6 resolver tests** for struct type validation
@@ -144,18 +144,46 @@ fn main() -> i32 {
 
 **This now compiles and generates correct LLVM IR!**
 
-## 🚀 What's Next: Function Calls
+## 🎉 Function Calls (COMPLETE ✅)
 
-The next major feature is **function call implementation**. Currently, the `Call` rvalue exists in MIR but is not fully implemented in codegen.
+**Function call implementation is now fully working!**
 
-**Goals:**
-- Lower `Expr::Call` expressions to MIR
-- Implement LLVM `call` instruction generation
-- Support function parameters and return values
-- Enable recursive functions
-- Test with factorial, fibonacci, etc.
+### Features Implemented:
+- ✅ Direct function calls (`add(1, 2)`)
+- ✅ Recursive functions (factorial, fibonacci)
+- ✅ Forward references (any function can call any other)
+- ✅ Struct parameters and return values
+- ✅ Proper LLVM `call` instruction generation
+- ✅ Full MIR lowering with validation
 
-**Est. Effort:** 6-9 hours of implementation + testing
+### Test Coverage:
+- 3 codegen integration tests
+- 2 MIR snapshot tests
+- Verified recursion with factorial(5)
+- Verified struct return by value
+
+### Example Working Code:
+```glyph
+fn factorial(n: i32) -> i32 {
+  if n <= 1 {
+    ret 1
+  } else {
+    ret n * factorial(n - 1)
+  }
+}
+
+fn main() -> i32 {
+  ret factorial(5)  // returns 120
+}
+```
+
+## 🚀 What's Next
+
+Choose next feature to implement:
+1. **Enums + Pattern Matching** - Algebraic data types
+2. **Loops** - for/while iteration
+3. **Arrays** - Fixed-size arrays and slices
+4. **Better Type System** - Full type inference and checking
 
 ## 🏗️ Architecture
 

@@ -1,7 +1,7 @@
 # Next Session Quick Start Guide
 
-**Last Updated:** January 8, 2026
-**Commit:** 368dd20 (feat: complete struct support with type resolution, MIR lowering, and LLVM codegen)
+**Last Updated:** January 9, 2026
+**Commit:** 12901e6 (feat: complete function call implementation with LLVM codegen)
 
 ---
 
@@ -16,41 +16,47 @@
 - MIR (Mid-level IR) with SSA-like representation
 - LLVM codegen with JIT execution
 - **COMPLETE STRUCT SUPPORT:**
-  - Struct definitions
-  - Struct literals
-  - Field access
+  - Struct definitions, literals, field access
   - Type resolution with validation
-  - MIR lowering
-  - LLVM codegen
+  - Return by value
+- **COMPLETE FUNCTION CALLS:**
+  - Direct function calls
+  - Recursive functions
+  - Forward references
+  - Struct parameters and returns
 
 **Test Coverage:**
-- 30+ tests passing
-- 15 MIR snapshot tests
-- 7 backend codegen tests
+- 35+ tests passing
+- 17 MIR snapshot tests
+- 10 backend codegen tests
 - 6 resolver unit tests
 - 5 AST unit tests
 
 **Example Code That Works:**
 ```glyph
-// Functions with implicit returns
-fn add(a: i32, b: i32) -> i32 {
-  a + b
-}
-
-// Control flow
-fn abs(x: i32) -> i32 {
-  if x < 0 { -x } else { x }
-}
-
-// Structs - FULLY WORKING!
+// Structs with functions
 struct Point {
   x: i32
   y: i32
 }
 
+fn make_point(x: i32, y: i32) -> Point {
+  Point { x: x, y: y }  // implicit return
+}
+
+// Recursive functions
+fn factorial(n: i32) -> i32 {
+  if n <= 1 {
+    ret 1
+  } else {
+    ret n * factorial(n - 1)
+  }
+}
+
 fn main() -> i32 {
-  let p = Point { x: 10, y: 20 }
-  ret p.x + p.y  // compiles and generates correct LLVM IR!
+  let pt = make_point(10, 20)
+  let fact = factorial(5)
+  ret pt.x + pt.y + fact  // returns 150 (30 + 120)
 }
 ```
 
@@ -58,81 +64,86 @@ fn main() -> i32 {
 
 ## Struct Support ✅ COMPLETE
 
-All struct implementation phases are now complete and committed:
+All struct implementation phases complete:
+- ✅ AST + Parser + Type Resolution + MIR + LLVM Codegen
+- ✅ 20+ tests passing
 
-- ✅ Phase 1-2: AST + Parser (struct definitions, literals, field access)
-- ✅ Phase 3: Type Resolution (resolver.rs with validation)
-- ✅ Phase 4: MIR Extension (StructLit, FieldAccess rvalues)
-- ✅ Phase 5: LLVM Codegen (struct registration, GEP instructions)
-- ✅ Phase 6: Integration (full pipeline working, 20+ tests passing)
+## Function Calls ✅ COMPLETE
 
-## What to Build Next: Function Calls
+All function call implementation complete:
+- ✅ MIR lowering with validation (argument count checked)
+- ✅ LLVM codegen for direct calls
+- ✅ Recursive functions working (factorial tested)
+- ✅ Forward references supported (any order)
+- ✅ Struct parameters and return values
+- ✅ 5 integration tests passing
 
-**Status:** MIR placeholder exists, codegen partially implemented, needs completion
+## What to Build Next
 
-**Current Limitations:**
-- Parser supports function call syntax: `foo(1, 2, 3)`
-- MIR has `Rvalue::Call { name, args }` variant
-- LLVM codegen has function declaration support
-- **Missing:** Call expression lowering and proper codegen
+Choose the next major feature:
 
-### Phase 1: Research & Design (~2 hours)
+### Option 1: Loops (Recommended - High Value)
+**Complexity:** Medium
+**Value:** Essential for practical programs
 
-**Goal:** Understand current state and design implementation
+**Features:**
+- `while` loops with condition
+- `for` loops over ranges
+- `break` and `continue` statements
+- Loop expressions (can return values)
 
-**Tasks:**
-1. Examine `Expr::Call` in AST (likely exists)
-2. Check if `lower_call()` exists in mir_lower.rs
-3. Review LLVM `LLVMBuildCall` usage in codegen.rs
-4. Design function signature registry
-5. Plan parameter/return value handling
+**Implementation:**
+- Add loop AST nodes
+- MIR loop blocks with phi nodes
+- LLVM loop codegen with proper branching
 
-### Phase 2: MIR Lowering (~2-3 hours)
+**Test Strategy:**
+- Count to N loop
+- Fibonacci via iteration
+- Early break/continue
 
-**Goal:** Lower function calls to MIR
+### Option 2: Arrays and Slices
+**Complexity:** Medium-High
+**Value:** Complement structs well
 
-**Files to Modify:**
-- `crates/glyph-frontend/src/mir_lower.rs`
+**Features:**
+- Fixed-size arrays: `[i32; 10]`
+- Array literals: `[1, 2, 3, 4, 5]`
+- Indexing: `arr[i]`
+- Slices: `&[T]`
 
-**What to Implement:**
-1. `lower_call()` function (if not exists)
-   - Evaluate argument expressions
-   - Look up function signature
-   - Create Call rvalue
-   - Handle return value
+**Implementation:**
+- Array types in type system
+- Bounds checking (optional/runtime)
+- LLVM array/GEP operations
 
-2. Add function registry to LowerContext
-   - Map function names to signatures
-   - Validate argument count/types
+### Option 3: Enums + Pattern Matching
+**Complexity:** High
+**Value:** Powerful language feature
 
-**Test Fixtures:**
-- `tests/fixtures/mir/call_basic.glyph` - Simple call
-- `tests/fixtures/mir/call_with_return.glyph` - Use return value
-- `tests/fixtures/mir/call_multiple_args.glyph` - Multi-arg
+**Features:**
+- Enum definitions with payloads
+- Match expressions (exhaustive)
+- Option[T] and Result[T, E]
 
-### Phase 3: LLVM Codegen (~2-3 hours)
+**Implementation:**
+- Tagged unions in LLVM
+- Pattern matching compilation
+- Exhaustiveness checking
 
-**Goal:** Generate LLVM call instructions
+### Option 4: Better Type System
+**Complexity:** High
+**Value:** Improves correctness
 
-**Files to Modify:**
-- `crates/glyph-backend/src/codegen.rs`
+**Features:**
+- Full type inference (Hindley-Milner)
+- Proper type checking in MIR lowering
+- Better error messages
 
-**What to Implement:**
-1. Codegen for `Rvalue::Call`
-   - Look up function declaration
-   - Build argument array
-   - Call `LLVMBuildCall`
-   - Handle return value (store to local)
-
-2. Test edge cases:
-   - Zero arguments
-   - Void returns
-   - Struct parameters/returns
-
-**Test Fixtures:**
-- `tests/fixtures/codegen/call_basic.glyph` - LLVM IR test
-- `tests/fixtures/codegen/call_recursive.glyph` - Recursion test
-- `tests/fixtures/codegen/factorial.glyph` - End-to-end test
+**Implementation:**
+- Type inference engine
+- Constraint solving
+- Type unification
 
 ---
 

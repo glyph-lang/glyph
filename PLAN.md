@@ -24,6 +24,7 @@ Status key: `[ ]` not started, `[~]` in progress, `[x]` done.
 - [x] M4: LLVM IR lowering for core constructs; snapshot IR tests - COMPLETE
 - [x] M5: CLI `build/check/run` end-to-end fixture tests - COMPLETE
 - [x] M6: Struct support - COMPLETE (all 6 phases: AST, Parser, Resolver, MIR, Codegen, Integration)
+- [x] M7: Function calls - COMPLETE (MIR lowering, LLVM codegen, recursion, forward references)
 
 ## TDD & fixtures
 - [ ] Fixture tree under `tests/fixtures/{lex,parse,resolution,typeck,borrow,mir,ir,cli}`
@@ -84,14 +85,36 @@ fn main() -> i32 {
 }
 ```
 
-## Next Session: Function Call Implementation
+## Function Calls: COMPLETE ✅
 
-**Status:** Parser supports calls, MIR has placeholder, needs full implementation
+**Status:** Fully implemented and tested
 
-**Planned Phases:**
-1. Research & Design (~2 hours) - Understand current state, design approach
-2. MIR Lowering (~2-3 hours) - Implement lower_call(), function registry
-3. LLVM Codegen (~2-3 hours) - LLVMBuildCall, parameter passing
-4. Testing (~1-2 hours) - Unit tests, integration tests, recursion tests
+**Completed Work:**
+- [x] MIR lowering with argument validation
+- [x] LLVM codegen with proper function type handling
+- [x] Recursion support (factorial tested)
+- [x] Forward references (function signature collection)
+- [x] Struct parameters and return values
+- [x] 5 integration tests + 2 MIR snapshot tests
 
-**Est. Total:** 7-10 hours
+**Example Working Code:**
+```glyph
+fn factorial(n: i32) -> i32 {
+  if n <= 1 { ret 1 }
+  else { ret n * factorial(n - 1) }
+}
+
+fn main() -> i32 {
+  ret factorial(5)  // returns 120
+}
+```
+
+## Next Session: Choose Next Feature
+
+**Options:**
+1. **Loops** (while/for) - Essential for iteration
+2. **Arrays** - Fixed-size arrays and slices
+3. **Enums + Match** - Algebraic data types
+4. **Type System** - Full inference and checking
+
+**Recommendation:** Start with loops for maximum practical value.
