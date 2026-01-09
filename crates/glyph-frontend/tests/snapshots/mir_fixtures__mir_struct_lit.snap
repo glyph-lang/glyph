@@ -1,0 +1,95 @@
+---
+source: crates/glyph-frontend/tests/mir_fixtures.rs
+expression: out.mir
+---
+MirModule {
+    struct_types: {
+        "Point": StructType {
+            name: "Point",
+            fields: [
+                (
+                    "x",
+                    I32,
+                ),
+                (
+                    "y",
+                    I32,
+                ),
+            ],
+        },
+    },
+    functions: [
+        MirFunction {
+            name: "main",
+            ret_type: None,
+            params: [],
+            locals: [
+                Local {
+                    name: Some(
+                        "p",
+                    ),
+                    ty: Some(
+                        Named(
+                            "Point",
+                        ),
+                    ),
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        Named(
+                            "Point",
+                        ),
+                    ),
+                },
+            ],
+            blocks: [
+                MirBlock {
+                    insts: [
+                        Assign {
+                            local: LocalId(
+                                1,
+                            ),
+                            value: StructLit {
+                                struct_name: "Point",
+                                field_values: [
+                                    (
+                                        "x",
+                                        Int(
+                                            1,
+                                        ),
+                                    ),
+                                    (
+                                        "y",
+                                        Int(
+                                            2,
+                                        ),
+                                    ),
+                                ],
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                0,
+                            ),
+                            value: Move(
+                                LocalId(
+                                    1,
+                                ),
+                            ),
+                        },
+                        Return(
+                            Some(
+                                Local(
+                                    LocalId(
+                                        0,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+            ],
+        },
+    ],
+}

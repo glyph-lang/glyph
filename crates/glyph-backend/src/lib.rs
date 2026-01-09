@@ -78,7 +78,10 @@ mod tests {
     #[test]
     fn null_backend_returns_ir_string() {
         let backend = NullBackend::default();
-        let module = MirModule { functions: vec![] };
+        let module = MirModule {
+            struct_types: std::collections::HashMap::new(),
+            functions: vec![],
+        };
         let artifact = backend.emit(&module, &CodegenOptions::default()).unwrap();
         assert!(artifact.llvm_ir.unwrap().contains("placeholder"));
     }

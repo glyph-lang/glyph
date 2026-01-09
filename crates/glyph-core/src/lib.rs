@@ -309,12 +309,19 @@ pub mod types {
             self.is_int() || self.is_float()
         }
     }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub struct StructType {
+        pub name: String,
+        pub fields: Vec<(String, Type)>,
+    }
 }
 
 pub mod mir {
     use super::ast::BinaryOp;
-    use super::types::Type;
+    use super::types::{StructType, Type};
     use serde::{Deserialize, Serialize};
+    use std::collections::HashMap;
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     pub struct MirFunction {
@@ -333,6 +340,7 @@ pub mod mir {
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
     pub struct MirModule {
+        pub struct_types: HashMap<String, StructType>,
         pub functions: Vec<MirFunction>,
     }
 
@@ -373,6 +381,15 @@ pub mod mir {
         Call {
             name: String,
             args: Vec<MirValue>,
+        },
+        StructLit {
+            struct_name: String,
+            field_values: Vec<(String, MirValue)>,
+        },
+        FieldAccess {
+            base: LocalId,
+            field_name: String,
+            field_index: u32,
         },
     }
 

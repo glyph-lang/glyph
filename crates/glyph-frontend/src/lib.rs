@@ -8,10 +8,12 @@ use glyph_core::{
 mod lexer;
 mod mir_lower;
 mod parser;
+mod resolver;
 
 pub use lexer::{LexOutput, lex};
 pub use mir_lower::lower_module;
 pub use parser::{ParseOutput, parse};
+pub use resolver::{ResolverContext, resolve_types};
 
 #[derive(Debug, Clone, Default)]
 pub struct FrontendOptions {
@@ -47,9 +49,25 @@ pub fn compile_source(source: &str, opts: FrontendOptions) -> FrontendOutput {
 
     let mut mir = MirModule::default();
 
+    let mut resolver_ctx = None;
+
     if diagnostics.is_empty() {
         if let Some(ref m) = module {
-            mir = mir_lower::lower_module(m);
+            let (ctx, resolve_diags) = resolver::resolve_types(m);
+            diagnostics.extend(resolve_diags);
+            if diagnostics.is_empty() {
+                resolver_ctx = Some(ctx);
+            }
+        }
+    }
+
+    if diagnostics.is_empty() {
+        if let (Some(ref m), Some(ref ctx)) = (module.as_ref(), resolver_ctx.as_ref()) {
+            let (lowered, lower_diags) = mir_lower::lower_module(m, ctx);
+            diagnostics.extend(lower_diags);
+            if diagnostics.is_empty() {
+                mir = lowered;
+            }
         }
     }
 

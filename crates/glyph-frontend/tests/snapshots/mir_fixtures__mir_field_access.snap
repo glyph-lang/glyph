@@ -1,0 +1,115 @@
+---
+source: crates/glyph-frontend/tests/mir_fixtures.rs
+expression: out.mir
+---
+MirModule {
+    struct_types: {
+        "Point": StructType {
+            name: "Point",
+            fields: [
+                (
+                    "x",
+                    I32,
+                ),
+                (
+                    "y",
+                    I32,
+                ),
+            ],
+        },
+    },
+    functions: [
+        MirFunction {
+            name: "main",
+            ret_type: Some(
+                I32,
+            ),
+            params: [],
+            locals: [
+                Local {
+                    name: Some(
+                        "p",
+                    ),
+                    ty: Some(
+                        Named(
+                            "Point",
+                        ),
+                    ),
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        Named(
+                            "Point",
+                        ),
+                    ),
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        I32,
+                    ),
+                },
+            ],
+            blocks: [
+                MirBlock {
+                    insts: [
+                        Assign {
+                            local: LocalId(
+                                1,
+                            ),
+                            value: StructLit {
+                                struct_name: "Point",
+                                field_values: [
+                                    (
+                                        "x",
+                                        Int(
+                                            10,
+                                        ),
+                                    ),
+                                    (
+                                        "y",
+                                        Int(
+                                            20,
+                                        ),
+                                    ),
+                                ],
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                0,
+                            ),
+                            value: Move(
+                                LocalId(
+                                    1,
+                                ),
+                            ),
+                        },
+                        Assign {
+                            local: LocalId(
+                                2,
+                            ),
+                            value: FieldAccess {
+                                base: LocalId(
+                                    0,
+                                ),
+                                field_name: "y",
+                                field_index: 1,
+                            },
+                        },
+                        Return(
+                            Some(
+                                Local(
+                                    LocalId(
+                                        2,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+            ],
+        },
+    ],
+}

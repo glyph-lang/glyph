@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use glyph_core::mir::{
     BlockId, LocalId, MirBlock, MirFunction, MirInst, MirModule, MirValue, Rvalue,
 };
-use glyph_core::types::Type;
+use glyph_core::types::{StructType, Type};
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
 use llvm_sys::{LLVMBuilder, LLVMContext, LLVMModule};
@@ -14,6 +14,8 @@ pub struct CodegenContext {
     context: *mut LLVMContext,
     module: *mut LLVMModule,
     builder: *mut LLVMBuilder,
+    struct_types: HashMap<String, LLVMTypeRef>,
+    struct_layouts: HashMap<String, StructType>,
 }
 
 impl CodegenContext {
@@ -28,6 +30,8 @@ impl CodegenContext {
                 context,
                 module,
                 builder,
+                struct_types: HashMap::new(),
+                struct_layouts: HashMap::new(),
             })
         }
     }
@@ -46,9 +50,45 @@ impl CodegenContext {
         }
     }
 
-    fn get_llvm_type(&self, ty: &Type) -> LLVMTypeRef {
+    fn register_struct_types(&mut self, mir_module: &MirModule) -> Result<()> {
+        // First pass: create named struct types
+        for (name, layout) in &mir_module.struct_types {
+            let name_c = CString::new(name.as_str())?;
+            let llvm_ty = unsafe { LLVMStructCreateNamed(self.context, name_c.as_ptr()) };
+            self.struct_types.insert(name.clone(), llvm_ty);
+            self.struct_layouts.insert(name.clone(), layout.clone());
+        }
+
+        // Second pass: set struct bodies
+        for (name, layout) in &mir_module.struct_types {
+            let llvm_ty = *self
+                .struct_types
+                .get(name)
+                .ok_or_else(|| anyhow!("missing llvm type for struct {}", name))?;
+
+            let mut field_tys: Vec<LLVMTypeRef> = Vec::new();
+            for (_, field_ty) in &layout.fields {
+                field_tys.push(self.get_llvm_type(field_ty)?);
+            }
+
+            unsafe {
+                LLVMStructSetBody(llvm_ty, field_tys.as_mut_ptr(), field_tys.len() as u32, 0);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn get_struct_type(&self, name: &str) -> Result<LLVMTypeRef> {
+        self.struct_types
+            .get(name)
+            .copied()
+            .ok_or_else(|| anyhow!("unknown struct type {}", name))
+    }
+
+    fn get_llvm_type(&self, ty: &Type) -> Result<LLVMTypeRef> {
         unsafe {
-            match ty {
+            Ok(match ty {
                 Type::I32 => LLVMInt32TypeInContext(self.context),
                 Type::I64 => LLVMInt64TypeInContext(self.context),
                 Type::U32 => LLVMInt32TypeInContext(self.context),
@@ -57,27 +97,50 @@ impl CodegenContext {
                 Type::F64 => LLVMDoubleTypeInContext(self.context),
                 Type::Bool => LLVMInt1TypeInContext(self.context),
                 Type::Void => LLVMVoidTypeInContext(self.context),
-                Type::Named(_) => {
-                    // Placeholder for struct types - will implement later
-                    LLVMInt32TypeInContext(self.context)
-                }
-            }
+                Type::Named(name) => self.get_struct_type(name)?,
+            })
         }
     }
 
     pub fn codegen_module(&mut self, mir_module: &MirModule) -> Result<()> {
+        self.register_struct_types(mir_module)?;
+
+        // Declare all functions up-front so calls can reference any order.
+        let functions = self.declare_functions(mir_module)?;
+
         for func in &mir_module.functions {
-            self.codegen_function(func)?;
+            let llvm_func = *functions
+                .get(&func.name)
+                .ok_or_else(|| anyhow!("missing declared function {}", func.name))?;
+            self.codegen_function_body(func, llvm_func, &functions)?;
         }
+
         Ok(())
     }
 
-    fn codegen_function(&mut self, func: &MirFunction) -> Result<()> {
+    fn declare_functions(
+        &mut self,
+        mir_module: &MirModule,
+    ) -> Result<HashMap<String, LLVMValueRef>> {
+        let mut functions = HashMap::new();
+
+        for func in &mir_module.functions {
+            let func_type = self.llvm_function_type(func)?;
+            let func_name = CString::new(func.name.as_str())?;
+            let llvm_func = unsafe { LLVMAddFunction(self.module, func_name.as_ptr(), func_type) };
+            functions.insert(func.name.clone(), llvm_func);
+        }
+
+        Ok(functions)
+    }
+
+    fn llvm_function_type(&self, func: &MirFunction) -> Result<LLVMTypeRef> {
         // Determine return type
         let ret_type = func
             .ret_type
             .as_ref()
             .map(|t| self.get_llvm_type(t))
+            .transpose()?
             .unwrap_or_else(|| unsafe { LLVMVoidTypeInContext(self.context) });
 
         // Build parameter types
@@ -88,24 +151,27 @@ impl CodegenContext {
                 .ty
                 .as_ref()
                 .map(|t| self.get_llvm_type(t))
+                .transpose()?
                 .unwrap_or_else(|| unsafe { LLVMInt32TypeInContext(self.context) });
             param_types.push(param_ty);
         }
 
-        // Create function type
-        let func_type = unsafe {
+        Ok(unsafe {
             LLVMFunctionType(
                 ret_type,
                 param_types.as_mut_ptr(),
                 param_types.len() as u32,
                 0, // not variadic
             )
-        };
+        })
+    }
 
-        // Create function
-        let func_name = CString::new(func.name.as_str())?;
-        let llvm_func = unsafe { LLVMAddFunction(self.module, func_name.as_ptr(), func_type) };
-
+    fn codegen_function_body(
+        &mut self,
+        func: &MirFunction,
+        llvm_func: LLVMValueRef,
+        functions: &HashMap<String, LLVMValueRef>,
+    ) -> Result<()> {
         // Create basic blocks
         let mut bb_map: HashMap<BlockId, LLVMBasicBlockRef> = HashMap::new();
         for (i, _) in func.blocks.iter().enumerate() {
@@ -139,6 +205,7 @@ impl CodegenContext {
                     .ty
                     .as_ref()
                     .map(|t| self.get_llvm_type(t))
+                    .transpose()?
                     .unwrap_or_else(|| unsafe { LLVMInt32TypeInContext(self.context) });
 
                 let local_name = CString::new(
@@ -159,7 +226,7 @@ impl CodegenContext {
         for (i, block) in func.blocks.iter().enumerate() {
             let bb = bb_map.get(&BlockId(i as u32)).unwrap();
             unsafe { LLVMPositionBuilderAtEnd(self.builder, *bb) };
-            self.codegen_block(block, &local_map, &bb_map)?;
+            self.codegen_block(func, block, &local_map, &bb_map, functions)?;
         }
 
         Ok(())
@@ -167,26 +234,30 @@ impl CodegenContext {
 
     fn codegen_block(
         &mut self,
+        func: &MirFunction,
         block: &MirBlock,
         local_map: &HashMap<LocalId, LLVMValueRef>,
         bb_map: &HashMap<BlockId, LLVMBasicBlockRef>,
+        functions: &HashMap<String, LLVMValueRef>,
     ) -> Result<()> {
         for inst in &block.insts {
-            self.codegen_inst(inst, local_map, bb_map)?;
+            self.codegen_inst(func, inst, local_map, bb_map, functions)?;
         }
         Ok(())
     }
 
     fn codegen_inst(
         &mut self,
+        func: &MirFunction,
         inst: &MirInst,
         local_map: &HashMap<LocalId, LLVMValueRef>,
         bb_map: &HashMap<BlockId, LLVMBasicBlockRef>,
+        functions: &HashMap<String, LLVMValueRef>,
     ) -> Result<()> {
         unsafe {
             match inst {
                 MirInst::Assign { local, value } => {
-                    let val = self.codegen_rvalue(value, local_map)?;
+                    let val = self.codegen_rvalue(value, func, local_map, functions)?;
                     let local_ptr = local_map
                         .get(local)
                         .ok_or_else(|| anyhow!("undefined local {:?}", local))?;
@@ -194,7 +265,7 @@ impl CodegenContext {
                 }
                 MirInst::Return(val) => {
                     if let Some(v) = val {
-                        let ret_val = self.codegen_value(v, local_map)?;
+                        let ret_val = self.codegen_value(v, func, local_map)?;
                         LLVMBuildRet(self.builder, ret_val);
                     } else {
                         LLVMBuildRetVoid(self.builder);
@@ -211,7 +282,7 @@ impl CodegenContext {
                     then_bb,
                     else_bb,
                 } => {
-                    let cond_val = self.codegen_value(cond, local_map)?;
+                    let cond_val = self.codegen_value(cond, func, local_map)?;
                     let then_block = bb_map
                         .get(then_bb)
                         .ok_or_else(|| anyhow!("undefined block {:?}", then_bb))?;
@@ -229,7 +300,9 @@ impl CodegenContext {
     fn codegen_rvalue(
         &mut self,
         rvalue: &Rvalue,
+        func: &MirFunction,
         local_map: &HashMap<LocalId, LLVMValueRef>,
+        functions: &HashMap<String, LLVMValueRef>,
     ) -> Result<LLVMValueRef> {
         unsafe {
             match rvalue {
@@ -246,14 +319,14 @@ impl CodegenContext {
                         .get(local_id)
                         .ok_or_else(|| anyhow!("undefined local {:?}", local_id))?;
 
-                    // Parameters are values, locals are allocas
                     if LLVMGetTypeKind(LLVMTypeOf(*local_ptr))
                         == llvm_sys::LLVMTypeKind::LLVMPointerTypeKind
                     {
                         let load_name = CString::new("load")?;
+                        let llvm_ty = self.local_llvm_type(func, *local_id)?;
                         Ok(LLVMBuildLoad2(
                             self.builder,
-                            LLVMInt32TypeInContext(self.context), // TODO: use actual type
+                            llvm_ty,
                             *local_ptr,
                             load_name.as_ptr(),
                         ))
@@ -262,8 +335,8 @@ impl CodegenContext {
                     }
                 }
                 Rvalue::Binary { op, lhs, rhs } => {
-                    let lhs_val = self.codegen_value(lhs, local_map)?;
-                    let rhs_val = self.codegen_value(rhs, local_map)?;
+                    let lhs_val = self.codegen_value(lhs, func, local_map)?;
+                    let rhs_val = self.codegen_value(rhs, func, local_map)?;
                     let name = CString::new("binop")?;
 
                     use glyph_core::ast::BinaryOp;
@@ -328,10 +401,40 @@ impl CodegenContext {
                     };
                     Ok(result)
                 }
+                Rvalue::StructLit {
+                    struct_name,
+                    field_values,
+                } => self.codegen_struct_literal(struct_name, field_values, func, local_map),
+                Rvalue::FieldAccess {
+                    base,
+                    field_name: _,
+                    field_index,
+                } => self.codegen_field_access(*base, *field_index as usize, func, local_map),
                 Rvalue::Call { name, args } => {
-                    // Placeholder - will implement function calls later
-                    let _ = (name, args);
-                    Err(anyhow!("function calls not yet implemented in codegen"))
+                    let callee = functions
+                        .get(name)
+                        .copied()
+                        .ok_or_else(|| anyhow!("unknown function {}", name))?;
+
+                    let mut llvm_args: Vec<LLVMValueRef> = Vec::new();
+                    for arg in args {
+                        llvm_args.push(self.codegen_value(arg, func, local_map)?);
+                    }
+
+                    let fn_ty = LLVMGetElementType(LLVMTypeOf(callee));
+                    if fn_ty.is_null() {
+                        bail!("failed to get llvm function type for {}", name);
+                    }
+
+                    let call_name = CString::new("call")?;
+                    Ok(LLVMBuildCall2(
+                        self.builder,
+                        fn_ty,
+                        callee,
+                        llvm_args.as_mut_ptr(),
+                        llvm_args.len() as u32,
+                        call_name.as_ptr(),
+                    ))
                 }
             }
         }
@@ -340,12 +443,12 @@ impl CodegenContext {
     fn codegen_value(
         &mut self,
         value: &MirValue,
+        func: &MirFunction,
         local_map: &HashMap<LocalId, LLVMValueRef>,
     ) -> Result<LLVMValueRef> {
         unsafe {
             match value {
                 MirValue::Unit => {
-                    // Return a placeholder zero value
                     let ty = LLVMInt32TypeInContext(self.context);
                     Ok(LLVMConstInt(ty, 0, 0))
                 }
@@ -362,14 +465,14 @@ impl CodegenContext {
                         .get(local_id)
                         .ok_or_else(|| anyhow!("undefined local {:?}", local_id))?;
 
-                    // Check if this is a parameter (no need to load)
                     if LLVMGetTypeKind(LLVMTypeOf(*local_ptr))
                         == llvm_sys::LLVMTypeKind::LLVMPointerTypeKind
                     {
                         let load_name = CString::new("load")?;
+                        let llvm_ty = self.local_llvm_type(func, *local_id)?;
                         Ok(LLVMBuildLoad2(
                             self.builder,
-                            LLVMInt32TypeInContext(self.context), // TODO: use actual type
+                            llvm_ty,
                             *local_ptr,
                             load_name.as_ptr(),
                         ))
@@ -379,6 +482,125 @@ impl CodegenContext {
                 }
             }
         }
+    }
+
+    fn local_llvm_type(&self, func: &MirFunction, local_id: LocalId) -> Result<LLVMTypeRef> {
+        let local = func
+            .locals
+            .get(local_id.0 as usize)
+            .ok_or_else(|| anyhow!("missing local {:?}", local_id))?;
+        if let Some(ty) = local.ty.as_ref() {
+            self.get_llvm_type(ty)
+        } else {
+            Ok(unsafe { LLVMInt32TypeInContext(self.context) })
+        }
+    }
+
+    fn codegen_struct_literal(
+        &mut self,
+        struct_name: &str,
+        field_values: &[(String, MirValue)],
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+    ) -> Result<LLVMValueRef> {
+        let llvm_struct = self.get_struct_type(struct_name)?;
+        let layout = self
+            .struct_layouts
+            .get(struct_name)
+            .ok_or_else(|| anyhow!("missing layout for struct {}", struct_name))?;
+        let fields = layout.fields.clone();
+
+        let alloca_name = CString::new(format!("{}_tmp", struct_name))?;
+        let alloca = unsafe { LLVMBuildAlloca(self.builder, llvm_struct, alloca_name.as_ptr()) };
+
+        let mut value_map = HashMap::new();
+        for (name, value) in field_values {
+            value_map.insert(name.as_str(), value);
+        }
+
+        for (idx, (field_name, _)) in fields.iter().enumerate() {
+            let value = value_map.get(field_name.as_str()).ok_or_else(|| {
+                anyhow!("missing field {} for struct {}", field_name, struct_name)
+            })?;
+            let llvm_field_val = self.codegen_value(value, func, local_map)?;
+            let gep_name = CString::new(format!("{}.{}", struct_name, field_name))?;
+            let field_ptr = unsafe {
+                LLVMBuildStructGEP2(
+                    self.builder,
+                    llvm_struct,
+                    alloca,
+                    idx as u32,
+                    gep_name.as_ptr(),
+                )
+            };
+            unsafe {
+                LLVMBuildStore(self.builder, llvm_field_val, field_ptr);
+            }
+        }
+
+        let load_name = CString::new(format!("{}_val", struct_name))?;
+        Ok(unsafe { LLVMBuildLoad2(self.builder, llvm_struct, alloca, load_name.as_ptr()) })
+    }
+
+    fn codegen_field_access(
+        &mut self,
+        base: LocalId,
+        field_index: usize,
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+    ) -> Result<LLVMValueRef> {
+        let local = func
+            .locals
+            .get(base.0 as usize)
+            .ok_or_else(|| anyhow!("missing base local {:?}", base))?;
+        let struct_name = match local.ty.as_ref() {
+            Some(Type::Named(name)) => name,
+            _ => bail!("field access base is not a struct"),
+        };
+        let llvm_struct = self.get_struct_type(struct_name)?;
+        let field_ty = {
+            let layout = self
+                .struct_layouts
+                .get(struct_name)
+                .ok_or_else(|| anyhow!("missing layout for struct {}", struct_name))?;
+            layout
+                .fields
+                .get(field_index)
+                .map(|(_, ty)| ty.clone())
+                .ok_or_else(|| anyhow!("invalid field index {} for {}", field_index, struct_name))?
+        };
+
+        let base_val = local_map
+            .get(&base)
+            .ok_or_else(|| anyhow!("undefined local {:?}", base))?;
+
+        let base_ptr = if unsafe {
+            LLVMGetTypeKind(LLVMTypeOf(*base_val)) == llvm_sys::LLVMTypeKind::LLVMPointerTypeKind
+        } {
+            *base_val
+        } else {
+            let alloca_name = CString::new(format!("{}_base", struct_name))?;
+            let alloca =
+                unsafe { LLVMBuildAlloca(self.builder, llvm_struct, alloca_name.as_ptr()) };
+            unsafe {
+                LLVMBuildStore(self.builder, *base_val, alloca);
+            }
+            alloca
+        };
+
+        let gep_name = CString::new(format!("{}.field{}", struct_name, field_index))?;
+        let field_ptr = unsafe {
+            LLVMBuildStructGEP2(
+                self.builder,
+                llvm_struct,
+                base_ptr,
+                field_index as u32,
+                gep_name.as_ptr(),
+            )
+        };
+        let llvm_field_ty = self.get_llvm_type(&field_ty)?;
+        let load_name = CString::new("field.load")?;
+        Ok(unsafe { LLVMBuildLoad2(self.builder, llvm_field_ty, field_ptr, load_name.as_ptr()) })
     }
 
     /// Execute a function via JIT for testing purposes
@@ -453,7 +675,10 @@ impl Drop for CodegenContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glyph_core::mir::{MirBlock, MirFunction, MirModule};
+    use glyph_core::mir::{
+        Local, LocalId, MirBlock, MirFunction, MirInst, MirModule, MirValue, Rvalue,
+    };
+    use std::collections::HashMap;
 
     #[test]
     fn creates_empty_module() {
@@ -466,6 +691,7 @@ mod tests {
     fn codegens_simple_function() {
         let mut ctx = CodegenContext::new("test").unwrap();
         let mir = MirModule {
+            struct_types: HashMap::new(),
             functions: vec![MirFunction {
                 name: "main".into(),
                 ret_type: Some(Type::I32),
@@ -486,6 +712,7 @@ mod tests {
     fn jit_executes_simple_function() {
         let mut ctx = CodegenContext::new("test").unwrap();
         let mir = MirModule {
+            struct_types: HashMap::new(),
             functions: vec![MirFunction {
                 name: "main".into(),
                 ret_type: Some(Type::I32),
@@ -499,5 +726,129 @@ mod tests {
         ctx.codegen_module(&mir).unwrap();
         let result = ctx.jit_execute_i32("main").unwrap();
         assert_eq!(result, 42);
+    }
+
+    #[test]
+    fn codegens_struct_literal() {
+        let mut ctx = CodegenContext::new("test").unwrap();
+        let mut struct_types = HashMap::new();
+        struct_types.insert(
+            "Point".into(),
+            StructType {
+                name: "Point".into(),
+                fields: vec![("x".into(), Type::I32), ("y".into(), Type::I32)],
+            },
+        );
+
+        let mir = MirModule {
+            struct_types,
+            functions: vec![MirFunction {
+                name: "main".into(),
+                ret_type: Some(Type::Named("Point".into())),
+                params: vec![],
+                locals: vec![
+                    Local {
+                        name: Some("p".into()),
+                        ty: Some(Type::Named("Point".into())),
+                    },
+                    Local {
+                        name: None,
+                        ty: Some(Type::Named("Point".into())),
+                    },
+                ],
+                blocks: vec![MirBlock {
+                    insts: vec![
+                        MirInst::Assign {
+                            local: LocalId(1),
+                            value: Rvalue::StructLit {
+                                struct_name: "Point".into(),
+                                field_values: vec![
+                                    ("x".into(), MirValue::Int(1)),
+                                    ("y".into(), MirValue::Int(2)),
+                                ],
+                            },
+                        },
+                        MirInst::Assign {
+                            local: LocalId(0),
+                            value: Rvalue::Move(LocalId(1)),
+                        },
+                        MirInst::Return(Some(MirValue::Local(LocalId(0)))),
+                    ],
+                }],
+            }],
+        };
+
+        ctx.codegen_module(&mir).unwrap();
+        let ir = ctx.dump_ir();
+        assert!(ir.contains("%Point = type { i32, i32 }"));
+        assert!(ir.contains("getelementptr inbounds"));
+    }
+
+    #[test]
+    fn codegens_field_access() {
+        let mut ctx = CodegenContext::new("test").unwrap();
+        let mut struct_types = HashMap::new();
+        struct_types.insert(
+            "Point".into(),
+            StructType {
+                name: "Point".into(),
+                fields: vec![("x".into(), Type::I32), ("y".into(), Type::I32)],
+            },
+        );
+
+        let mir = MirModule {
+            struct_types,
+            functions: vec![MirFunction {
+                name: "main".into(),
+                ret_type: Some(Type::I32),
+                params: vec![],
+                locals: vec![
+                    Local {
+                        name: Some("p".into()),
+                        ty: Some(Type::Named("Point".into())),
+                    },
+                    Local {
+                        name: None,
+                        ty: Some(Type::Named("Point".into())),
+                    },
+                    Local {
+                        name: None,
+                        ty: Some(Type::I32),
+                    },
+                ],
+                blocks: vec![MirBlock {
+                    insts: vec![
+                        MirInst::Assign {
+                            local: LocalId(1),
+                            value: Rvalue::StructLit {
+                                struct_name: "Point".into(),
+                                field_values: vec![
+                                    ("x".into(), MirValue::Int(10)),
+                                    ("y".into(), MirValue::Int(20)),
+                                ],
+                            },
+                        },
+                        MirInst::Assign {
+                            local: LocalId(0),
+                            value: Rvalue::Move(LocalId(1)),
+                        },
+                        MirInst::Assign {
+                            local: LocalId(2),
+                            value: Rvalue::FieldAccess {
+                                base: LocalId(0),
+                                field_name: "y".into(),
+                                field_index: 1,
+                            },
+                        },
+                        MirInst::Return(Some(MirValue::Local(LocalId(2)))),
+                    ],
+                }],
+            }],
+        };
+
+        ctx.codegen_module(&mir).unwrap();
+        let ir = ctx.dump_ir();
+        assert!(ir.contains("getelementptr inbounds"));
+        assert!(ir.contains("ret i32"));
     }
 }

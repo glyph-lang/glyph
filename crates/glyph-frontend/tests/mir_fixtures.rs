@@ -93,3 +93,24 @@ fn mir_implicit_return() {
     let out = compile_source(&src, FrontendOptions { emit_mir: true });
     assert_debug_snapshot!(out.mir);
 }
+
+#[test]
+fn mir_struct_lit() {
+    let src = run_fixture("struct_lit.glyph");
+    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    assert_debug_snapshot!(out.mir);
+}
+
+#[test]
+fn mir_field_access() {
+    let src = run_fixture("field_access.glyph");
+    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    assert_debug_snapshot!(out.mir);
+}
+
+#[test]
+fn mir_struct_return() {
+    let src = run_fixture("struct_return.glyph");
+    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    assert_debug_snapshot!(out.mir);
+}
