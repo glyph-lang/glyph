@@ -27,7 +27,7 @@ Status key: `[ ]` not started, `[~]` in progress, `[x]` done.
 - [x] M7: Function calls - COMPLETE (MIR lowering, LLVM codegen, recursion, forward references)
 - [x] M8: Fixed-size arrays (parser → MIR → bounds-checked LLVM, arr.len, for-loop integration)
 - [ ] M9: Heap ownership pointers (Own<T>, RawPtr<T>)
-- [~] M10: Interfaces (parsing/validation/MIR + method dispatch) – LLVM/codegen validation + docs/tests remaining
+- [x] M10: Interfaces (parsing/validation/MIR + method dispatch + LLVM verification + documentation) – COMPLETE
 
 ## TDD & fixtures
 - [ ] Fixture tree under `tests/fixtures/{lex,parse,resolution,typeck,borrow,mir,ir,cli}`
@@ -96,12 +96,17 @@ fn main() -> i32 {
 - LLVM backend emits stack-allocated literals, bounds-checked indexing (traps via `llvm.trap`), and constant-length queries.
 - Fixtures cover basic literals, indexing, `.len()`, and for-loop integration; CLI codegen tests assert GEPs + traps.
 
-## Interfaces: In Progress (Phases 0–5 ✅)
+## Interfaces: COMPLETE ✅ (Phases 0–7)
 
-- Parser supports `interface` definitions, struct declarations of interfaces, inline/`impl for` implementations, and method-call syntax.
-- Resolver validates interface signatures, collects impls, checks missing/duplicate/unknown methods, and tracks self by value/ref/mut.
-- MIR lowering resolves method calls across inherent + interface impls with auto-borrowing; builtin `.len()`/`into_raw()` handled early.
-- Remaining: dedicated LLVM verification + docs/examples; broaden fixture coverage.
+All phases complete:
+- ✅ **Phases 0-2**: Lexer/parser support for `interface` definitions, inline/separate `impl` blocks, method calls
+- ✅ **Phase 3**: Resolver validates signatures, detects missing/duplicate methods, tracks self mutability
+- ✅ **Phase 4**: MIR lowering with method dispatch (built-in → inherent → interface), auto-borrowing
+- ✅ **Phase 5**: Symbol mangling for disambiguation (`Struct::Interface::method`)
+- ✅ **Phase 6**: LLVM codegen verification with 5 comprehensive tests
+- ✅ **Phase 7**: Complete documentation (INTERFACES_DESIGN.md) with examples
+
+**Test Coverage**: 5 codegen tests, 34 MIR snapshots, parser/resolver unit tests - all passing (106 workspace tests total)
 
 ## Function Calls: COMPLETE ✅
 

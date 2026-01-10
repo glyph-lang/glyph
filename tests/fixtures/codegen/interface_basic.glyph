@@ -1,0 +1,19 @@
+interface Drawable {
+  fn draw(self: &Point) -> i32;
+}
+
+struct Point {
+  x: i32
+  y: i32
+
+  impl Drawable {
+    fn draw(self: &Point) -> i32 {
+      ret self.x + self.y
+    }
+  }
+}
+
+fn main() -> i32 {
+  let p = Point { x: 10, y: 20 }
+  ret p.draw()
+}

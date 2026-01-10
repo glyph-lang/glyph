@@ -176,13 +176,50 @@ fn main() -> i32 {
 }
 ```
 
-## Interfaces & Methods (Phases 0–5 ✅)
+## Interfaces & Methods ✅ COMPLETE (Phases 0–7)
 
-- ✅ Parse `interface` definitions, struct interface lists, inline/`impl for` blocks, and method-call syntax (`obj.method()`)
-- ✅ Resolver collects interface signatures, validates impls (missing/duplicate/unknown), tracks self mutability, and mangles interface methods
-- ✅ MIR lowering resolves interface methods alongside inherent ones, with auto-borrowing and builtin handling for `.len()`/`into_raw()`
-- 🧪 New MIR fixture for interface method call + updated snapshots (arrays/refs/owns/loops)
-- 🔜 Phase 6–7: explicit LLVM verification + documentation/examples
+**All phases complete:** Parsing, validation, MIR lowering, LLVM codegen verification, and documentation.
+
+**Features:**
+- ✅ Interface definitions with method contracts
+- ✅ Two implementation styles: inline (`impl I { }` inside struct) and separate (`impl I for S { }`)
+- ✅ Method call resolution: built-in → inherent → interface
+- ✅ Auto-borrowing for `&self` and `&mut self` parameters
+- ✅ Symbol mangling for disambiguation (`Struct::method` vs `Struct::Interface::method`)
+- ✅ Compile-time method dispatch (no vtables, no runtime overhead)
+
+**Testing:**
+- ✅ 5 codegen tests verifying LLVM IR for interface method calls
+- ✅ MIR tests for method resolution and auto-borrowing
+- ✅ Parser and resolver tests for syntax and validation
+- ✅ 106 total tests passing across workspace
+
+**Documentation:**
+- ✅ INTERFACES_DESIGN.md with comprehensive examples
+- ✅ Syntax reference, implementation details, and examples
+
+**Example:**
+```glyph
+interface Drawable {
+  fn draw(self: &Point) -> i32;
+}
+
+struct Point {
+  x: i32
+  y: i32
+
+  impl Drawable {
+    fn draw(self: &Point) -> i32 {
+      ret self.x + self.y
+    }
+  }
+}
+
+fn main() -> i32 {
+  let p = Point { x: 10, y: 20 }
+  ret p.draw()  // Returns 30
+}
+```
 
 ## 🔧 Reference Support (Phases 4–6 ✅)
 

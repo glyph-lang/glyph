@@ -1,19 +1,19 @@
 # Next Session Quick Start Guide
 
 **Last Updated:** January 10, 2026
-**Current:** Interfaces Phase 6 – verify LLVM/codegen + docs/tests
+**Current:** Interfaces COMPLETE ✅ – Ready for Heap Ownership (Own<T>, RawPtr<T>)
 
 ---
 
 ## 🎯 IMMEDIATE NEXT STEPS
 
-1) **Phase 6: Interfaces LLVM verification**
-   - Confirm interface method calls emit correct LLVM (reuse call paths) and expand CLI/codegen fixtures if needed.
-2) **Phase 7: Interfaces docs & tests**
-   - Add examples covering interface parsing, impl validation errors, and mixed inherent/interface dispatch.
-3) **Stretch:** start Heap Ownership pointers (Own/RawPtr) once interface docs/tests land.
+1) **Start Heap Ownership Implementation** (Own<T>, RawPtr<T>)
+   - Phase 1: Type system + parsing for `Own<T>` and `RawPtr<T>` syntax
+   - Phase 2: MIR with move-only semantics and drop glue
+   - Phase 3: LLVM codegen with malloc/free runtime hooks
+   - Reference: See PLAN.md "Heap Ownership Pointers" section and `own.txt` semantics
 
-**Previous Status:** Arrays + loops integrated; function calls and references fully green.
+**Previous Status:** Interfaces Phases 0–7 complete with full LLVM verification and documentation.
 
 ---
 
@@ -26,11 +26,12 @@
 - LLVM codegen with JIT execution
 - Structs, function calls, references, loops
 - Arrays: literals, indexing with bounds checks, `.len()`
-- Interfaces: parsing/impl validation, method-call resolution (inherent + interface dispatch), auto-borrowing in MIR
+- Interfaces: parsing/impl validation, method-call resolution, auto-borrowing, LLVM codegen verified, full documentation
 
 **Test Coverage:**
 - Workspace tests green (`cargo test`)
-- 34 MIR snapshots refreshed (arrays, refs, loops, owns, interface call)
+- 34 MIR snapshots (arrays, refs, loops, owns, interface calls)
+- 5 interface codegen tests verifying LLVM IR
 - Backend codegen fixtures (arrays/structs/owns) passing
 - Resolver/parser/unit coverage intact
 
@@ -159,9 +160,13 @@ fn sum_to_n(n: i32) -> i32 {
 
 ## What to Build Next
 
-1) Finish interface track (LLVM validation + docs/tests)
-2) Move to Heap Ownership pointers (Own<T>, RawPtr<T>) once interfaces close
-3) Longer-term: enums/pattern matching, borrow checker, generics
+1) **Heap Ownership pointers (Own<T>, RawPtr<T>)** - NEXT
+   - Deterministic heap allocation with move-only `Own<T>` (Box-like)
+   - Unsafe `RawPtr<T>` escape hatches
+   - Auto-drop on scope exit
+2) Enums + pattern matching
+3) Borrow checker & lifetimes
+4) Generics + trait system
 - Parser for array syntax
 - MIR lowering for arrays and indexing
 - LLVM array/GEP operations

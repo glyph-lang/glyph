@@ -1,0 +1,23 @@
+interface Drawable {
+  fn draw(self: &Point) -> i32;
+}
+
+struct Point {
+  x: i32
+  y: i32
+
+  fn norm(self: &Point) -> i32 {
+    ret self.x * self.x + self.y * self.y
+  }
+
+  impl Drawable {
+    fn draw(self: &Point) -> i32 {
+      ret self.x + self.y
+    }
+  }
+}
+
+fn main() -> i32 {
+  let p = Point { x: 3, y: 4 }
+  ret p.norm() + p.draw()
+}

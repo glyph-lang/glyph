@@ -1,0 +1,24 @@
+interface Movable {
+  fn move_by(self: Point, dx: i32) -> Point;
+}
+
+struct Point {
+  x: i32
+  y: i32
+
+  impl Movable {
+    fn move_by(self: Point, dx: i32) -> Point {
+      ret Point { x: dx, y: dx }
+    }
+  }
+}
+
+fn make_point() -> Point {
+  ret Point { x: 10, y: 20 }
+}
+
+fn main() -> i32 {
+  let p = make_point()
+  let p2 = p.move_by(5)
+  ret 42
+}

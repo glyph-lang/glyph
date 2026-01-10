@@ -1,0 +1,29 @@
+interface Drawable {
+  fn draw(self: &Point) -> i32;
+}
+
+interface Serializable {
+  fn serialize(self: &Point) -> i32;
+}
+
+struct Point {
+  x: i32
+  y: i32
+
+  impl Drawable {
+    fn draw(self: &Point) -> i32 {
+      ret self.x + self.y
+    }
+  }
+
+  impl Serializable {
+    fn serialize(self: &Point) -> i32 {
+      ret self.x * 100 + self.y
+    }
+  }
+}
+
+fn main() -> i32 {
+  let p = Point { x: 5, y: 7 }
+  ret p.draw() + p.serialize()
+}
