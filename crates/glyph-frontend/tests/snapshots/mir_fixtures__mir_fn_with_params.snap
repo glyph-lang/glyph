@@ -3,6 +3,7 @@ source: crates/glyph-frontend/tests/mir_fixtures.rs
 expression: out.mir
 ---
 MirModule {
+    struct_types: {},
     functions: [
         MirFunction {
             name: "add",

@@ -5,7 +5,7 @@ use anyhow::{Result, anyhow, bail};
 use glyph_core::mir::{
     BlockId, LocalId, MirBlock, MirFunction, MirInst, MirModule, MirValue, Rvalue,
 };
-use glyph_core::types::{StructType, Type};
+use glyph_core::types::{Mutability, StructType, Type};
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
 use llvm_sys::{LLVMBuilder, LLVMContext, LLVMModule};
@@ -98,6 +98,12 @@ impl CodegenContext {
                 Type::Bool => LLVMInt1TypeInContext(self.context),
                 Type::Void => LLVMVoidTypeInContext(self.context),
                 Type::Named(name) => self.get_struct_type(name)?,
+                Type::Ref(inner, _) => {
+                    // TODO(Phase 6): Implement proper reference type support
+                    // References should lower to LLVM pointer types
+                    let inner_ty = self.get_llvm_type(inner)?;
+                    LLVMPointerType(inner_ty, 0)
+                }
             })
         }
     }
@@ -189,18 +195,8 @@ impl CodegenContext {
         if let Some(&entry_bb) = bb_map.get(&BlockId(0)) {
             unsafe { LLVMPositionBuilderAtEnd(self.builder, entry_bb) };
 
-            // Map parameters to function arguments
-            for (i, &param_id) in func.params.iter().enumerate() {
-                let param_val = unsafe { LLVMGetParam(llvm_func, i as u32) };
-                local_map.insert(param_id, param_val);
-            }
-
-            // Allocate space for other locals
             for (i, local) in func.locals.iter().enumerate() {
                 let local_id = LocalId(i as u32);
-                if func.params.contains(&local_id) {
-                    continue; // Already handled as parameter
-                }
 
                 let local_ty = local
                     .ty
@@ -209,17 +205,22 @@ impl CodegenContext {
                     .transpose()?
                     .unwrap_or_else(|| unsafe { LLVMInt32TypeInContext(self.context) });
 
-                let local_name = CString::new(
-                    local
-                        .name
-                        .as_ref()
-                        .map(|s| s.as_str())
-                        .unwrap_or(&format!("tmp{}", i)),
-                )?;
+                let local_name = local.name.clone().unwrap_or_else(|| format!("tmp{}", i));
+                let local_name = CString::new(local_name)?;
 
                 let alloca =
                     unsafe { LLVMBuildAlloca(self.builder, local_ty, local_name.as_ptr()) };
                 local_map.insert(local_id, alloca);
+            }
+
+            for (i, &param_id) in func.params.iter().enumerate() {
+                let param_val = unsafe { LLVMGetParam(llvm_func, i as u32) };
+                let slot = local_map
+                    .get(&param_id)
+                    .ok_or_else(|| anyhow!("missing storage for param {:?}", param_id))?;
+                unsafe {
+                    LLVMBuildStore(self.builder, param_val, *slot);
+                }
             }
         }
 
@@ -446,6 +447,12 @@ impl CodegenContext {
                         call_name.as_ptr(),
                     ))
                 }
+                Rvalue::Ref { base, .. } => {
+                    let base_ptr = local_map
+                        .get(base)
+                        .ok_or_else(|| anyhow!("undefined local {:?}", base))?;
+                    Ok(*base_ptr)
+                }
             }
         }
     }
@@ -559,19 +566,12 @@ impl CodegenContext {
         func: &MirFunction,
         local_map: &HashMap<LocalId, LLVMValueRef>,
     ) -> Result<LLVMValueRef> {
-        let local = func
-            .locals
-            .get(base.0 as usize)
-            .ok_or_else(|| anyhow!("missing base local {:?}", base))?;
-        let struct_name = match local.ty.as_ref() {
-            Some(Type::Named(name)) => name,
-            _ => bail!("field access base is not a struct"),
-        };
-        let llvm_struct = self.get_struct_type(struct_name)?;
+        let (struct_name, struct_ptr) = self.struct_pointer_for_local(base, func, local_map)?;
+        let llvm_struct = self.get_struct_type(struct_name.as_str())?;
         let field_ty = {
             let layout = self
                 .struct_layouts
-                .get(struct_name)
+                .get(&struct_name)
                 .ok_or_else(|| anyhow!("missing layout for struct {}", struct_name))?;
             layout
                 .fields
@@ -580,30 +580,12 @@ impl CodegenContext {
                 .ok_or_else(|| anyhow!("invalid field index {} for {}", field_index, struct_name))?
         };
 
-        let base_val = local_map
-            .get(&base)
-            .ok_or_else(|| anyhow!("undefined local {:?}", base))?;
-
-        let base_ptr = if unsafe {
-            LLVMGetTypeKind(LLVMTypeOf(*base_val)) == llvm_sys::LLVMTypeKind::LLVMPointerTypeKind
-        } {
-            *base_val
-        } else {
-            let alloca_name = CString::new(format!("{}_base", struct_name))?;
-            let alloca =
-                unsafe { LLVMBuildAlloca(self.builder, llvm_struct, alloca_name.as_ptr()) };
-            unsafe {
-                LLVMBuildStore(self.builder, *base_val, alloca);
-            }
-            alloca
-        };
-
         let gep_name = CString::new(format!("{}.field{}", struct_name, field_index))?;
         let field_ptr = unsafe {
             LLVMBuildStructGEP2(
                 self.builder,
                 llvm_struct,
-                base_ptr,
+                struct_ptr,
                 field_index as u32,
                 gep_name.as_ptr(),
             )
@@ -611,6 +593,36 @@ impl CodegenContext {
         let llvm_field_ty = self.get_llvm_type(&field_ty)?;
         let load_name = CString::new("field.load")?;
         Ok(unsafe { LLVMBuildLoad2(self.builder, llvm_field_ty, field_ptr, load_name.as_ptr()) })
+    }
+
+    fn struct_pointer_for_local(
+        &mut self,
+        local: LocalId,
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+    ) -> Result<(String, LLVMValueRef)> {
+        let mut ty = func
+            .locals
+            .get(local.0 as usize)
+            .and_then(|l| l.ty.clone())
+            .ok_or_else(|| anyhow!("field access base has unknown type"))?;
+        let mut ptr = *local_map
+            .get(&local)
+            .ok_or_else(|| anyhow!("undefined local {:?}", local))?;
+
+        loop {
+            match ty.clone() {
+                Type::Named(name) => return Ok((name, ptr)),
+                Type::Ref(inner, mutability) => {
+                    let ref_ty = Type::Ref(inner.clone(), mutability);
+                    let load_ty = self.get_llvm_type(&ref_ty)?;
+                    let load_name = CString::new("deref.struct")?;
+                    ptr = unsafe { LLVMBuildLoad2(self.builder, load_ty, ptr, load_name.as_ptr()) };
+                    ty = *inner;
+                }
+                _ => bail!("field access base is not a struct"),
+            }
+        }
     }
 
     /// Execute a function via JIT for testing purposes

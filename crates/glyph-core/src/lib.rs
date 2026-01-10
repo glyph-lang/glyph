@@ -112,6 +112,23 @@ pub mod ast {
             field: Ident,
             span: Span,
         },
+        Ref {
+            expr: Box<Expr>,
+            mutability: crate::types::Mutability,
+            span: Span,
+        },
+        While {
+            cond: Box<Expr>,
+            body: Block,
+            span: Span,
+        },
+        For {
+            var: Ident,
+            start: Box<Expr>,
+            end: Box<Expr>,
+            body: Block,
+            span: Span,
+        },
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -153,6 +170,13 @@ pub mod ast {
             value: Option<Expr>,
             span: Span,
         },
+        Assign {
+            target: Expr,
+            value: Expr,
+            span: Span,
+        },
+        Break(Span),
+        Continue(Span),
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -216,6 +240,7 @@ pub mod token {
         If,
         Else,
         For,
+        In,
         While,
         Match,
         Break,
@@ -238,6 +263,7 @@ pub mod token {
         Colon,
         Semicolon,
         Dot,
+        DotDot,
         Arrow,
         FatArrow,
         Plus,
@@ -253,6 +279,7 @@ pub mod token {
         Gt,
         Le,
         Ge,
+        Amp,
         AmpAmp,
         PipePipe,
         Question,
@@ -270,6 +297,12 @@ pub mod token {
 pub mod types {
     use serde::{Deserialize, Serialize};
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub enum Mutability {
+        Immutable,
+        Mutable,
+    }
+
     #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
     pub enum Type {
         I32,
@@ -281,6 +314,7 @@ pub mod types {
         Bool,
         Void,
         Named(String),
+        Ref(Box<Type>, Mutability),
     }
 
     impl Type {
@@ -308,6 +342,21 @@ pub mod types {
         pub fn is_numeric(&self) -> bool {
             self.is_int() || self.is_float()
         }
+
+        pub fn is_ref(&self) -> bool {
+            matches!(self, Type::Ref(..))
+        }
+
+        pub fn inner_type(&self) -> Option<&Type> {
+            match self {
+                Type::Ref(inner, _) => Some(inner),
+                _ => None,
+            }
+        }
+
+        pub fn is_mut_ref(&self) -> bool {
+            matches!(self, Type::Ref(_, Mutability::Mutable))
+        }
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -319,7 +368,7 @@ pub mod types {
 
 pub mod mir {
     use super::ast::BinaryOp;
-    use super::types::{StructType, Type};
+    use super::types::{Mutability, StructType, Type};
     use serde::{Deserialize, Serialize};
     use std::collections::HashMap;
 
@@ -390,6 +439,10 @@ pub mod mir {
             base: LocalId,
             field_name: String,
             field_index: u32,
+        },
+        Ref {
+            base: LocalId,
+            mutability: Mutability,
         },
     }
 
@@ -499,5 +552,52 @@ mod tests {
         } else {
             panic!("Expected FieldAccess");
         }
+    }
+
+    #[test]
+    fn type_is_ref_immutable() {
+        use super::types::{Mutability, Type};
+
+        let ref_type = Type::Ref(Box::new(Type::I32), Mutability::Immutable);
+        assert!(ref_type.is_ref());
+        assert!(!ref_type.is_mut_ref());
+    }
+
+    #[test]
+    fn type_is_ref_mutable() {
+        use super::types::{Mutability, Type};
+
+        let ref_type = Type::Ref(Box::new(Type::I32), Mutability::Mutable);
+        assert!(ref_type.is_ref());
+        assert!(ref_type.is_mut_ref());
+    }
+
+    #[test]
+    fn type_inner_type() {
+        use super::types::{Mutability, Type};
+
+        let ref_type = Type::Ref(Box::new(Type::I32), Mutability::Immutable);
+        assert_eq!(ref_type.inner_type(), Some(&Type::I32));
+
+        let plain_type = Type::I32;
+        assert_eq!(plain_type.inner_type(), None);
+    }
+
+    #[test]
+    fn type_nested_references() {
+        use super::types::{Mutability, Type};
+
+        // &mut &i32
+        let nested = Type::Ref(
+            Box::new(Type::Ref(Box::new(Type::I32), Mutability::Immutable)),
+            Mutability::Mutable,
+        );
+
+        assert!(nested.is_ref());
+        assert!(nested.is_mut_ref());
+
+        let inner = nested.inner_type().unwrap();
+        assert!(inner.is_ref());
+        assert!(!inner.is_mut_ref());
     }
 }

@@ -116,6 +116,20 @@ fn mir_struct_return() {
 }
 
 #[test]
+fn mir_ref_field_access() {
+    let src = run_fixture("ref_field_access.glyph");
+    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    assert_debug_snapshot!(out.mir);
+}
+
+#[test]
+fn mir_ref_param_call() {
+    let src = run_fixture("ref_param_call.glyph");
+    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    assert_debug_snapshot!(out.mir);
+}
+
+#[test]
 fn mir_call_basic() {
     let src = run_fixture("call_basic.glyph");
     let out = compile_source(&src, FrontendOptions { emit_mir: true });
@@ -125,6 +139,78 @@ fn mir_call_basic() {
 #[test]
 fn mir_call_recursive() {
     let src = run_fixture("call_recursive.glyph");
+    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    assert_debug_snapshot!(out.mir);
+}
+
+#[test]
+fn mir_while_simple() {
+    let src = run_fixture("while_simple.glyph");
+    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    assert_debug_snapshot!(out.mir);
+}
+
+#[test]
+fn mir_while_break() {
+    let src = run_fixture("while_break.glyph");
+    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    assert_debug_snapshot!(out.mir);
+}
+
+#[test]
+fn mir_while_continue() {
+    let src = run_fixture("while_continue.glyph");
+    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    assert_debug_snapshot!(out.mir);
+}
+
+#[test]
+fn mir_while_nested() {
+    let src = run_fixture("while_nested.glyph");
+    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    assert_debug_snapshot!(out.mir);
+}
+
+#[test]
+fn mir_while_nested_break() {
+    let src = run_fixture("while_nested_break.glyph");
+    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    assert_debug_snapshot!(out.mir);
+}
+
+#[test]
+fn mir_break_outside_loop() {
+    let src = run_fixture("break_outside_loop.glyph");
+    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    assert!(!out.diagnostics.is_empty());
+    assert!(out.diagnostics.iter().any(|d| d.message.contains("outside of loop")));
+}
+
+#[test]
+fn mir_continue_outside_loop() {
+    let src = run_fixture("continue_outside_loop.glyph");
+    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    assert!(!out.diagnostics.is_empty());
+    assert!(out.diagnostics.iter().any(|d| d.message.contains("outside of loop")));
+}
+
+#[test]
+fn mir_while_infinite() {
+    let src = run_fixture("while_infinite.glyph");
+    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    assert_debug_snapshot!(out.mir);
+}
+
+#[test]
+fn mir_for_simple() {
+    let src = run_fixture("for_simple.glyph");
+    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    assert_debug_snapshot!(out.mir);
+}
+
+#[test]
+fn mir_for_nested() {
+    let src = run_fixture("for_nested.glyph");
     let out = compile_source(&src, FrontendOptions { emit_mir: true });
     assert_debug_snapshot!(out.mir);
 }

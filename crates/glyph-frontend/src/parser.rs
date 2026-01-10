@@ -91,9 +91,7 @@ impl<'a> Parser<'a> {
         let mut ret_type = None;
         if self.at(TokenKind::Arrow) {
             self.advance();
-            if let Some(ty_tok) = self.consume(TokenKind::Ident, "expected type after `->`") {
-                ret_type = Some(Ident(self.slice(ty_tok)));
-            }
+            ret_type = self.parse_type_annotation();
         }
 
         let body = self.parse_block()?;
@@ -145,6 +143,38 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_type_annotation(&mut self) -> Option<Ident> {
+        // Check for reference type (&T or &mut T)
+        if self.at(TokenKind::Amp) {
+            self.advance();
+
+            // Check for mut keyword
+            let is_mut = if self.at(TokenKind::Mut) {
+                self.advance();
+                true
+            } else {
+                false
+            };
+
+            // Parse inner type
+            let inner_ty_tok = self.consume(TokenKind::Ident, "expected type after &")?;
+            let inner_ty = self.slice(inner_ty_tok);
+
+            // Create type string like "&i32" or "&mut Point"
+            let type_str = if is_mut {
+                format!("&mut {}", inner_ty)
+            } else {
+                format!("&{}", inner_ty)
+            };
+
+            Some(Ident(type_str))
+        } else {
+            // Simple type (i32, Point, etc.)
+            let ty_tok = self.consume(TokenKind::Ident, "expected type")?;
+            Some(Ident(self.slice(ty_tok)))
+        }
+    }
+
     fn parse_params(&mut self) -> Vec<Param> {
         let mut params = Vec::new();
         while !self.at(TokenKind::RParen) && !self.at(TokenKind::Eof) {
@@ -156,9 +186,15 @@ impl<'a> Parser<'a> {
             let mut end_span = start_tok.span;
             if self.at(TokenKind::Colon) {
                 self.advance();
-                if let Some(ty_tok) = self.consume(TokenKind::Ident, "expected type after `:`") {
-                    ty = Some(Ident(self.slice(ty_tok)));
-                    end_span = ty_tok.span;
+                if let Some(parsed_ty) = self.parse_type_annotation() {
+                    // Use the current position after parsing the type
+                    let current_pos = if let Some(tok) = self.peek() {
+                        tok.span.start
+                    } else {
+                        start_tok.span.end
+                    };
+                    end_span = Span::new(start_tok.span.start, current_pos);
+                    ty = Some(parsed_ty);
                 }
             }
             let span = Span::new(start_tok.span.start, end_span.end);
@@ -208,9 +244,7 @@ impl<'a> Parser<'a> {
             let mut ty = None;
             if self.at(TokenKind::Colon) {
                 self.advance();
-                if let Some(ty_tok) = self.consume(TokenKind::Ident, "expected type after `:`") {
-                    ty = Some(Ident(self.slice(ty_tok)));
-                }
+                ty = self.parse_type_annotation();
             }
             let mut value = None;
             if self.at(TokenKind::Eq) {
@@ -243,7 +277,37 @@ impl<'a> Parser<'a> {
                 .unwrap_or(ret_tok.span.end);
             return Some(Stmt::Ret(expr, Span::new(ret_tok.span.start, end)));
         }
+
+        if self.at(TokenKind::Break) {
+            let break_tok = self.advance().unwrap();
+            return Some(Stmt::Break(break_tok.span));
+        }
+
+        if self.at(TokenKind::Cont) {
+            let cont_tok = self.advance().unwrap();
+            return Some(Stmt::Continue(cont_tok.span));
+        }
+
+        // Try to parse as assignment or expression statement
         let expr = self.parse_expr()?;
+
+        // Check if this is an assignment (target = value)
+        if self.at(TokenKind::Eq) {
+            let start = self.expr_start(&expr);
+            self.advance(); // consume =
+
+            let value = self.parse_expr()?;
+            let end = self.expr_end(&value);
+            let span = Span::new(start, end);
+
+            return Some(Stmt::Assign {
+                target: expr,
+                value,
+                span,
+            });
+        }
+
+        // Otherwise, it's an expression statement
         let span = Span::new(self.expr_start(&expr), self.expr_end(&expr));
         Some(Stmt::Expr(expr, span))
     }
@@ -269,6 +333,31 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_call_or_primary(&mut self) -> Option<Expr> {
+        // Check for reference prefix (&expr or &mut expr)
+        if self.at(TokenKind::Amp) {
+            let start_tok = self.peek().unwrap();
+            let start = start_tok.span.start;
+            self.advance();
+
+            // Check for mut keyword
+            let mutability = if self.at(TokenKind::Mut) {
+                self.advance();
+                glyph_core::types::Mutability::Mutable
+            } else {
+                glyph_core::types::Mutability::Immutable
+            };
+
+            // Parse the expression being referenced
+            let expr = self.parse_call_or_primary()?;
+            let span = Span::new(start, self.expr_end(&expr));
+
+            return Some(Expr::Ref {
+                expr: Box::new(expr),
+                mutability,
+                span,
+            });
+        }
+
         let mut expr = self.parse_primary()?;
         loop {
             if self.at(TokenKind::LParen) {
@@ -336,6 +425,8 @@ impl<'a> Parser<'a> {
                 expr
             }
             TokenKind::If => self.parse_if(tok.span.start),
+            TokenKind::While => self.parse_while(tok.span.start),
+            TokenKind::For => self.parse_for(tok.span.start),
             TokenKind::LBrace => {
                 self.pos -= 1;
                 self.parse_block().map(Expr::Block)
@@ -379,6 +470,41 @@ impl<'a> Parser<'a> {
             cond: Box::new(cond),
             then_block,
             else_block,
+            span: Span::new(start, end),
+        })
+    }
+
+    fn parse_while(&mut self, start: u32) -> Option<Expr> {
+        let cond = self.parse_expr()?;
+        let body = self.parse_block()?;
+        let end = body.span.end;
+        Some(Expr::While {
+            cond: Box::new(cond),
+            body,
+            span: Span::new(start, end),
+        })
+    }
+
+    fn parse_for(&mut self, start: u32) -> Option<Expr> {
+        let var_tok = self.consume(TokenKind::Ident, "expected variable name in for loop")?;
+        let var = Ident(self.slice(var_tok));
+
+        self.consume(TokenKind::In, "expected `in` after loop variable")?;
+
+        let range_start = self.parse_expr()?;
+
+        self.consume(TokenKind::DotDot, "expected `..` for range")?;
+
+        let range_end = self.parse_expr()?;
+
+        let body = self.parse_block()?;
+        let end = body.span.end;
+
+        Some(Expr::For {
+            var,
+            start: Box::new(range_start),
+            end: Box::new(range_end),
+            body,
             span: Span::new(start, end),
         })
     }
@@ -434,6 +560,9 @@ impl<'a> Parser<'a> {
             Expr::Block(block) => block.span.start,
             Expr::StructLit { span, .. } => span.start,
             Expr::FieldAccess { span, .. } => span.start,
+            Expr::Ref { span, .. } => span.start,
+            Expr::While { span, .. } => span.start,
+            Expr::For { span, .. } => span.start,
         }
     }
 
@@ -447,6 +576,9 @@ impl<'a> Parser<'a> {
             Expr::Block(block) => block.span.end,
             Expr::StructLit { span, .. } => span.end,
             Expr::FieldAccess { span, .. } => span.end,
+            Expr::Ref { span, .. } => span.end,
+            Expr::While { span, .. } => span.end,
+            Expr::For { span, .. } => span.end,
         }
     }
 
@@ -470,13 +602,19 @@ impl<'a> Parser<'a> {
 
     fn synchronize(&mut self) {
         while let Some(tok) = self.peek() {
-            if matches!(
-                tok.kind,
-                TokenKind::Semicolon | TokenKind::RBrace | TokenKind::Eof
-            ) {
-                return;
+            match tok.kind {
+                TokenKind::Semicolon | TokenKind::RBrace => {
+                    self.advance();
+                    return;
+                }
+                TokenKind::Eof => {
+                    self.advance();
+                    return;
+                }
+                _ => {
+                    self.pos += 1;
+                }
             }
-            self.pos += 1;
         }
     }
 

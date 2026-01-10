@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
-use glyph_core::ast::{Block, Expr, Function, Item, Module, Stmt};
+use glyph_core::ast::{BinaryOp, Block, Expr, Function, Ident, Item, Module, Stmt};
 use glyph_core::diag::Diagnostic;
 use glyph_core::mir::{
     BlockId, Local, LocalId, MirBlock, MirFunction, MirInst, MirModule, MirValue, Rvalue,
 };
 use glyph_core::span::Span;
-use glyph_core::types::Type;
+use glyph_core::types::{Mutability, Type};
 
 use crate::resolver::ResolverContext;
 
@@ -14,6 +14,12 @@ use crate::resolver::ResolverContext;
 struct FnSig {
     params: Vec<Option<Type>>,
     ret: Option<Type>,
+}
+
+#[derive(Debug, Clone)]
+struct LoopContext {
+    header: BlockId,  // for continue
+    exit: BlockId,    // for break
 }
 
 pub fn lower_module(module: &Module, resolver: &ResolverContext) -> (MirModule, Vec<Diagnostic>) {
@@ -112,6 +118,7 @@ struct LowerCtx<'a> {
     next_local: u32,
     blocks: Vec<MirBlock>,
     current: BlockId,
+    loop_stack: Vec<LoopContext>,
 }
 
 impl<'a> LowerCtx<'a> {
@@ -127,6 +134,7 @@ impl<'a> LowerCtx<'a> {
             next_local: 0,
             blocks,
             current: BlockId(0),
+            loop_stack: Vec::new(),
         }
     }
 
@@ -168,6 +176,18 @@ impl<'a> LowerCtx<'a> {
 
     fn switch_to(&mut self, id: BlockId) {
         self.current = id;
+    }
+
+    fn enter_loop(&mut self, header: BlockId, exit: BlockId) {
+        self.loop_stack.push(LoopContext { header, exit });
+    }
+
+    fn exit_loop(&mut self) {
+        self.loop_stack.pop();
+    }
+
+    fn current_loop(&self) -> Option<&LoopContext> {
+        self.loop_stack.last()
     }
 }
 
@@ -238,10 +258,7 @@ fn lower_block<'a>(ctx: &mut LowerCtx<'a>, block: &'a Block) -> Option<MirValue>
                 }
 
                 if let Some(rv) = value.as_ref().and_then(|e| lower_expr(ctx, e)) {
-                    // Propagate struct type from initializer if available
-                    if let Some(struct_name) = extract_struct_name(&rv, ctx) {
-                        ctx.locals[local.0 as usize].ty = Some(Type::Named(struct_name));
-                    }
+                    update_local_type_from_rvalue(ctx, local, &rv);
                     ctx.push_inst(MirInst::Assign { local, value: rv });
                 } else {
                     ctx.push_inst(MirInst::Nop);
@@ -250,6 +267,24 @@ fn lower_block<'a>(ctx: &mut LowerCtx<'a>, block: &'a Block) -> Option<MirValue>
             Stmt::Ret(expr, _) => {
                 let value = expr.as_ref().and_then(|e| lower_value(ctx, e));
                 ctx.push_inst(MirInst::Return(value));
+            }
+            Stmt::Break(span) => {
+                if let Some(loop_ctx) = ctx.current_loop() {
+                    let exit = loop_ctx.exit;
+                    ctx.push_inst(MirInst::Goto(exit));
+                } else {
+                    ctx.error("break statement outside of loop", Some(*span));
+                    ctx.push_inst(MirInst::Nop);
+                }
+            }
+            Stmt::Continue(span) => {
+                if let Some(loop_ctx) = ctx.current_loop() {
+                    let header = loop_ctx.header;
+                    ctx.push_inst(MirInst::Goto(header));
+                } else {
+                    ctx.error("continue statement outside of loop", Some(*span));
+                    ctx.push_inst(MirInst::Nop);
+                }
             }
             Stmt::Expr(expr, _) => {
                 if is_last {
@@ -265,6 +300,18 @@ fn lower_block<'a>(ctx: &mut LowerCtx<'a>, block: &'a Block) -> Option<MirValue>
                             // If expressions can return values, but we need to handle this
                             // For now, treat as statement
                         }
+                        Expr::While { cond, body, .. } => {
+                            lower_while(ctx, cond, body);
+                        }
+                        Expr::For {
+                            var,
+                            start,
+                            end,
+                            body,
+                            ..
+                        } => {
+                            lower_for(ctx, var, start, end, body);
+                        }
                         _ => {
                             last_value = lower_value(ctx, expr);
                         }
@@ -277,11 +324,35 @@ fn lower_block<'a>(ctx: &mut LowerCtx<'a>, block: &'a Block) -> Option<MirValue>
                             else_block,
                             ..
                         } => lower_if(ctx, cond, then_block, else_block.as_ref()),
+                        Expr::While { cond, body, .. } => lower_while(ctx, cond, body),
+                        Expr::For {
+                            var,
+                            start,
+                            end,
+                            body,
+                            ..
+                        } => lower_for(ctx, var, start, end, body),
                         _ => {
                             let _ = lower_expr(ctx, expr);
                             ctx.push_inst(MirInst::Nop);
                         }
                     }
+                }
+            }
+            Stmt::Assign {
+                target,
+                value,
+                span: _,
+            } => {
+                if let Some(local) = lower_assignment_target(ctx, target) {
+                    if let Some(rv) = lower_expr(ctx, value) {
+                        update_local_type_from_rvalue(ctx, local, &rv);
+                        ctx.push_inst(MirInst::Assign { local, value: rv });
+                    } else {
+                        ctx.push_inst(MirInst::Nop);
+                    }
+                } else {
+                    ctx.push_inst(MirInst::Nop);
                 }
             }
         }
@@ -326,6 +397,119 @@ fn lower_if<'a>(
     ctx.switch_to(join_id);
 }
 
+fn lower_while<'a>(ctx: &mut LowerCtx<'a>, cond: &'a Expr, body_block: &'a Block) {
+    let header_block = ctx.new_block();
+    let body_bb = ctx.new_block();
+    let exit_bb = ctx.new_block();
+
+    // Jump from current block to header
+    if !ctx.terminated() {
+        ctx.push_inst(MirInst::Goto(header_block));
+    }
+
+    // Header: evaluate condition and branch
+    ctx.switch_to(header_block);
+    let cond_val = lower_value(ctx, cond).unwrap_or(MirValue::Bool(false));
+    ctx.push_inst(MirInst::If {
+        cond: cond_val,
+        then_bb: body_bb,
+        else_bb: exit_bb,
+    });
+
+    // Body: lower statements, add back edge
+    ctx.switch_to(body_bb);
+    ctx.enter_loop(header_block, exit_bb);
+    let _ = lower_block(ctx, body_block);
+    ctx.exit_loop();
+
+    if !ctx.terminated() {
+        ctx.push_inst(MirInst::Goto(header_block)); // Back edge
+    }
+
+    // Exit: continue after loop
+    ctx.switch_to(exit_bb);
+}
+
+fn lower_for<'a>(
+    ctx: &mut LowerCtx<'a>,
+    var: &'a Ident,
+    start: &'a Expr,
+    end: &'a Expr,
+    body_block: &'a Block,
+) {
+    // Initialize loop variable: let var = start
+    let var_local = ctx.fresh_local(Some(&var.0));
+    ctx.bindings.insert(&var.0, var_local);
+
+    if let Some(rv) = lower_expr(ctx, start) {
+        update_local_type_from_rvalue(ctx, var_local, &rv);
+        ctx.push_inst(MirInst::Assign {
+            local: var_local,
+            value: rv,
+        });
+    } else {
+        ctx.push_inst(MirInst::Nop);
+    }
+
+    // Create blocks for while loop structure
+    let header_block = ctx.new_block();
+    let body_bb = ctx.new_block();
+    let exit_bb = ctx.new_block();
+
+    // Jump to header
+    if !ctx.terminated() {
+        ctx.push_inst(MirInst::Goto(header_block));
+    }
+
+    // Header: check condition (var < end)
+    ctx.switch_to(header_block);
+    let var_val = MirValue::Local(var_local);
+    let end_val = lower_value(ctx, end).unwrap_or(MirValue::Int(0));
+    let cond_temp = ctx.fresh_local(None);
+    ctx.locals[cond_temp.0 as usize].ty = Some(Type::Bool);
+    ctx.push_inst(MirInst::Assign {
+        local: cond_temp,
+        value: Rvalue::Binary {
+            op: BinaryOp::Lt,
+            lhs: var_val.clone(),
+            rhs: end_val,
+        },
+    });
+    ctx.push_inst(MirInst::If {
+        cond: MirValue::Local(cond_temp),
+        then_bb: body_bb,
+        else_bb: exit_bb,
+    });
+
+    // Body: execute loop body and increment
+    ctx.switch_to(body_bb);
+    ctx.enter_loop(header_block, exit_bb);
+    let _ = lower_block(ctx, body_block);
+    ctx.exit_loop();
+
+    // Increment: var = var + 1
+    if !ctx.terminated() {
+        let inc_temp = ctx.fresh_local(None);
+        ctx.locals[inc_temp.0 as usize].ty = Some(Type::I32);
+        ctx.push_inst(MirInst::Assign {
+            local: inc_temp,
+            value: Rvalue::Binary {
+                op: BinaryOp::Add,
+                lhs: var_val.clone(),
+                rhs: MirValue::Int(1),
+            },
+        });
+        ctx.push_inst(MirInst::Assign {
+            local: var_local,
+            value: Rvalue::Move(inc_temp),
+        });
+        ctx.push_inst(MirInst::Goto(header_block));
+    }
+
+    // Exit: continue after loop
+    ctx.switch_to(exit_bb);
+}
+
 fn lower_expr<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr) -> Option<Rvalue> {
     match expr {
         Expr::Lit(glyph_core::ast::Literal::Int(i), _) => Some(Rvalue::ConstInt(*i)),
@@ -351,8 +535,27 @@ fn lower_expr<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr) -> Option<Rvalue> {
             lower_if(ctx, cond, then_block, else_block.as_ref());
             None
         }
+        Expr::While { cond, body, .. } => {
+            lower_while(ctx, cond, body);
+            None
+        }
+        Expr::For {
+            var,
+            start,
+            end,
+            body,
+            ..
+        } => {
+            lower_for(ctx, var, start, end, body);
+            None
+        }
         Expr::StructLit { name, fields, span } => lower_struct_lit(ctx, name, fields, *span),
         Expr::FieldAccess { base, field, span } => lower_field_access(ctx, base, field, *span),
+        Expr::Ref {
+            expr,
+            mutability,
+            span,
+        } => lower_ref_expr(ctx, expr, *mutability, *span),
         _ => None,
     }
 }
@@ -582,16 +785,9 @@ fn lower_field_access<'a>(
         }
     };
 
-    let struct_name = match ctx
-        .locals
-        .get(base_local.0 as usize)
-        .and_then(|l| l.ty.as_ref())
-    {
-        Some(Type::Named(name)) => name.clone(),
-        _ => {
-            ctx.error("field access base is not a struct", Some(span));
-            return None;
-        }
+    let Some(struct_name) = local_struct_name(ctx, base_local) else {
+        ctx.error("field access base is not a struct", Some(span));
+        return None;
     };
 
     let Some((field_type, field_index)) = ctx.resolver.get_field(&struct_name, &field.0) else {
@@ -603,7 +799,7 @@ fn lower_field_access<'a>(
     };
 
     let tmp = ctx.fresh_local(None);
-    ctx.locals[tmp.0 as usize].ty = Some(field_type);
+    ctx.locals[tmp.0 as usize].ty = Some(field_type.clone());
 
     ctx.push_inst(MirInst::Assign {
         local: tmp,
@@ -618,24 +814,171 @@ fn lower_field_access<'a>(
 }
 
 fn resolve_type_name(name: &str, resolver: &ResolverContext) -> Option<Type> {
-    Type::from_name(name).or_else(|| {
-        resolver
-            .struct_types
-            .contains_key(name)
-            .then(|| Type::Named(name.to_string()))
-    })
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Some(primitive) = Type::from_name(trimmed) {
+        return Some(primitive);
+    }
+
+    if let Some(reference) = parse_reference_type(trimmed, resolver) {
+        return Some(reference);
+    }
+
+    resolver
+        .struct_types
+        .contains_key(trimmed)
+        .then(|| Type::Named(trimmed.to_string()))
 }
 
-fn extract_struct_name(rv: &Rvalue, ctx: &LowerCtx) -> Option<String> {
-    match rv {
-        Rvalue::StructLit { struct_name, .. } => Some(struct_name.clone()),
-        Rvalue::Move(local) => ctx.locals.get(local.0 as usize).and_then(|l| {
-            l.ty.as_ref().and_then(|t| match t {
-                Type::Named(name) => Some(name.clone()),
-                _ => None,
-            })
+fn parse_reference_type(name: &str, resolver: &ResolverContext) -> Option<Type> {
+    if !name.starts_with('&') {
+        return None;
+    }
+
+    let mut rest = name;
+    let mut mutabilities = Vec::new();
+
+    while let Some(after_amp) = rest.strip_prefix('&') {
+        rest = after_amp.trim_start();
+        if rest.is_empty() {
+            return None;
+        }
+
+        let (mutability, after_mut) = take_mutability_prefix(rest);
+        mutabilities.push(mutability);
+        rest = after_mut.trim_start();
+
+        if rest.is_empty() {
+            return None;
+        }
+
+        if !rest.starts_with('&') {
+            break;
+        }
+    }
+
+    let base_name = rest.trim();
+    if base_name.is_empty() {
+        return None;
+    }
+
+    let mut ty = resolve_type_name(base_name, resolver)?;
+    for mutability in mutabilities.into_iter().rev() {
+        ty = Type::Ref(Box::new(ty), mutability);
+    }
+    Some(ty)
+}
+
+fn take_mutability_prefix(input: &str) -> (Mutability, &str) {
+    if let Some(after) = input.strip_prefix("mut") {
+        if is_keyword_boundary(after.chars().next()) {
+            return (Mutability::Mutable, after.trim_start());
+        }
+    }
+    (Mutability::Immutable, input)
+}
+
+fn is_keyword_boundary(next: Option<char>) -> bool {
+    match next {
+        None => true,
+        Some(c) => !c.is_alphanumeric() && c != '_',
+    }
+}
+
+fn lower_assignment_target<'a>(ctx: &mut LowerCtx<'a>, target: &'a Expr) -> Option<LocalId> {
+    match target {
+        Expr::Ident(ident, span) => ctx.bindings.get(ident.0.as_str()).copied().or_else(|| {
+            ctx.error(format!("unknown identifier '{}'", ident.0), Some(*span));
+            None
         }),
+        Expr::FieldAccess { span, .. } => {
+            ctx.error("assignment to fields is not supported yet", Some(*span));
+            None
+        }
+        _ => {
+            ctx.error("assignment target must be an identifier", expr_span(target));
+            None
+        }
+    }
+}
+
+fn lower_ref_expr<'a>(
+    ctx: &mut LowerCtx<'a>,
+    expr: &'a Expr,
+    mutability: Mutability,
+    span: Span,
+) -> Option<Rvalue> {
+    match expr {
+        Expr::Ident(ident, _) => {
+            let Some(local) = ctx.bindings.get(ident.0.as_str()).copied() else {
+                ctx.error(format!("unknown identifier '{}'", ident.0), Some(span));
+                return None;
+            };
+            Some(Rvalue::Ref {
+                base: local,
+                mutability,
+            })
+        }
+        _ => {
+            ctx.error("references can only be taken to locals", Some(span));
+            None
+        }
+    }
+}
+
+fn update_local_type_from_rvalue(ctx: &mut LowerCtx, local: LocalId, rv: &Rvalue) {
+    if let Some(inferred) = infer_rvalue_type(rv, ctx) {
+        ctx.locals[local.0 as usize].ty = Some(inferred);
+    }
+}
+
+fn infer_rvalue_type(rv: &Rvalue, ctx: &LowerCtx) -> Option<Type> {
+    match rv {
+        Rvalue::StructLit { struct_name, .. } => Some(Type::Named(struct_name.clone())),
+        Rvalue::Move(local) => ctx
+            .locals
+            .get(local.0 as usize)
+            .and_then(|l| l.ty.as_ref().cloned()),
+        Rvalue::Ref { base, mutability } => ctx
+            .locals
+            .get(base.0 as usize)
+            .and_then(|l| l.ty.as_ref().cloned())
+            .map(|inner| Type::Ref(Box::new(inner), *mutability)),
         _ => None,
+    }
+}
+
+fn local_struct_name(ctx: &LowerCtx, local: LocalId) -> Option<String> {
+    ctx.locals
+        .get(local.0 as usize)
+        .and_then(|l| l.ty.as_ref())
+        .and_then(struct_name_from_type)
+}
+
+fn struct_name_from_type(ty: &Type) -> Option<String> {
+    match ty {
+        Type::Named(name) => Some(name.clone()),
+        Type::Ref(inner, _) => struct_name_from_type(inner),
+        _ => None,
+    }
+}
+
+fn expr_span(expr: &Expr) -> Option<Span> {
+    match expr {
+        Expr::Lit(_, span) => Some(*span),
+        Expr::Ident(_, span) => Some(*span),
+        Expr::Binary { span, .. } => Some(*span),
+        Expr::Call { span, .. } => Some(*span),
+        Expr::If { span, .. } => Some(*span),
+        Expr::While { span, .. } => Some(*span),
+        Expr::For { span, .. } => Some(*span),
+        Expr::Block(block) => Some(block.span),
+        Expr::StructLit { span, .. } => Some(*span),
+        Expr::FieldAccess { span, .. } => Some(*span),
+        Expr::Ref { span, .. } => Some(*span),
     }
 }
 
@@ -698,6 +1041,20 @@ fn lower_value<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr) -> Option<MirValue> {
         Expr::FieldAccess { base, field, span } => {
             lower_field_access(ctx, base, field, *span).and_then(rvalue_to_value)
         }
+        Expr::Ref {
+            expr,
+            mutability,
+            span,
+        } => {
+            let rv = lower_ref_expr(ctx, expr, *mutability, *span)?;
+            let tmp = ctx.fresh_local(None);
+            update_local_type_from_rvalue(ctx, tmp, &rv);
+            ctx.push_inst(MirInst::Assign {
+                local: tmp,
+                value: rv,
+            });
+            Some(MirValue::Local(tmp))
+        }
         _ => None,
     }
 }
@@ -710,6 +1067,192 @@ mod tests {
         BinaryOp, Block, Expr, FieldDef, Function, Ident, Item, Literal, Module, Stmt, StructDef,
     };
     use glyph_core::span::Span;
+    use glyph_core::types::{Mutability, StructType, Type};
+
+    #[test]
+    fn lowers_reference_expression() {
+        let span = Span::new(0, 5);
+        let func = Function {
+            name: Ident("main".into()),
+            params: vec![],
+            ret_type: None,
+            body: Block {
+                span,
+                stmts: vec![
+                    Stmt::Let {
+                        name: Ident("x".into()),
+                        ty: Some(Ident("i32".into())),
+                        value: Some(Expr::Lit(Literal::Int(1), span)),
+                        span,
+                    },
+                    Stmt::Let {
+                        name: Ident("r".into()),
+                        ty: None,
+                        value: Some(Expr::Ref {
+                            expr: Box::new(Expr::Ident(Ident("x".into()), span)),
+                            mutability: Mutability::Immutable,
+                            span,
+                        }),
+                        span,
+                    },
+                    Stmt::Ret(None, span),
+                ],
+            },
+            span,
+        };
+
+        let module = Module {
+            items: vec![Item::Function(func)],
+        };
+
+        let (mir, diags) = lower_module(&module, &ResolverContext::default());
+        assert!(diags.is_empty(), "unexpected diagnostics: {:?}", diags);
+
+        let assigns: Vec<_> = mir.functions[0].blocks[0]
+            .insts
+            .iter()
+            .filter_map(|inst| match inst {
+                MirInst::Assign { local, value } => Some((*local, value)),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            assigns
+                .iter()
+                .any(|(_, value)| matches!(value, Rvalue::Ref { .. }))
+        );
+    }
+
+    #[test]
+    fn resolve_type_name_parses_shared_reference_to_primitive() {
+        let ctx = ResolverContext::default();
+        let ty = resolve_type_name("&i32", &ctx).expect("type");
+        assert_eq!(ty, Type::Ref(Box::new(Type::I32), Mutability::Immutable));
+    }
+
+    #[test]
+    fn resolve_type_name_parses_mut_reference_to_struct() {
+        let mut ctx = ResolverContext::default();
+        ctx.struct_types.insert(
+            "Point".into(),
+            StructType {
+                name: "Point".into(),
+                fields: vec![],
+            },
+        );
+
+        let ty = resolve_type_name("&mut Point", &ctx).expect("type");
+        assert_eq!(
+            ty,
+            Type::Ref(Box::new(Type::Named("Point".into())), Mutability::Mutable,)
+        );
+    }
+
+    #[test]
+    fn resolve_type_name_keeps_identifiers_starting_with_mut() {
+        let mut ctx = ResolverContext::default();
+        ctx.struct_types.insert(
+            "mutPoint".into(),
+            StructType {
+                name: "mutPoint".into(),
+                fields: vec![],
+            },
+        );
+
+        let ty = resolve_type_name("&mutPoint", &ctx).expect("type");
+        assert_eq!(
+            ty,
+            Type::Ref(
+                Box::new(Type::Named("mutPoint".into())),
+                Mutability::Immutable,
+            )
+        );
+    }
+
+    #[test]
+    fn resolve_type_name_rejects_missing_inner_type() {
+        let ctx = ResolverContext::default();
+        assert!(resolve_type_name("&mut", &ctx).is_none());
+    }
+
+    #[test]
+    fn field_access_auto_dereferences_reference_base() {
+        let span = Span::new(0, 5);
+        let point_struct = Item::Struct(StructDef {
+            name: Ident("Point".into()),
+            fields: vec![
+                FieldDef {
+                    name: Ident("x".into()),
+                    ty: Ident("i32".into()),
+                    span,
+                },
+                FieldDef {
+                    name: Ident("y".into()),
+                    ty: Ident("i32".into()),
+                    span,
+                },
+            ],
+            span,
+        });
+
+        let func = Function {
+            name: Ident("main".into()),
+            params: vec![],
+            ret_type: Some(Ident("i32".into())),
+            body: Block {
+                span,
+                stmts: vec![
+                    Stmt::Let {
+                        name: Ident("p".into()),
+                        ty: Some(Ident("Point".into())),
+                        value: Some(Expr::StructLit {
+                            name: Ident("Point".into()),
+                            fields: vec![
+                                (Ident("x".into()), Expr::Lit(Literal::Int(1), span)),
+                                (Ident("y".into()), Expr::Lit(Literal::Int(2), span)),
+                            ],
+                            span,
+                        }),
+                        span,
+                    },
+                    Stmt::Let {
+                        name: Ident("pref".into()),
+                        ty: None,
+                        value: Some(Expr::Ref {
+                            expr: Box::new(Expr::Ident(Ident("p".into()), span)),
+                            mutability: Mutability::Immutable,
+                            span,
+                        }),
+                        span,
+                    },
+                    Stmt::Ret(
+                        Some(Expr::FieldAccess {
+                            base: Box::new(Expr::Ident(Ident("pref".into()), span)),
+                            field: Ident("x".into()),
+                            span,
+                        }),
+                        span,
+                    ),
+                ],
+            },
+            span,
+        };
+
+        let module = Module {
+            items: vec![point_struct, Item::Function(func)],
+        };
+
+        let (resolver, diags) = resolve_types(&module);
+        assert!(diags.is_empty());
+
+        let (_mir, lower_diags) = lower_module(&module, &resolver);
+        assert!(
+            lower_diags.is_empty(),
+            "unexpected diagnostics: {:?}",
+            lower_diags
+        );
+    }
 
     #[test]
     fn lowers_function_to_mir_with_return() {
@@ -907,6 +1450,56 @@ mod tests {
                 .any(|d| d.message.contains("missing field")),
             "expected missing-field diagnostic, got: {:?}",
             lower_diags
+        );
+    }
+
+    #[test]
+    fn lowers_assignment_statements_to_mir() {
+        let span = Span::new(0, 5);
+        let func = Function {
+            name: Ident("main".into()),
+            params: vec![],
+            ret_type: None,
+            body: Block {
+                span,
+                stmts: vec![
+                    Stmt::Let {
+                        name: Ident("x".into()),
+                        ty: Some(Ident("i32".into())),
+                        value: Some(Expr::Lit(Literal::Int(1), span)),
+                        span,
+                    },
+                    Stmt::Assign {
+                        target: Expr::Ident(Ident("x".into()), span),
+                        value: Expr::Lit(Literal::Int(2), span),
+                        span,
+                    },
+                    Stmt::Ret(Some(Expr::Ident(Ident("x".into()), span)), span),
+                ],
+            },
+            span,
+        };
+
+        let module = Module {
+            items: vec![Item::Function(func)],
+        };
+
+        let (mir, diags) = lower_module(&module, &ResolverContext::default());
+        assert!(diags.is_empty(), "unexpected diagnostics: {:?}", diags);
+
+        let assigns: Vec<_> = mir.functions[0].blocks[0]
+            .insts
+            .iter()
+            .filter_map(|inst| match inst {
+                MirInst::Assign { local, value } => Some((*local, value.clone())),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            assigns
+                .iter()
+                .any(|(local, value)| { local.0 == 0 && matches!(value, Rvalue::ConstInt(2)) })
         );
     }
 }

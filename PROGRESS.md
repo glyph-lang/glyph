@@ -88,7 +88,7 @@ All tests use TDD with snapshot testing via `insta`.
 ## 🎯 Struct Support (COMPLETE ✅)
 
 **Approach:** Stack-allocated value structs with copy semantics (like C structs)
-**No heap allocation, no pointers, no references in Phase 1**
+**No heap allocation in Phase 1; references are rolling out via the pointer roadmap (Phases 4–6 complete)**
 
 ### Phase 1: AST Extension ✅ COMPLETE
 - [x] Add struct AST nodes (StructDef, FieldDef)
@@ -177,13 +177,79 @@ fn main() -> i32 {
 }
 ```
 
+## 🔧 Reference Support (Phases 4–6 ✅)
+
+Phase 4–6 of the pointer plan are implemented end-to-end:
+- ✅ **Phase 4** (Resolver): `resolve_type_name` now understands strings like `"&Point"`/`"&mut Point"`, trims whitespace, validates nesting, and surfaces diagnostics for malformed references.
+- ✅ **Phase 5** (MIR): added `Rvalue::Ref`, lowered `Expr::Ref`, assignments, and auto-deref field access; MIR locals keep inferred `Type::Ref` metadata.
+- ✅ **Phase 6** (Codegen): references lower to raw LLVM pointers; params/locals always have stack slots so references have stable addresses; field access auto-derefs appropriately.
+- 🧪 Added two MIR fixtures (`ref_field_access.glyph`, `ref_param_call.glyph`) with updated insta snapshots.
+- 🧪 `cargo test -p glyph-frontend` now covers 19 MIR fixtures (up from 17) and all unit tests pass.
+
+## 🔄 Loop Support (COMPLETE ✅)
+
+Both while and for loops are now fully implemented:
+
+### Features Implemented:
+- ✅ **While loops** with condition expressions
+- ✅ **For loops** with range syntax (`for i in 0..10`)
+- ✅ **Break statement** - exits innermost loop
+- ✅ **Continue statement** - skips to next iteration
+- ✅ **Nested loops** with proper context tracking
+- ✅ **Error diagnostics** for break/continue outside loops
+
+### Implementation Details:
+- **AST**: Added `Expr::While`, `Expr::For`, `Stmt::Break`, `Stmt::Continue`
+- **Lexer**: Added `In` and `DotDot` tokens for for loop syntax
+- **Parser**: `parse_while()` and `parse_for()` follow `parse_if()` pattern
+- **MIR Lowering**:
+  - While loops: Loop block structure with header, body, exit blocks and back edges
+  - For loops: Desugar to while loops (initialize var, check condition, increment)
+- **Loop Context**: Stack-based tracking for break/continue targets in nested loops
+- **No LLVM changes**: Reused existing `Goto` and `If` instructions
+
+### Test Coverage:
+- 10 test fixtures covering while/for loops, break, continue, nested loops, error cases
+- 29 MIR snapshot tests passing (up from 19)
+- Verified desugaring: for loops correctly lower to while loops in MIR
+
+### Example Code:
+```glyph
+fn count_to_ten() -> i32 {
+    let i = 0
+    while i < 10 {
+        i = i + 1
+    }
+    ret i
+}
+
+fn sum_range(n: i32) -> i32 {
+    let sum = 0
+    for i in 0..n {
+        sum = sum + i
+    }
+    ret sum  // returns 0+1+2+...+(n-1)
+}
+
+fn search() -> i32 {
+    let i = 0
+    while true {
+        if i == 5 {
+            break  // exits loop
+        }
+        i = i + 1
+    }
+    ret i
+}
+```
+
 ## 🚀 What's Next
 
 Choose next feature to implement:
-1. **Enums + Pattern Matching** - Algebraic data types
-2. **Loops** - for/while iteration
-3. **Arrays** - Fixed-size arrays and slices
-4. **Better Type System** - Full type inference and checking
+1. **Arrays & Slices** - Fixed-size arrays (`[i32; 10]`) and dynamic slices (`&[T]`)
+2. **Enums + Pattern Matching** - Algebraic data types with match expressions
+3. **Better Type System** - Full type inference (Hindley-Milner) and checking
+4. **Methods & Impl Blocks** - Add methods to structs with `impl` blocks
 
 ## 🏗️ Architecture
 

@@ -104,6 +104,7 @@ fn keyword_or_ident(text: &str) -> TokenKind {
         "if" => If,
         "else" => Else,
         "for" => For,
+        "in" => In,
         "while" => While,
         "match" => Match,
         "break" => Break,
@@ -162,6 +163,7 @@ fn consume_operator(bytes: &[u8], start: usize) -> Option<(TokenKind, usize)> {
             (b'>', b'=') => return Some((Ge, start + 2)),
             (b'&', b'&') => return Some((AmpAmp, start + 2)),
             (b'|', b'|') => return Some((PipePipe, start + 2)),
+            (b'.', b'.') => return Some((DotDot, start + 2)),
             _ => {}
         }
     }
@@ -187,6 +189,7 @@ fn consume_operator(bytes: &[u8], start: usize) -> Option<(TokenKind, usize)> {
         b'!' => Bang,
         b'<' => Lt,
         b'>' => Gt,
+        b'&' => Amp,
         b'?' => Question,
         _ => Unknown,
     };

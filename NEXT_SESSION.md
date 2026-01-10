@@ -1,7 +1,7 @@
 # Next Session Quick Start Guide
 
 **Last Updated:** January 9, 2026
-**Commit:** 12901e6 (feat: complete function call implementation with LLVM codegen)
+**Current:** Loop Support Implementation COMPLETE (While + For)
 
 ---
 
@@ -24,10 +24,21 @@
   - Recursive functions
   - Forward references
   - Struct parameters and returns
+- **COMPLETE REFERENCE SUPPORT:**
+  - Immutable and mutable references (&T, &mut T)
+  - Reference parameters
+  - Auto-dereferencing for field access
+- **COMPLETE LOOP SUPPORT:**
+  - While loops with conditions
+  - **For loops with ranges (for i in 0..10)**
+  - Break and continue statements
+  - Nested loops with proper context tracking
+  - Error diagnostics for break/continue outside loops
+  - For loops desugar to while loops in MIR
 
 **Test Coverage:**
-- 35+ tests passing
-- 17 MIR snapshot tests
+- 56+ tests passing
+- 29 MIR snapshot tests (includes 10 loop tests: 8 while + 2 for)
 - 10 backend codegen tests
 - 6 resolver unit tests
 - 5 AST unit tests
@@ -53,10 +64,33 @@ fn factorial(n: i32) -> i32 {
   }
 }
 
+// While loops with break
+fn find_value(target: i32) -> i32 {
+  let i = 0
+  while true {
+    if i == target {
+      break
+    }
+    i = i + 1
+  }
+  ret i
+}
+
+// For loops (NEW!)
+fn sum_range(n: i32) -> i32 {
+  let sum = 0
+  for i in 0..n {
+    sum = sum + i
+  }
+  ret sum  // returns sum of 0..n-1
+}
+
 fn main() -> i32 {
   let pt = make_point(10, 20)
   let fact = factorial(5)
-  ret pt.x + pt.y + fact  // returns 150 (30 + 120)
+  let found = find_value(7)
+  let range_sum = sum_range(10)
+  ret pt.x + pt.y + fact + found + range_sum  // returns 202 (30 + 120 + 7 + 45)
 }
 ```
 
@@ -78,31 +112,88 @@ All function call implementation complete:
 - ✅ Struct parameters and return values
 - ✅ 5 integration tests passing
 
+## Reference Support 🔧 (Phases 4–6 done)
+
+Latest progress on the pointer roadmap:
+- ✅ **Phase 4** – resolver understands `&T` / `&mut T` names and reports malformed references.
+- ✅ **Phase 5** – MIR gained `Rvalue::Ref`, assignment lowering, and auto-deref logic for field access.
+- ✅ **Phase 6** – LLVM codegen now emits raw pointer types for references, keeps locals/params in stack slots, and auto-derefs before field GEPs.
+- 🧪 Added MIR fixtures `ref_field_access.glyph` and `ref_param_call.glyph` to exercise reference semantics.
+- 📦 `cargo test -p glyph-frontend` fully green (19 MIR snapshots).
+
+## For Loop Support ✅ COMPLETE
+
+For loops with range syntax are now fully implemented:
+
+**Features:**
+- ✅ Syntax: `for var in start..end { body }`
+- ✅ Added `In` and `DotDot` tokens to lexer
+- ✅ Added `For` variant to `Expr` enum with var, start, end, body
+- ✅ Parser implementation following `parse_while()` pattern
+- ✅ MIR lowering desugars for loops to while loops
+- ✅ Proper variable initialization and increment
+- ✅ Loop context tracking (break/continue work in for loops)
+- ✅ 2 test fixtures with snapshots
+
+**Implementation Details:**
+- For loops desugar at MIR lowering time into equivalent while loops
+- Loop variable initialized before entering loop
+- Condition checked at loop header: `var < end`
+- Body executed, then variable incremented by 1
+- Back edge to header for next iteration
+
+**Example:**
+```glyph
+fn sum_to_n(n: i32) -> i32 {
+  let sum = 0
+  for i in 0..n {
+    sum = sum + i
+  }
+  ret sum
+}
+```
+
+**Desugars to:**
+```glyph
+fn sum_to_n(n: i32) -> i32 {
+  let sum = 0
+  let i = 0
+  while i < n {
+    sum = sum + i
+    i = i + 1
+  }
+  ret sum
+}
+```
+
 ## What to Build Next
 
 Choose the next major feature:
 
-### Option 1: Loops (Recommended - High Value)
-**Complexity:** Medium
-**Value:** Essential for practical programs
+### Option 1: Arrays and Slices (Recommended - High Value)
+**Complexity:** Medium-High
+**Value:** Essential for data structures
 
 **Features:**
-- `while` loops with condition
-- `for` loops over ranges
-- `break` and `continue` statements
-- Loop expressions (can return values)
+- Fixed-size arrays: `[i32; 10]`
+- Array literals: `[1, 2, 3, 4, 5]`
+- Indexing: `arr[i]`
+- Slices: `&[T]` (references existing arrays)
 
 **Implementation:**
-- Add loop AST nodes
-- MIR loop blocks with phi nodes
-- LLVM loop codegen with proper branching
+- Array types in type system
+- Parser for array syntax
+- MIR lowering for arrays and indexing
+- LLVM array/GEP operations
+- Optional bounds checking
 
 **Test Strategy:**
-- Count to N loop
-- Fibonacci via iteration
-- Early break/continue
+- Array initialization
+- Array indexing
+- Passing arrays to functions
+- Iterating with for loops
 
-### Option 2: Arrays and Slices
+### Option 2: Enums + Pattern Matching
 **Complexity:** Medium-High
 **Value:** Complement structs well
 
@@ -180,7 +271,6 @@ INSTA_UPDATE=always cargo test
 ✅ **All tokens exist** - No lexer changes needed  
 
 ❌ **Not implementing yet:**
-- References (`&Point`)
 - Heap allocation (`Box<Point>`)
 - Methods/impl blocks
 - Generic structs
@@ -194,17 +284,17 @@ crates/
 ├── glyph-core/src/lib.rs         # AST, MIR, Types
 ├── glyph-frontend/src/
 │   ├── lexer.rs                  # ✅ Complete
-│   ├── parser.rs                 # ✅ Struct parsing done
-│   ├── resolver.rs               # 🔜 TODO: Create this
-│   ├── mir_lower.rs              # 🔜 TODO: Add struct lowering
-│   └── lib.rs                    # 🔜 TODO: Wire resolver
+│   ├── parser.rs                 # ✅ Struct + reference parsing
+│   ├── resolver.rs               # ✅ Struct + reference resolver
+│   ├── mir_lower.rs              # ✅ Struct + reference MIR lowering
+│   └── lib.rs                    # ✅ Frontend pipeline wiring
 └── glyph-backend/src/
-    ├── codegen.rs                # 🔜 TODO: Add struct codegen
+    ├── codegen.rs                # ✅ Struct + reference codegen
     └── lib.rs                    # ✅ Complete
 
 tests/fixtures/
 ├── parse/                        # ✅ 3 struct fixtures
-├── mir/                          # 🔜 Add struct fixtures
+├── mir/                          # ✅ 19 MIR fixtures (structs, calls, references)
 └── codegen/                      # 🔜 Add struct fixtures
 ```
 

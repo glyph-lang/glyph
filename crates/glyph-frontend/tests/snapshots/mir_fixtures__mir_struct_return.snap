@@ -106,11 +106,25 @@ MirModule {
                     name: Some(
                         "pt",
                     ),
-                    ty: None,
+                    ty: Some(
+                        Named(
+                            "Point",
+                        ),
+                    ),
                 },
                 Local {
                     name: None,
-                    ty: None,
+                    ty: Some(
+                        Named(
+                            "Point",
+                        ),
+                    ),
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        I32,
+                    ),
                 },
             ],
             blocks: [
@@ -135,8 +149,26 @@ MirModule {
                                 ),
                             ),
                         },
+                        Assign {
+                            local: LocalId(
+                                2,
+                            ),
+                            value: FieldAccess {
+                                base: LocalId(
+                                    0,
+                                ),
+                                field_name: "x",
+                                field_index: 0,
+                            },
+                        },
                         Return(
-                            None,
+                            Some(
+                                Local(
+                                    LocalId(
+                                        2,
+                                    ),
+                                ),
+                            ),
                         ),
                     ],
                 },
