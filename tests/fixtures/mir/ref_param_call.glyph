@@ -1,0 +1,12 @@
+struct Point {
+  x: i32
+}
+
+fn get_x(p: &Point) -> i32 {
+  ret p.x
+}
+
+fn main() -> i32 {
+  let point = Point { x: 4 }
+  ret get_x(&point)
+}

@@ -1,0 +1,6 @@
+fn main() -> i32 {
+  let heap = Own::new(7)
+  let raw = heap.into_raw()
+  let again = Own::from_raw(raw)
+  ret 0
+}

@@ -6,6 +6,7 @@ use glyph_core::{
 };
 
 mod lexer;
+mod method_symbols;
 mod mir_lower;
 mod parser;
 mod resolver;

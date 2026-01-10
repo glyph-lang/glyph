@@ -1,7 +1,19 @@
 # Next Session Quick Start Guide
 
-**Last Updated:** January 9, 2026
-**Current:** Loop Support Implementation COMPLETE (While + For)
+**Last Updated:** January 10, 2026
+**Current:** Interfaces Phase 6 – verify LLVM/codegen + docs/tests
+
+---
+
+## 🎯 IMMEDIATE NEXT STEPS
+
+1) **Phase 6: Interfaces LLVM verification**
+   - Confirm interface method calls emit correct LLVM (reuse call paths) and expand CLI/codegen fixtures if needed.
+2) **Phase 7: Interfaces docs & tests**
+   - Add examples covering interface parsing, impl validation errors, and mixed inherent/interface dispatch.
+3) **Stretch:** start Heap Ownership pointers (Own/RawPtr) once interface docs/tests land.
+
+**Previous Status:** Arrays + loops integrated; function calls and references fully green.
 
 ---
 
@@ -10,38 +22,17 @@
 ### ✅ What's Working
 
 **Compiler Features:**
-- Complete lexer and parser for functions, expressions, control flow
-- Return types and function parameters
-- Implicit returns (Rust-style)
-- MIR (Mid-level IR) with SSA-like representation
+- Complete lexer/parser/resolver + MIR lowering
 - LLVM codegen with JIT execution
-- **COMPLETE STRUCT SUPPORT:**
-  - Struct definitions, literals, field access
-  - Type resolution with validation
-  - Return by value
-- **COMPLETE FUNCTION CALLS:**
-  - Direct function calls
-  - Recursive functions
-  - Forward references
-  - Struct parameters and returns
-- **COMPLETE REFERENCE SUPPORT:**
-  - Immutable and mutable references (&T, &mut T)
-  - Reference parameters
-  - Auto-dereferencing for field access
-- **COMPLETE LOOP SUPPORT:**
-  - While loops with conditions
-  - **For loops with ranges (for i in 0..10)**
-  - Break and continue statements
-  - Nested loops with proper context tracking
-  - Error diagnostics for break/continue outside loops
-  - For loops desugar to while loops in MIR
+- Structs, function calls, references, loops
+- Arrays: literals, indexing with bounds checks, `.len()`
+- Interfaces: parsing/impl validation, method-call resolution (inherent + interface dispatch), auto-borrowing in MIR
 
 **Test Coverage:**
-- 56+ tests passing
-- 29 MIR snapshot tests (includes 10 loop tests: 8 while + 2 for)
-- 10 backend codegen tests
-- 6 resolver unit tests
-- 5 AST unit tests
+- Workspace tests green (`cargo test`)
+- 34 MIR snapshots refreshed (arrays, refs, loops, owns, interface call)
+- Backend codegen fixtures (arrays/structs/owns) passing
+- Resolver/parser/unit coverage intact
 
 **Example Code That Works:**
 ```glyph
@@ -168,20 +159,9 @@ fn sum_to_n(n: i32) -> i32 {
 
 ## What to Build Next
 
-Choose the next major feature:
-
-### Option 1: Arrays and Slices (Recommended - High Value)
-**Complexity:** Medium-High
-**Value:** Essential for data structures
-
-**Features:**
-- Fixed-size arrays: `[i32; 10]`
-- Array literals: `[1, 2, 3, 4, 5]`
-- Indexing: `arr[i]`
-- Slices: `&[T]` (references existing arrays)
-
-**Implementation:**
-- Array types in type system
+1) Finish interface track (LLVM validation + docs/tests)
+2) Move to Heap Ownership pointers (Own<T>, RawPtr<T>) once interfaces close
+3) Longer-term: enums/pattern matching, borrow checker, generics
 - Parser for array syntax
 - MIR lowering for arrays and indexing
 - LLVM array/GEP operations

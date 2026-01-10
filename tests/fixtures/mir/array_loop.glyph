@@ -1,0 +1,8 @@
+fn sum_array() -> i32 {
+  let arr = [10, 20, 30, 40]
+  let sum = 0
+  for i in 0..arr.len() {
+    sum = sum + arr[i]
+  }
+  ret sum
+}

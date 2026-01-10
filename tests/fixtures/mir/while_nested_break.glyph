@@ -1,0 +1,19 @@
+fn main() -> i32 {
+    let found = false
+    let i = 0
+    while i < 10 {
+        let j = 0
+        while j < 10 {
+            if i == 3 {
+                found = true
+                break
+            }
+            j = j + 1
+        }
+        if found {
+            break
+        }
+        i = i + 1
+    }
+    ret i
+}

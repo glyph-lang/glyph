@@ -5,7 +5,7 @@ use anyhow::{Result, anyhow, bail};
 use glyph_core::mir::{
     BlockId, LocalId, MirBlock, MirFunction, MirInst, MirModule, MirValue, Rvalue,
 };
-use glyph_core::types::{Mutability, StructType, Type};
+use glyph_core::types::{StructType, Type};
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
 use llvm_sys::{LLVMBuilder, LLVMContext, LLVMModule};
@@ -16,6 +16,8 @@ pub struct CodegenContext {
     builder: *mut LLVMBuilder,
     struct_types: HashMap<String, LLVMTypeRef>,
     struct_layouts: HashMap<String, StructType>,
+    malloc_fn: Option<LLVMValueRef>,
+    free_fn: Option<LLVMValueRef>,
 }
 
 impl CodegenContext {
@@ -32,6 +34,8 @@ impl CodegenContext {
                 builder,
                 struct_types: HashMap::new(),
                 struct_layouts: HashMap::new(),
+                malloc_fn: None,
+                free_fn: None,
             })
         }
     }
@@ -103,6 +107,15 @@ impl CodegenContext {
                     // References should lower to LLVM pointer types
                     let inner_ty = self.get_llvm_type(inner)?;
                     LLVMPointerType(inner_ty, 0)
+                }
+                Type::Array(elem_ty, size) => {
+                    // Array type: [T; N] maps to LLVM array type
+                    let elem_llvm = self.get_llvm_type(elem_ty)?;
+                    LLVMArrayType(elem_llvm, *size as u32)
+                }
+                Type::Own(inner) | Type::RawPtr(inner) => {
+                    let elem_ty = self.get_llvm_type(inner)?;
+                    LLVMPointerType(elem_ty, 0)
                 }
             })
         }
@@ -295,8 +308,79 @@ impl CodegenContext {
                         .ok_or_else(|| anyhow!("undefined block {:?}", else_bb))?;
                     LLVMBuildCondBr(self.builder, cond_val, *then_block, *else_block);
                 }
+                MirInst::Drop(local) => {
+                    self.codegen_drop_local(*local, func, local_map)?;
+                }
                 MirInst::Nop => {}
             }
+        }
+        Ok(())
+    }
+
+    fn codegen_drop_local(
+        &mut self,
+        local: LocalId,
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+    ) -> Result<()> {
+        let ty = match func
+            .locals
+            .get(local.0 as usize)
+            .and_then(|l| l.ty.as_ref())
+        {
+            Some(ty) => ty,
+            None => return Ok(()),
+        };
+        match ty {
+            Type::Own(inner) => {
+                let slot = local_map
+                    .get(&local)
+                    .ok_or_else(|| anyhow!("undefined local {:?}", local))?;
+                self.codegen_drop_own_slot(*slot, inner)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn codegen_drop_own_slot(&mut self, slot: LLVMValueRef, inner: &Type) -> Result<()> {
+        unsafe {
+            let ptr_ty = self.get_llvm_type(&Type::Own(Box::new(inner.clone())))?;
+            let load_name = CString::new("own.ptr")?;
+            let ptr_val = LLVMBuildLoad2(self.builder, ptr_ty, slot, load_name.as_ptr());
+            let null_ptr = LLVMConstPointerNull(ptr_ty);
+            let cmp_name = CString::new("own.isnull")?;
+            let is_null = LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                ptr_val,
+                null_ptr,
+                cmp_name.as_ptr(),
+            );
+
+            let current_bb = LLVMGetInsertBlock(self.builder);
+            if current_bb.is_null() {
+                bail!("builder not positioned in a block for drop");
+            }
+            let parent_func = LLVMGetBasicBlockParent(current_bb);
+            if parent_func.is_null() {
+                bail!("drop parent function missing");
+            }
+
+            let drop_name = CString::new("own.drop")?;
+            let cont_name = CString::new("own.drop.cont")?;
+            let drop_bb =
+                LLVMAppendBasicBlockInContext(self.context, parent_func, drop_name.as_ptr());
+            let cont_bb =
+                LLVMAppendBasicBlockInContext(self.context, parent_func, cont_name.as_ptr());
+
+            LLVMBuildCondBr(self.builder, is_null, cont_bb, drop_bb);
+
+            LLVMPositionBuilderAtEnd(self.builder, drop_bb);
+            self.codegen_free(ptr_val)?;
+            LLVMBuildStore(self.builder, null_ptr, slot);
+            LLVMBuildBr(self.builder, cont_bb);
+
+            LLVMPositionBuilderAtEnd(self.builder, cont_bb);
         }
         Ok(())
     }
@@ -453,6 +537,26 @@ impl CodegenContext {
                         .ok_or_else(|| anyhow!("undefined local {:?}", base))?;
                     Ok(*base_ptr)
                 }
+                Rvalue::ArrayLit {
+                    elem_type,
+                    elements,
+                } => self.codegen_array_literal(elem_type, elements, func, local_map),
+                Rvalue::ArrayIndex {
+                    base,
+                    index,
+                    bounds_check,
+                } => self.codegen_array_index(*base, index, *bounds_check, func, local_map),
+                Rvalue::ArrayLen { base } => self.codegen_array_len(*base, func),
+                Rvalue::OwnNew { elem_type, value } => {
+                    self.codegen_own_new(elem_type, value, func, local_map)
+                }
+                Rvalue::OwnIntoRaw { base, elem_type } => {
+                    self.codegen_own_into_raw(*base, elem_type, local_map)
+                }
+                Rvalue::OwnFromRaw { ptr, elem_type } => {
+                    self.codegen_own_from_raw(ptr, elem_type, func, local_map)
+                }
+                Rvalue::RawPtrNull { elem_type } => self.codegen_raw_ptr_null(elem_type),
             }
         }
     }
@@ -593,6 +697,333 @@ impl CodegenContext {
         let llvm_field_ty = self.get_llvm_type(&field_ty)?;
         let load_name = CString::new("field.load")?;
         Ok(unsafe { LLVMBuildLoad2(self.builder, llvm_field_ty, field_ptr, load_name.as_ptr()) })
+    }
+
+    fn codegen_array_literal(
+        &mut self,
+        elem_type: &Type,
+        elements: &[MirValue],
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+    ) -> Result<LLVMValueRef> {
+        if elements.is_empty() {
+            bail!("array literal must have at least one element");
+        }
+
+        let array_ty = Type::Array(Box::new(elem_type.clone()), elements.len());
+        let llvm_array_ty = self.get_llvm_type(&array_ty)?;
+        let alloca_name = CString::new("array.tmp")?;
+        let alloca = unsafe { LLVMBuildAlloca(self.builder, llvm_array_ty, alloca_name.as_ptr()) };
+
+        let i32_ty = unsafe { LLVMInt32TypeInContext(self.context) };
+        let zero = unsafe { LLVMConstInt(i32_ty, 0, 0) };
+
+        for (idx, element) in elements.iter().enumerate() {
+            let elem_val = self.codegen_value(element, func, local_map)?;
+            let index_const = unsafe { LLVMConstInt(i32_ty, idx as u64, 0) };
+            let mut indices = vec![zero, index_const];
+            let gep_name = CString::new(format!("array.elem{}", idx))?;
+            let elem_ptr = unsafe {
+                LLVMBuildInBoundsGEP2(
+                    self.builder,
+                    llvm_array_ty,
+                    alloca,
+                    indices.as_mut_ptr(),
+                    indices.len() as u32,
+                    gep_name.as_ptr(),
+                )
+            };
+            unsafe {
+                LLVMBuildStore(self.builder, elem_val, elem_ptr);
+            }
+        }
+
+        let load_name = CString::new("array.value")?;
+        Ok(unsafe { LLVMBuildLoad2(self.builder, llvm_array_ty, alloca, load_name.as_ptr()) })
+    }
+
+    fn codegen_array_index(
+        &mut self,
+        base: LocalId,
+        index: &MirValue,
+        bounds_check: bool,
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+    ) -> Result<LLVMValueRef> {
+        let base_ptr = *local_map
+            .get(&base)
+            .ok_or_else(|| anyhow!("undefined local {:?}", base))?;
+
+        let base_ty = func
+            .locals
+            .get(base.0 as usize)
+            .and_then(|local| local.ty.as_ref())
+            .ok_or_else(|| anyhow!("array index base has unknown type"))?;
+
+        let (elem_ty, size) = match base_ty {
+            Type::Array(elem, size) => (elem.as_ref().clone(), *size),
+            _ => bail!("array index base is not an array"),
+        };
+
+        let llvm_array_ty = self.get_llvm_type(base_ty)?;
+        let elem_llvm_ty = self.get_llvm_type(&elem_ty)?;
+        let index_val = self.codegen_value(index, func, local_map)?;
+
+        if bounds_check {
+            self.emit_bounds_check(index_val, size)?;
+        }
+
+        let i32_ty = unsafe { LLVMInt32TypeInContext(self.context) };
+        let zero = unsafe { LLVMConstInt(i32_ty, 0, 0) };
+        let mut indices = vec![zero, index_val];
+        let gep_name = CString::new("array.index")?;
+        let elem_ptr = unsafe {
+            LLVMBuildInBoundsGEP2(
+                self.builder,
+                llvm_array_ty,
+                base_ptr,
+                indices.as_mut_ptr(),
+                indices.len() as u32,
+                gep_name.as_ptr(),
+            )
+        };
+        let load_name = CString::new("array.elem.load")?;
+        Ok(unsafe { LLVMBuildLoad2(self.builder, elem_llvm_ty, elem_ptr, load_name.as_ptr()) })
+    }
+
+    fn codegen_array_len(&mut self, base: LocalId, func: &MirFunction) -> Result<LLVMValueRef> {
+        let base_ty = func
+            .locals
+            .get(base.0 as usize)
+            .and_then(|local| local.ty.as_ref())
+            .ok_or_else(|| anyhow!("array length base has unknown type"))?;
+
+        let size = match base_ty {
+            Type::Array(_, size) => *size,
+            _ => bail!(".len() is only supported on arrays"),
+        };
+
+        let i32_ty = unsafe { LLVMInt32TypeInContext(self.context) };
+        Ok(unsafe { LLVMConstInt(i32_ty, size as u64, 0) })
+    }
+
+    fn codegen_own_new(
+        &mut self,
+        elem_type: &Type,
+        value: &MirValue,
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+    ) -> Result<LLVMValueRef> {
+        unsafe {
+            let llvm_elem_ty = self.get_llvm_type(elem_type)?;
+            let size_val = LLVMSizeOf(llvm_elem_ty);
+            let malloc_fn = self.ensure_malloc_fn()?;
+            let malloc_ty = self.malloc_function_type();
+            let mut args = vec![size_val];
+            let call_name = CString::new("own.alloc")?;
+            let raw_ptr = LLVMBuildCall2(
+                self.builder,
+                malloc_ty,
+                malloc_fn,
+                args.as_mut_ptr(),
+                args.len() as u32,
+                call_name.as_ptr(),
+            );
+            let typed_ptr_ty = LLVMPointerType(llvm_elem_ty, 0);
+            let cast_name = CString::new("own.ptr")?;
+            let typed_ptr =
+                LLVMBuildBitCast(self.builder, raw_ptr, typed_ptr_ty, cast_name.as_ptr());
+            let value_val = self.codegen_value(value, func, local_map)?;
+            LLVMBuildStore(self.builder, value_val, typed_ptr);
+            Ok(typed_ptr)
+        }
+    }
+
+    fn codegen_own_into_raw(
+        &mut self,
+        base: LocalId,
+        elem_type: &Type,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+    ) -> Result<LLVMValueRef> {
+        let slot = local_map
+            .get(&base)
+            .ok_or_else(|| anyhow!("undefined local {:?}", base))?;
+        let llvm_ty = self.get_llvm_type(&Type::Own(Box::new(elem_type.clone())))?;
+        unsafe {
+            let load_name = CString::new("own.into")?;
+            let ptr_val = LLVMBuildLoad2(self.builder, llvm_ty, *slot, load_name.as_ptr());
+            let null_ptr = LLVMConstPointerNull(llvm_ty);
+            LLVMBuildStore(self.builder, null_ptr, *slot);
+            Ok(ptr_val)
+        }
+    }
+
+    fn codegen_own_from_raw(
+        &mut self,
+        ptr: &MirValue,
+        elem_type: &Type,
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+    ) -> Result<LLVMValueRef> {
+        let value = self.codegen_value(ptr, func, local_map)?;
+        let desired_ty = self.get_llvm_type(&Type::Own(Box::new(elem_type.clone())))?;
+        unsafe {
+            if LLVMTypeOf(value) == desired_ty {
+                Ok(value)
+            } else {
+                let cast_name = CString::new("own.from.raw")?;
+                Ok(LLVMBuildBitCast(
+                    self.builder,
+                    value,
+                    desired_ty,
+                    cast_name.as_ptr(),
+                ))
+            }
+        }
+    }
+
+    fn codegen_raw_ptr_null(&mut self, elem_type: &Type) -> Result<LLVMValueRef> {
+        let ty = self.get_llvm_type(&Type::RawPtr(Box::new(elem_type.clone())))?;
+        Ok(unsafe { LLVMConstPointerNull(ty) })
+    }
+
+    fn ensure_malloc_fn(&mut self) -> Result<LLVMValueRef> {
+        if let Some(func) = self.malloc_fn {
+            return Ok(func);
+        }
+        unsafe {
+            let fn_ty = self.malloc_function_type();
+            let name = CString::new("malloc")?;
+            let func = LLVMAddFunction(self.module, name.as_ptr(), fn_ty);
+            self.malloc_fn = Some(func);
+            Ok(func)
+        }
+    }
+
+    fn ensure_free_fn(&mut self) -> Result<LLVMValueRef> {
+        if let Some(func) = self.free_fn {
+            return Ok(func);
+        }
+        unsafe {
+            let fn_ty = self.free_function_type();
+            let name = CString::new("free")?;
+            let func = LLVMAddFunction(self.module, name.as_ptr(), fn_ty);
+            self.free_fn = Some(func);
+            Ok(func)
+        }
+    }
+
+    fn malloc_function_type(&self) -> LLVMTypeRef {
+        unsafe {
+            let i8_ptr = LLVMPointerType(LLVMInt8TypeInContext(self.context), 0);
+            let size_ty = LLVMInt64TypeInContext(self.context);
+            let mut params = vec![size_ty];
+            LLVMFunctionType(i8_ptr, params.as_mut_ptr(), params.len() as u32, 0)
+        }
+    }
+
+    fn free_function_type(&self) -> LLVMTypeRef {
+        unsafe {
+            let void_ty = LLVMVoidTypeInContext(self.context);
+            let i8_ptr = LLVMPointerType(LLVMInt8TypeInContext(self.context), 0);
+            let mut params = vec![i8_ptr];
+            LLVMFunctionType(void_ty, params.as_mut_ptr(), params.len() as u32, 0)
+        }
+    }
+
+    fn codegen_free(&mut self, ptr: LLVMValueRef) -> Result<()> {
+        unsafe {
+            let free_fn = self.ensure_free_fn()?;
+            let fn_ty = self.free_function_type();
+            let i8_ptr = LLVMPointerType(LLVMInt8TypeInContext(self.context), 0);
+            let cast_name = CString::new("own.free.cast")?;
+            let cast_ptr = LLVMBuildBitCast(self.builder, ptr, i8_ptr, cast_name.as_ptr());
+            let mut args = vec![cast_ptr];
+            let call_name = CString::new("own.free")?;
+            LLVMBuildCall2(
+                self.builder,
+                fn_ty,
+                free_fn,
+                args.as_mut_ptr(),
+                args.len() as u32,
+                call_name.as_ptr(),
+            );
+        }
+        Ok(())
+    }
+
+    fn emit_bounds_check(&mut self, index_val: LLVMValueRef, array_size: usize) -> Result<()> {
+        unsafe {
+            let i32_ty = LLVMInt32TypeInContext(self.context);
+            let zero = LLVMConstInt(i32_ty, 0, 0);
+            let nonneg_name = CString::new("idx.nonneg")?;
+            let non_negative = LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntSGE,
+                index_val,
+                zero,
+                nonneg_name.as_ptr(),
+            );
+
+            let size_const = LLVMConstInt(i32_ty, array_size as u64, 0);
+            let upper_name = CString::new("idx.upper")?;
+            let within_upper = LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntSLT,
+                index_val,
+                size_const,
+                upper_name.as_ptr(),
+            );
+
+            let cond_name = CString::new("idx.in_bounds")?;
+            let cond = LLVMBuildAnd(self.builder, non_negative, within_upper, cond_name.as_ptr());
+
+            let current_block = LLVMGetInsertBlock(self.builder);
+            if current_block.is_null() {
+                bail!("bounds check requires valid insertion block");
+            }
+            let parent_func = LLVMGetBasicBlockParent(current_block);
+            if parent_func.is_null() {
+                bail!("bounds check parent function missing");
+            }
+
+            let ok_name = CString::new("bounds.ok")?;
+            let panic_name = CString::new("bounds.panic")?;
+            let ok_bb = LLVMAppendBasicBlockInContext(self.context, parent_func, ok_name.as_ptr());
+            let panic_bb =
+                LLVMAppendBasicBlockInContext(self.context, parent_func, panic_name.as_ptr());
+
+            LLVMBuildCondBr(self.builder, cond, ok_bb, panic_bb);
+
+            LLVMPositionBuilderAtEnd(self.builder, panic_bb);
+            self.emit_panic()?;
+            LLVMBuildUnreachable(self.builder);
+
+            LLVMPositionBuilderAtEnd(self.builder, ok_bb);
+        }
+        Ok(())
+    }
+
+    fn emit_panic(&mut self) -> Result<()> {
+        unsafe {
+            let trap_name = CString::new("llvm.trap")?;
+            let void_ty = LLVMVoidTypeInContext(self.context);
+            let trap_ty = LLVMFunctionType(void_ty, std::ptr::null_mut(), 0, 0);
+            let mut trap_fn = LLVMGetNamedFunction(self.module, trap_name.as_ptr());
+            if trap_fn.is_null() {
+                trap_fn = LLVMAddFunction(self.module, trap_name.as_ptr(), trap_ty);
+            }
+            let call_name = CString::new("panic.trap")?;
+            LLVMBuildCall2(
+                self.builder,
+                trap_ty,
+                trap_fn,
+                std::ptr::null_mut(),
+                0,
+                call_name.as_ptr(),
+            );
+        }
+        Ok(())
     }
 
     fn struct_pointer_for_local(

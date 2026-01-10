@@ -25,10 +25,13 @@ Status key: `[ ]` not started, `[~]` in progress, `[x]` done.
 - [x] M5: CLI `build/check/run` end-to-end fixture tests - COMPLETE
 - [x] M6: Struct support - COMPLETE (all 6 phases: AST, Parser, Resolver, MIR, Codegen, Integration)
 - [x] M7: Function calls - COMPLETE (MIR lowering, LLVM codegen, recursion, forward references)
+- [x] M8: Fixed-size arrays (parser → MIR → bounds-checked LLVM, arr.len, for-loop integration)
+- [ ] M9: Heap ownership pointers (Own<T>, RawPtr<T>)
+- [~] M10: Interfaces (parsing/validation/MIR + method dispatch) – LLVM/codegen validation + docs/tests remaining
 
 ## TDD & fixtures
 - [ ] Fixture tree under `tests/fixtures/{lex,parse,resolution,typeck,borrow,mir,ir,cli}`
-- [~] Snapshot testing with `insta` for AST/MIR/IR and diagnostics (lex+parser stages in place; if/call/let covered)
+- [~] Snapshot testing with `insta` for AST/MIR/IR and diagnostics (34 MIR snapshots incl. arrays/refs/loops/owns)
 - [~] Property tests via `proptest` for lexer/parser spans and panic-freedom (lexer spans covered)
 - [ ] Backend IR tests behind `codegen` feature to avoid LLVM in fast loop
 - [ ] CI flow: fmt (once available), clippy, test (workspace)
@@ -85,6 +88,21 @@ fn main() -> i32 {
 }
 ```
 
+## Arrays: INTEGRATED ✅
+
+**Highlights:**
+- Parser/type resolver understand `[T; N]` annotations and literals.
+- MIR has `ArrayLit`, `ArrayIndex`, and `ArrayLen` rvalues with inferred element types.
+- LLVM backend emits stack-allocated literals, bounds-checked indexing (traps via `llvm.trap`), and constant-length queries.
+- Fixtures cover basic literals, indexing, `.len()`, and for-loop integration; CLI codegen tests assert GEPs + traps.
+
+## Interfaces: In Progress (Phases 0–5 ✅)
+
+- Parser supports `interface` definitions, struct declarations of interfaces, inline/`impl for` implementations, and method-call syntax.
+- Resolver validates interface signatures, collects impls, checks missing/duplicate/unknown methods, and tracks self by value/ref/mut.
+- MIR lowering resolves method calls across inherent + interface impls with auto-borrowing; builtin `.len()`/`into_raw()` handled early.
+- Remaining: dedicated LLVM verification + docs/examples; broaden fixture coverage.
+
 ## Function Calls: COMPLETE ✅
 
 **Status:** Fully implemented and tested
@@ -109,12 +127,32 @@ fn main() -> i32 {
 }
 ```
 
-## Next Session: Choose Next Feature
+## Heap Ownership Pointers: Own<T> + RawPtr<T> (NEXT)
 
-**Options:**
-1. **Loops** (while/for) - Essential for iteration
-2. **Arrays** - Fixed-size arrays and slices
-3. **Enums + Match** - Algebraic data types
-4. **Type System** - Full inference and checking
+Goal: introduce deterministic heap allocation with move-only `Own<T>` (Box-like) and unsafe `RawPtr<T>` escape hatches, following `own.txt` semantics.
 
-**Recommendation:** Start with loops for maximum practical value.
+### Phase plan
+1. **Type System + Parsing**
+   - Extend `Type` enum with `Own(Box<Type>)`, `RawPtr(Box<Type>)`, helpers, and serialization.
+   - Accept `Own<T>` / `RawPtr<T>` in annotations via a minimal angle-bracket parser; reject unsized inners for now.
+   - Update resolver + diagnostics for unknown inner types / malformed generics.
+2. **MIR + Borrowing Rules**
+   - Add rvalues for `Own::new`, `into_raw`, `from_raw`, raw pointer ops, and `Drop` terminators.
+   - Track move-only state for `Own` locals (use-after-move diagnostics) and auto-drop on scope exits.
+   - Support auto-deref of `Own<T>` in field/index access and `&Own` borrowing rules.
+3. **Backend & Runtime**
+   - Introduce heap runtime hooks (`malloc`, `free`, `drop_in_place`) and emit LLVM IR for allocation, destruction, and conversions.
+   - Reuse existing panic/bounds infrastructure for null/dangling checks; ensure drop glue runs on all exit paths.
+4. **Safety/Diagnostics**
+   - Forbid implicit copies; surface errors for double drops, missing unsafe on `from_raw`, or dereferencing null raw pointers.
+   - Document interaction with arrays/loops and planned future `unsafe` blocks.
+5. **Testing**
+   - MIR fixtures for ownership transfer, move errors, raw conversions, recursive structs (e.g., linked list).
+   - Codegen tests asserting `malloc/free` calls and drop glue; CLI fixture exercising `Own` in a loop.
+
+## Next Session: Execution Order
+
+1. **Heap Ownership pointers (`Own<T>`, `RawPtr<T>`).**
+2. Enums + pattern matching.
+3. Borrow checker & lifetimes.
+4. Generics + trait system (longer-term).

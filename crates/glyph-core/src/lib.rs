@@ -129,6 +129,21 @@ pub mod ast {
             body: Block,
             span: Span,
         },
+        ArrayLit {
+            elements: Vec<Expr>,
+            span: Span,
+        },
+        Index {
+            base: Box<Expr>,
+            index: Box<Expr>,
+            span: Span,
+        },
+        MethodCall {
+            receiver: Box<Expr>,
+            method: Ident,
+            args: Vec<Expr>,
+            span: Span,
+        },
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -199,6 +214,39 @@ pub mod ast {
     pub struct StructDef {
         pub name: Ident,
         pub fields: Vec<FieldDef>,
+        pub interfaces: Vec<Ident>,
+        pub methods: Vec<Function>,
+        pub inline_impls: Vec<InlineImpl>,
+        pub span: Span,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct InlineImpl {
+        pub interface: Ident,
+        pub methods: Vec<Function>,
+        pub span: Span,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct InterfaceDef {
+        pub name: Ident,
+        pub methods: Vec<InterfaceMethod>,
+        pub span: Span,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct InterfaceMethod {
+        pub name: Ident,
+        pub params: Vec<Param>,
+        pub ret_type: Option<Ident>,
+        pub span: Span,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct ImplBlock {
+        pub interface: Ident,
+        pub target: Ident,
+        pub methods: Vec<Function>,
         pub span: Span,
     }
 
@@ -206,6 +254,8 @@ pub mod ast {
     pub enum Item {
         Function(Function),
         Struct(StructDef),
+        Interface(InterfaceDef),
+        Impl(ImplBlock),
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -233,6 +283,7 @@ pub mod token {
         Mut,
         Type,
         Struct,
+        Interface,
         Enum,
         Impl,
         Use,
@@ -266,6 +317,7 @@ pub mod token {
         DotDot,
         Arrow,
         FatArrow,
+        ColonColon,
         Plus,
         Minus,
         Star,
@@ -315,6 +367,9 @@ pub mod types {
         Void,
         Named(String),
         Ref(Box<Type>, Mutability),
+        Array(Box<Type>, usize),
+        Own(Box<Type>),
+        RawPtr(Box<Type>),
     }
 
     impl Type {
@@ -356,6 +411,46 @@ pub mod types {
 
         pub fn is_mut_ref(&self) -> bool {
             matches!(self, Type::Ref(_, Mutability::Mutable))
+        }
+
+        pub fn is_array(&self) -> bool {
+            matches!(self, Type::Array(..))
+        }
+
+        pub fn array_element_type(&self) -> Option<&Type> {
+            match self {
+                Type::Array(elem, _) => Some(elem),
+                _ => None,
+            }
+        }
+
+        pub fn array_size(&self) -> Option<usize> {
+            match self {
+                Type::Array(_, size) => Some(*size),
+                _ => None,
+            }
+        }
+
+        pub fn is_own(&self) -> bool {
+            matches!(self, Type::Own(_))
+        }
+
+        pub fn own_inner_type(&self) -> Option<&Type> {
+            match self {
+                Type::Own(inner) => Some(inner),
+                _ => None,
+            }
+        }
+
+        pub fn is_raw_ptr(&self) -> bool {
+            matches!(self, Type::RawPtr(_))
+        }
+
+        pub fn raw_ptr_inner_type(&self) -> Option<&Type> {
+            match self {
+                Type::RawPtr(inner) => Some(inner),
+                _ => None,
+            }
         }
     }
 
@@ -414,6 +509,7 @@ pub mod mir {
             then_bb: BlockId,
             else_bb: BlockId,
         },
+        Drop(LocalId),
         Nop,
     }
 
@@ -443,6 +539,33 @@ pub mod mir {
         Ref {
             base: LocalId,
             mutability: Mutability,
+        },
+        ArrayLit {
+            elem_type: Type,
+            elements: Vec<MirValue>,
+        },
+        ArrayIndex {
+            base: LocalId,
+            index: MirValue,
+            bounds_check: bool,
+        },
+        ArrayLen {
+            base: LocalId,
+        },
+        OwnNew {
+            value: MirValue,
+            elem_type: Type,
+        },
+        OwnIntoRaw {
+            base: LocalId,
+            elem_type: Type,
+        },
+        OwnFromRaw {
+            ptr: MirValue,
+            elem_type: Type,
+        },
+        RawPtrNull {
+            elem_type: Type,
         },
     }
 
@@ -499,6 +622,9 @@ mod tests {
         let struct_def = StructDef {
             name: Ident("Point".into()),
             fields: vec![field1, field2],
+            interfaces: Vec::new(),
+            methods: Vec::new(),
+            inline_impls: Vec::new(),
             span: Span::new(0, 20),
         };
 
@@ -599,5 +725,54 @@ mod tests {
         let inner = nested.inner_type().unwrap();
         assert!(inner.is_ref());
         assert!(!inner.is_mut_ref());
+    }
+
+    #[test]
+    fn array_type_construction() {
+        use super::types::Type;
+
+        let arr_ty = Type::Array(Box::new(Type::I32), 10);
+        assert!(arr_ty.is_array());
+        assert_eq!(arr_ty.array_size(), Some(10));
+
+        let elem_ty = arr_ty.array_element_type().unwrap();
+        assert_eq!(*elem_ty, Type::I32);
+    }
+
+    #[test]
+    fn array_helper_methods() {
+        use super::types::Type;
+
+        let arr_ty = Type::Array(Box::new(Type::Bool), 5);
+
+        assert!(arr_ty.is_array());
+        assert!(!arr_ty.is_int());
+        assert!(!arr_ty.is_ref());
+
+        assert_eq!(arr_ty.array_size(), Some(5));
+        assert_eq!(arr_ty.array_element_type(), Some(&Type::Bool));
+
+        // Non-array types should return None
+        let i32_ty = Type::I32;
+        assert!(!i32_ty.is_array());
+        assert_eq!(i32_ty.array_size(), None);
+        assert_eq!(i32_ty.array_element_type(), None);
+    }
+
+    #[test]
+    fn nested_array_types() {
+        use super::types::Type;
+
+        // [[i32; 3]; 2] - 2D array
+        let inner_arr = Type::Array(Box::new(Type::I32), 3);
+        let outer_arr = Type::Array(Box::new(inner_arr.clone()), 2);
+
+        assert!(outer_arr.is_array());
+        assert_eq!(outer_arr.array_size(), Some(2));
+
+        let inner = outer_arr.array_element_type().unwrap();
+        assert!(inner.is_array());
+        assert_eq!(inner.array_size(), Some(3));
+        assert_eq!(inner.array_element_type(), Some(&Type::I32));
     }
 }

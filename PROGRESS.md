@@ -1,6 +1,6 @@
 # Glyph Implementation Progress
 
-**Last Updated:** January 9, 2026 (Function Calls COMPLETE)
+**Last Updated:** January 10, 2026 (Interfaces Phases 0–5 complete)
 
 ## 🎉 Major Milestone Achieved!
 
@@ -76,12 +76,11 @@ glyph-cli run myfile.glyph
 
 ## 📊 Test Coverage
 
-- **35+ passing unit tests** across all modules
-- **17 MIR snapshot tests** for lowering validation (including function calls, structs, implicit returns)
-- **10 backend codegen tests** including function calls and struct LLVM IR generation
-- **Parser fixture tests** for syntax validation
+- **70+ passing tests across workspace** (frontend/core/backend/CLI)
+- **34 MIR snapshot tests** (arrays, refs, loops, owns, interface calls)
+- **10 backend codegen tests** including arrays/structs/owns
+- **Parser + resolver unit tests** plus CLI codegen fixtures
 - **Property-based tests** for lexer span correctness
-- **6 resolver tests** for struct type validation
 
 All tests use TDD with snapshot testing via `insta`.
 
@@ -176,6 +175,14 @@ fn main() -> i32 {
   ret factorial(5)  // returns 120
 }
 ```
+
+## Interfaces & Methods (Phases 0–5 ✅)
+
+- ✅ Parse `interface` definitions, struct interface lists, inline/`impl for` blocks, and method-call syntax (`obj.method()`)
+- ✅ Resolver collects interface signatures, validates impls (missing/duplicate/unknown), tracks self mutability, and mangles interface methods
+- ✅ MIR lowering resolves interface methods alongside inherent ones, with auto-borrowing and builtin handling for `.len()`/`into_raw()`
+- 🧪 New MIR fixture for interface method call + updated snapshots (arrays/refs/owns/loops)
+- 🔜 Phase 6–7: explicit LLVM verification + documentation/examples
 
 ## 🔧 Reference Support (Phases 4–6 ✅)
 

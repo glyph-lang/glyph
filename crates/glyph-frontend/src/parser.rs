@@ -1,7 +1,8 @@
+use crate::method_symbols::{inherent_method_symbol, interface_method_symbol};
 use glyph_core::{
     ast::{
-        BinaryOp, Block, Expr, FieldDef, Function, Ident, Item, Literal, Module, Param, Stmt,
-        StructDef,
+        BinaryOp, Block, Expr, FieldDef, Function, Ident, ImplBlock, InlineImpl, InterfaceDef,
+        InterfaceMethod, Item, Literal, Module, Param, Stmt, StructDef,
     },
     diag::Diagnostic,
     span::Span,
@@ -21,12 +22,32 @@ pub fn parse(tokens: &[Token], source: &str) -> ParseOutput {
         pos: 0,
         diagnostics: Vec::new(),
         items: Vec::new(),
+        pending_items: Vec::new(),
     };
 
     while !parser.at(TokenKind::Eof) {
         if parser.at(TokenKind::Struct) {
             match parser.parse_struct() {
-                Some(s) => parser.items.push(Item::Struct(s)),
+                Some(s) => {
+                    parser.items.push(Item::Struct(s));
+                    parser.flush_pending_items();
+                }
+                None => parser.synchronize(),
+            }
+        } else if parser.at(TokenKind::Interface) {
+            match parser.parse_interface() {
+                Some(iface) => {
+                    parser.items.push(Item::Interface(iface));
+                    parser.flush_pending_items();
+                }
+                None => parser.synchronize(),
+            }
+        } else if parser.at(TokenKind::Impl) {
+            match parser.parse_impl_block() {
+                Some(block) => {
+                    parser.items.push(Item::Impl(block));
+                    parser.flush_pending_items();
+                }
                 None => parser.synchronize(),
             }
         } else if parser.at(TokenKind::Fn) {
@@ -36,12 +57,15 @@ pub fn parse(tokens: &[Token], source: &str) -> ParseOutput {
             }
         } else {
             let span = parser.peek().map(|t| t.span);
-            parser
-                .diagnostics
-                .push(Diagnostic::error("expected `fn` or `struct`", span));
+            parser.diagnostics.push(Diagnostic::error(
+                "expected `fn`, `struct`, `interface`, or `impl`",
+                span,
+            ));
             parser.synchronize();
         }
     }
+
+    parser.flush_pending_items();
 
     ParseOutput {
         module: Module {
@@ -57,6 +81,7 @@ struct Parser<'a> {
     pos: usize,
     diagnostics: Vec<Diagnostic>,
     items: Vec<Item>,
+    pending_items: Vec<Item>,
 }
 
 impl<'a> Parser<'a> {
@@ -69,6 +94,14 @@ impl<'a> Parser<'a> {
 
     fn peek(&self) -> Option<&'a Token> {
         self.tokens.get(self.pos)
+    }
+
+    fn flush_pending_items(&mut self) {
+        if self.pending_items.is_empty() {
+            return;
+        }
+        let pending = std::mem::take(&mut self.pending_items);
+        self.items.extend(pending);
     }
 
     fn advance(&mut self) -> Option<&'a Token> {
@@ -105,15 +138,104 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_interface(&mut self) -> Option<InterfaceDef> {
+        let iface_tok = self.consume(TokenKind::Interface, "expected `interface`")?;
+        let name_tok = self.consume(TokenKind::Ident, "expected interface name")?;
+        let name = Ident(self.slice(name_tok));
+        self.consume(TokenKind::LBrace, "expected `{` to start interface body")?;
+        let mut methods = Vec::new();
+        while !self.at(TokenKind::RBrace) && !self.at(TokenKind::Eof) {
+            if self.at(TokenKind::Fn) {
+                if let Some(method) = self.parse_interface_method() {
+                    methods.push(method);
+                } else {
+                    break;
+                }
+            } else {
+                let span = self.peek().map(|t| t.span);
+                self.diagnostics.push(Diagnostic::error(
+                    "interfaces may only contain method signatures",
+                    span,
+                ));
+                self.synchronize();
+                break;
+            }
+        }
+        let end = self.consume(TokenKind::RBrace, "expected `}` to end interface body")?;
+        Some(InterfaceDef {
+            name,
+            methods,
+            span: Span::new(iface_tok.span.start, end.span.end),
+        })
+    }
+
+    fn parse_interface_method(&mut self) -> Option<InterfaceMethod> {
+        let fn_tok = self.consume(TokenKind::Fn, "expected `fn`")?;
+        let name_tok = self.consume(TokenKind::Ident, "expected method name")?;
+        let name = Ident(self.slice(name_tok));
+        self.consume(TokenKind::LParen, "expected `(` after method name")?;
+        let params = self.parse_params();
+        self.consume(TokenKind::RParen, "expected `)` after parameters")?;
+        let mut ret_type = None;
+        if self.at(TokenKind::Arrow) {
+            self.advance();
+            ret_type = self.parse_type_annotation();
+        }
+        self.consume(
+            TokenKind::Semicolon,
+            "expected `;` after interface method signature",
+        )?;
+        Some(InterfaceMethod {
+            name,
+            params,
+            ret_type,
+            span: Span::new(fn_tok.span.start, name_tok.span.end),
+        })
+    }
+
     fn parse_struct(&mut self) -> Option<StructDef> {
         let struct_tok = self.consume(TokenKind::Struct, "expected `struct`")?;
         let name_tok = self.consume(TokenKind::Ident, "expected struct name")?;
         let name = Ident(self.slice(name_tok));
 
+        let mut interfaces = Vec::new();
+        if self.at(TokenKind::Colon) {
+            self.advance();
+            loop {
+                let iface_tok = self.consume(TokenKind::Ident, "expected interface name")?;
+                interfaces.push(Ident(self.slice(iface_tok)));
+                if self.at(TokenKind::Comma) {
+                    self.advance();
+                    continue;
+                }
+                break;
+            }
+        }
+
         self.consume(TokenKind::LBrace, "expected `{` after struct name")?;
 
         let mut fields = Vec::new();
+        let mut methods = Vec::new();
+        let mut inline_impls = Vec::new();
         while !self.at(TokenKind::RBrace) && !self.at(TokenKind::Eof) {
+            if self.at(TokenKind::Fn) {
+                if let Some(func) = self.parse_function() {
+                    methods.push(func);
+                } else {
+                    break;
+                }
+                continue;
+            }
+
+            if self.at(TokenKind::Impl) {
+                if let Some(block) = self.parse_inline_impl(&name) {
+                    inline_impls.push(block);
+                } else {
+                    break;
+                }
+                continue;
+            }
+
             let field_name_tok = match self.consume(TokenKind::Ident, "expected field name") {
                 Some(tok) => tok,
                 None => break,
@@ -136,14 +258,187 @@ impl<'a> Parser<'a> {
 
         let end = self.consume(TokenKind::RBrace, "expected `}` to end struct")?;
 
+        for method in &methods {
+            self.schedule_method_function(&name, method, None);
+        }
+
         Some(StructDef {
             name,
             fields,
+            interfaces,
+            methods,
+            inline_impls,
             span: Span::new(struct_tok.span.start, end.span.end),
         })
     }
 
+    fn parse_inline_impl(&mut self, struct_name: &Ident) -> Option<InlineImpl> {
+        let impl_tok = self.consume(TokenKind::Impl, "expected `impl`")?;
+        let iface_tok = self.consume(TokenKind::Ident, "expected interface name")?;
+        self.consume(
+            TokenKind::LBrace,
+            "expected `{` to start interface implementation block",
+        )?;
+        let mut methods = Vec::new();
+        while !self.at(TokenKind::RBrace) && !self.at(TokenKind::Eof) {
+            if self.at(TokenKind::Fn) {
+                if let Some(func) = self.parse_function() {
+                    methods.push(func);
+                } else {
+                    break;
+                }
+            } else {
+                let span = self.peek().map(|t| t.span);
+                self.diagnostics.push(Diagnostic::error(
+                    "only functions are allowed inside impl blocks",
+                    span,
+                ));
+                self.synchronize();
+                break;
+            }
+        }
+        let end = self.consume(TokenKind::RBrace, "expected `}` to end impl block")?;
+        let interface_ident = Ident(self.slice(iface_tok));
+        for method in &methods {
+            self.schedule_method_function(struct_name, method, Some(&interface_ident));
+        }
+        Some(InlineImpl {
+            interface: interface_ident,
+            methods,
+            span: Span::new(impl_tok.span.start, end.span.end),
+        })
+    }
+
+    fn parse_impl_block(&mut self) -> Option<ImplBlock> {
+        let impl_tok = self.consume(TokenKind::Impl, "expected `impl`")?;
+        let iface_tok = self.consume(TokenKind::Ident, "expected interface name")?;
+        self.consume(TokenKind::For, "expected `for` in impl block")?;
+        let target_tok = self.consume(TokenKind::Ident, "expected struct name in impl block")?;
+        self.consume(TokenKind::LBrace, "expected `{` to start impl body")?;
+        let mut methods = Vec::new();
+        while !self.at(TokenKind::RBrace) && !self.at(TokenKind::Eof) {
+            if self.at(TokenKind::Fn) {
+                if let Some(func) = self.parse_function() {
+                    methods.push(func);
+                } else {
+                    break;
+                }
+            } else {
+                let span = self.peek().map(|t| t.span);
+                self.diagnostics.push(Diagnostic::error(
+                    "only functions are allowed inside impl blocks",
+                    span,
+                ));
+                self.synchronize();
+                break;
+            }
+        }
+        let end = self.consume(TokenKind::RBrace, "expected `}` to end impl block")?;
+        let interface_ident = Ident(self.slice(iface_tok));
+        let target_ident = Ident(self.slice(target_tok));
+        for method in &methods {
+            self.schedule_method_function(&target_ident, method, Some(&interface_ident));
+        }
+        Some(ImplBlock {
+            interface: interface_ident,
+            target: target_ident,
+            methods,
+            span: Span::new(impl_tok.span.start, end.span.end),
+        })
+    }
+
+    fn schedule_method_function(
+        &mut self,
+        struct_name: &Ident,
+        method: &Function,
+        interface: Option<&Ident>,
+    ) {
+        if let Some(func) = self.prepare_method_function(struct_name, method, interface) {
+            self.pending_items.push(Item::Function(func));
+        }
+    }
+
+    fn prepare_method_function(
+        &mut self,
+        struct_name: &Ident,
+        method: &Function,
+        interface: Option<&Ident>,
+    ) -> Option<Function> {
+        if method.params.is_empty() {
+            self.diagnostics.push(Diagnostic::error(
+                "methods must declare a `self` parameter",
+                Some(method.span),
+            ));
+            return None;
+        }
+
+        let mut func = method.clone();
+        let first = func.params.get_mut(0).expect("self param exists");
+        if first.name.0 != "self" {
+            self.diagnostics.push(Diagnostic::error(
+                "first parameter of a method must be named `self`",
+                Some(first.span),
+            ));
+            return None;
+        }
+
+        // Canonicalize the self parameter type to match the struct and preserve
+        // reference variants for downstream resolution/codegen.
+        let canonical_self_ty = match first.ty.as_ref() {
+            Some(ty) => {
+                let normalized = ty.0.replace(' ', "");
+                let value_ty = struct_name.0.as_str();
+                let ref_ty = format!("&{}", value_ty);
+                let mutref_ty = format!("&mut{}", value_ty);
+
+                if normalized == value_ty {
+                    Ident(struct_name.0.clone())
+                } else if normalized == ref_ty {
+                    Ident(format!("&{}", struct_name.0))
+                } else if normalized == mutref_ty {
+                    Ident(format!("&mut {}", struct_name.0))
+                } else {
+                    self.diagnostics.push(Diagnostic::error(
+                        format!(
+                            "self parameter type must be '{}', '&{}', or '&mut {}'",
+                            struct_name.0, struct_name.0, struct_name.0
+                        ),
+                        Some(first.span),
+                    ));
+                    return None;
+                }
+            }
+            None => Ident(struct_name.0.clone()),
+        };
+
+        first.ty = Some(canonical_self_ty);
+
+        let symbol = match interface {
+            Some(iface) => interface_method_symbol(&struct_name.0, &iface.0, &method.name.0),
+            None => inherent_method_symbol(&struct_name.0, &method.name.0),
+        };
+        func.name = Ident(symbol);
+        Some(func)
+    }
+
     fn parse_type_annotation(&mut self) -> Option<Ident> {
+        // Check for array type [T; N]
+        if self.at(TokenKind::LBracket) {
+            self.advance();
+
+            let elem_ty_tok = self.consume(TokenKind::Ident, "expected element type")?;
+            let elem_ty = self.slice(elem_ty_tok);
+
+            self.consume(TokenKind::Semicolon, "expected `;` in array type")?;
+
+            let size_tok = self.consume(TokenKind::Int, "expected array size")?;
+            let size = self.slice(size_tok);
+
+            self.consume(TokenKind::RBracket, "expected `]`")?;
+
+            return Some(Ident(format!("[{}; {}]", elem_ty, size)));
+        }
+
         // Check for reference type (&T or &mut T)
         if self.at(TokenKind::Amp) {
             self.advance();
@@ -169,9 +464,21 @@ impl<'a> Parser<'a> {
 
             Some(Ident(type_str))
         } else {
-            // Simple type (i32, Point, etc.)
+            // Simple type (i32, Point, etc.) + minimal single-arg generics (Own<T>, RawPtr<T>)
             let ty_tok = self.consume(TokenKind::Ident, "expected type")?;
-            Some(Ident(self.slice(ty_tok)))
+            let base = self.slice(ty_tok);
+
+            if (base == "Own" || base == "RawPtr") && self.at(TokenKind::Lt) {
+                self.advance();
+                let inner = match self.parse_type_annotation() {
+                    Some(ident) => ident.0,
+                    None => return None,
+                };
+                self.consume(TokenKind::Gt, "expected `>` after type argument")?;
+                Some(Ident(format!("{}<{}>", base, inner)))
+            } else {
+                Some(Ident(base))
+            }
         }
     }
 
@@ -387,14 +694,69 @@ impl<'a> Parser<'a> {
                 };
                 continue;
             } else if self.at(TokenKind::Dot) {
-                // Field access
+                // Field access or method call - need lookahead
                 self.advance(); // consume dot
-                let field_tok = self.consume(TokenKind::Ident, "expected field name after `.`")?;
-                let field = Ident(self.slice(field_tok));
-                let span = Span::new(self.expr_start(&expr), field_tok.span.end);
-                expr = Expr::FieldAccess {
+                let name_tok =
+                    self.consume(TokenKind::Ident, "expected field or method name after `.`")?;
+                let name = Ident(self.slice(name_tok));
+
+                // Lookahead: is there a `(` after the identifier?
+                if self.at(TokenKind::LParen) {
+                    // METHOD CALL: obj.method(args)
+                    self.advance(); // consume (
+
+                    let mut args = Vec::new();
+                    while !self.at(TokenKind::RParen) && !self.at(TokenKind::Eof) {
+                        if let Some(arg) = self.parse_expr() {
+                            args.push(arg);
+                        }
+                        if self.at(TokenKind::Comma) {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+
+                    let end = if let Some(rp) =
+                        self.consume(TokenKind::RParen, "expected `)` after method arguments")
+                    {
+                        rp.span.end
+                    } else {
+                        args.last()
+                            .map(|a| self.expr_end(a))
+                            .unwrap_or(name_tok.span.end)
+                    };
+
+                    let start = self.expr_start(&expr);
+                    expr = Expr::MethodCall {
+                        receiver: Box::new(expr),
+                        method: name,
+                        args,
+                        span: Span::new(start, end),
+                    };
+                } else {
+                    // FIELD ACCESS: obj.field
+                    let span = Span::new(self.expr_start(&expr), name_tok.span.end);
+                    expr = Expr::FieldAccess {
+                        base: Box::new(expr),
+                        field: name,
+                        span,
+                    };
+                }
+                continue;
+            } else if self.at(TokenKind::LBracket) {
+                // Array indexing
+                self.advance(); // consume [
+                let index_expr = self.parse_expr()?;
+                let end = if let Some(rb) = self.consume(TokenKind::RBracket, "expected `]`") {
+                    rb.span.end
+                } else {
+                    self.expr_end(&index_expr)
+                };
+                let span = Span::new(self.expr_start(&expr), end);
+                expr = Expr::Index {
                     base: Box::new(expr),
-                    field,
+                    index: Box::new(index_expr),
                     span,
                 };
                 continue;
@@ -412,7 +774,7 @@ impl<'a> Parser<'a> {
                 if self.at(TokenKind::LBrace) {
                     self.parse_struct_lit(tok)
                 } else {
-                    Some(Expr::Ident(Ident(self.slice(tok)), tok.span))
+                    Some(self.parse_path_ident(&tok))
                 }
             }
             TokenKind::Int => Some(Expr::Lit(self.literal_from(tok), tok.span)),
@@ -427,6 +789,35 @@ impl<'a> Parser<'a> {
             TokenKind::If => self.parse_if(tok.span.start),
             TokenKind::While => self.parse_while(tok.span.start),
             TokenKind::For => self.parse_for(tok.span.start),
+            TokenKind::LBracket => {
+                let start = tok.span.start;
+                let mut elements = Vec::new();
+
+                while !self.at(TokenKind::RBracket) && !self.at(TokenKind::Eof) {
+                    if let Some(elem) = self.parse_expr() {
+                        elements.push(elem);
+                    } else {
+                        break;
+                    }
+
+                    if self.at(TokenKind::Comma) {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+
+                let end = if let Some(rb) = self.consume(TokenKind::RBracket, "expected `]`") {
+                    rb.span.end
+                } else {
+                    tok.span.end
+                };
+
+                Some(Expr::ArrayLit {
+                    elements,
+                    span: Span::new(start, end),
+                })
+            }
             TokenKind::LBrace => {
                 self.pos -= 1;
                 self.parse_block().map(Expr::Block)
@@ -439,6 +830,22 @@ impl<'a> Parser<'a> {
                 None
             }
         }
+    }
+
+    fn parse_path_ident(&mut self, first: &Token) -> Expr {
+        let mut name = self.slice(first).to_string();
+        let mut end = first.span.end;
+        while self.at(TokenKind::ColonColon) {
+            self.advance();
+            if let Some(seg) = self.consume(TokenKind::Ident, "expected identifier after `::`") {
+                name.push_str("::");
+                name.push_str(&self.slice(seg));
+                end = seg.span.end;
+            } else {
+                break;
+            }
+        }
+        Expr::Ident(Ident(name), Span::new(first.span.start, end))
     }
 
     fn parse_if(&mut self, start: u32) -> Option<Expr> {
@@ -563,6 +970,9 @@ impl<'a> Parser<'a> {
             Expr::Ref { span, .. } => span.start,
             Expr::While { span, .. } => span.start,
             Expr::For { span, .. } => span.start,
+            Expr::ArrayLit { span, .. } => span.start,
+            Expr::Index { span, .. } => span.start,
+            Expr::MethodCall { span, .. } => span.start,
         }
     }
 
@@ -579,6 +989,9 @@ impl<'a> Parser<'a> {
             Expr::Ref { span, .. } => span.end,
             Expr::While { span, .. } => span.end,
             Expr::For { span, .. } => span.end,
+            Expr::ArrayLit { span, .. } => span.end,
+            Expr::Index { span, .. } => span.end,
+            Expr::MethodCall { span, .. } => span.end,
         }
     }
 

@@ -1,0 +1,11 @@
+fn make() -> Own<i32> {
+  let tmp = Own::new(99)
+  ret tmp
+}
+
+fn main() -> i32 {
+  let heap = make()
+  let raw = heap.into_raw()
+  let back = Own::from_raw(raw)
+  ret 0
+}

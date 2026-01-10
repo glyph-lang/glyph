@@ -183,7 +183,11 @@ fn mir_break_outside_loop() {
     let src = run_fixture("break_outside_loop.glyph");
     let out = compile_source(&src, FrontendOptions { emit_mir: true });
     assert!(!out.diagnostics.is_empty());
-    assert!(out.diagnostics.iter().any(|d| d.message.contains("outside of loop")));
+    assert!(
+        out.diagnostics
+            .iter()
+            .any(|d| d.message.contains("outside of loop"))
+    );
 }
 
 #[test]
@@ -191,7 +195,11 @@ fn mir_continue_outside_loop() {
     let src = run_fixture("continue_outside_loop.glyph");
     let out = compile_source(&src, FrontendOptions { emit_mir: true });
     assert!(!out.diagnostics.is_empty());
-    assert!(out.diagnostics.iter().any(|d| d.message.contains("outside of loop")));
+    assert!(
+        out.diagnostics
+            .iter()
+            .any(|d| d.message.contains("outside of loop"))
+    );
 }
 
 #[test]
@@ -211,6 +219,41 @@ fn mir_for_simple() {
 #[test]
 fn mir_for_nested() {
     let src = run_fixture("for_nested.glyph");
+    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    assert_debug_snapshot!(out.mir);
+}
+
+#[test]
+fn mir_array_basic() {
+    let src = run_fixture("array_basic.glyph");
+    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    assert_debug_snapshot!(out.mir);
+}
+
+#[test]
+fn mir_array_len() {
+    let src = run_fixture("array_len.glyph");
+    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    assert_debug_snapshot!(out.mir);
+}
+
+#[test]
+fn mir_array_loop() {
+    let src = run_fixture("array_loop.glyph");
+    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    assert_debug_snapshot!(out.mir);
+}
+
+#[test]
+fn mir_own_basic() {
+    let src = run_fixture("own_basic.glyph");
+    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    assert_debug_snapshot!(out.mir);
+}
+
+#[test]
+fn mir_own_roundtrip() {
+    let src = run_fixture("own_roundtrip.glyph");
     let out = compile_source(&src, FrontendOptions { emit_mir: true });
     assert_debug_snapshot!(out.mir);
 }
