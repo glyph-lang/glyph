@@ -26,12 +26,12 @@ Status key: `[ ]` not started, `[~]` in progress, `[x]` done.
 - [x] M6: Struct support - COMPLETE (all 6 phases: AST, Parser, Resolver, MIR, Codegen, Integration)
 - [x] M7: Function calls - COMPLETE (MIR lowering, LLVM codegen, recursion, forward references)
 - [x] M8: Fixed-size arrays (parser → MIR → bounds-checked LLVM, arr.len, for-loop integration)
-- [ ] M9: Heap ownership pointers (Own<T>, RawPtr<T>)
+- [x] M9: Heap ownership pointers (Own<T>, RawPtr<T>, Shared<T>) – COMPLETE
 - [x] M10: Interfaces (parsing/validation/MIR + method dispatch + LLVM verification + documentation) – COMPLETE
 
 ## TDD & fixtures
 - [ ] Fixture tree under `tests/fixtures/{lex,parse,resolution,typeck,borrow,mir,ir,cli}`
-- [~] Snapshot testing with `insta` for AST/MIR/IR and diagnostics (34 MIR snapshots incl. arrays/refs/loops/owns)
+- [~] Snapshot testing with `insta` for AST/MIR/IR and diagnostics (38 MIR snapshots incl. arrays/refs/loops/owns/shared)
 - [~] Property tests via `proptest` for lexer/parser spans and panic-freedom (lexer spans covered)
 - [ ] Backend IR tests behind `codegen` feature to avoid LLVM in fast loop
 - [ ] CI flow: fmt (once available), clippy, test (workspace)
@@ -132,32 +132,55 @@ fn main() -> i32 {
 }
 ```
 
-## Heap Ownership Pointers: Own<T> + RawPtr<T> (NEXT)
+## Heap Ownership Pointers: COMPLETE ✅
 
-Goal: introduce deterministic heap allocation with move-only `Own<T>` (Box-like) and unsafe `RawPtr<T>` escape hatches, following `own.txt` semantics.
+**Status:** All pointer types complete and tested
 
-### Phase plan
-1. **Type System + Parsing**
-   - Extend `Type` enum with `Own(Box<Type>)`, `RawPtr(Box<Type>)`, helpers, and serialization.
-   - Accept `Own<T>` / `RawPtr<T>` in annotations via a minimal angle-bracket parser; reject unsized inners for now.
-   - Update resolver + diagnostics for unknown inner types / malformed generics.
-2. **MIR + Borrowing Rules**
-   - Add rvalues for `Own::new`, `into_raw`, `from_raw`, raw pointer ops, and `Drop` terminators.
-   - Track move-only state for `Own` locals (use-after-move diagnostics) and auto-drop on scope exits.
-   - Support auto-deref of `Own<T>` in field/index access and `&Own` borrowing rules.
-3. **Backend & Runtime**
-   - Introduce heap runtime hooks (`malloc`, `free`, `drop_in_place`) and emit LLVM IR for allocation, destruction, and conversions.
-   - Reuse existing panic/bounds infrastructure for null/dangling checks; ensure drop glue runs on all exit paths.
-4. **Safety/Diagnostics**
-   - Forbid implicit copies; surface errors for double drops, missing unsafe on `from_raw`, or dereferencing null raw pointers.
-   - Document interaction with arrays/loops and planned future `unsafe` blocks.
-5. **Testing**
-   - MIR fixtures for ownership transfer, move errors, raw conversions, recursive structs (e.g., linked list).
-   - Codegen tests asserting `malloc/free` calls and drop glue; CLI fixture exercising `Own` in a loop.
+**Completed Work:**
+
+### Own<T> - Exclusive Ownership
+- Move-only semantics with use-after-move diagnostics
+- Automatic drop on scope exit with malloc/free
+- `Own::new()`, `.into_raw()`, `Own::from_raw()`
+- Auto-deref for field access
+
+### RawPtr<T> - Unsafe Raw Pointers
+- Unsafe pointer conversions
+- `RawPtr::null()` for null pointer creation
+- Manual memory management escape hatch
+
+### Shared<T> - Reference Counted Pointers (NEW!)
+- Non-atomic reference counting for shared ownership
+- Clone-able semantics (multiple owners allowed)
+- Automatic memory reclamation when refcount reaches zero
+- Memory layout: `[refcount: usize, data: T]`
+- `Shared::new()` and `.clone()` API
+- Drop glue with conditional free
+- Copy semantics (no move errors)
+
+**Testing:**
+- 4 MIR snapshot tests for Shared<T>
+- 1 codegen test verifying refcount behavior
+- All 110+ workspace tests passing
+- Comprehensive LLVM IR verification
+
+**Documentation:**
+- See `SHARED_DESIGN.md` for Shared<T> details
+- Comparison table of Own/Shared/RawPtr in docs
+
+**Example Working Code:**
+```glyph
+fn main() -> i32 {
+  let s1 = Shared::new(42)
+  let s2 = s1.clone()  // refcount = 2
+  let s3 = s2.clone()  // refcount = 3
+  ret 0
+  // s3, s2, s1 drop in order, last one frees memory
+}
+```
 
 ## Next Session: Execution Order
 
-1. **Heap Ownership pointers (`Own<T>`, `RawPtr<T>`).**
-2. Enums + pattern matching.
+1. Enums + pattern matching.
 3. Borrow checker & lifetimes.
 4. Generics + trait system (longer-term).

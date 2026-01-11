@@ -257,3 +257,31 @@ fn mir_own_roundtrip() {
     let out = compile_source(&src, FrontendOptions { emit_mir: true });
     assert_debug_snapshot!(out.mir);
 }
+
+#[test]
+fn mir_shared_basic() {
+    let src = run_fixture("shared_basic.glyph");
+    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    assert_debug_snapshot!(out.mir);
+}
+
+#[test]
+fn mir_shared_clone() {
+    let src = run_fixture("shared_clone.glyph");
+    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    assert_debug_snapshot!(out.mir);
+}
+
+#[test]
+fn mir_shared_multiple() {
+    let src = run_fixture("shared_multiple.glyph");
+    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    assert_debug_snapshot!(out.mir);
+}
+
+#[test]
+fn mir_shared_struct() {
+    let src = run_fixture("shared_struct.glyph");
+    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    assert_debug_snapshot!(out.mir);
+}

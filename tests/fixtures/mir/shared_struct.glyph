@@ -1,0 +1,6 @@
+struct Point { x: i32, y: i32 }
+
+fn main() -> i32 {
+  let s = Shared::new(Point { x: 10, y: 20 })
+  ret 0
+}

@@ -1,0 +1,132 @@
+---
+source: crates/glyph-frontend/tests/mir_fixtures.rs
+expression: out.mir
+---
+MirModule {
+    struct_types: {
+        "Point": StructType {
+            name: "Point",
+            fields: [
+                (
+                    "x",
+                    I32,
+                ),
+                (
+                    "y",
+                    I32,
+                ),
+            ],
+        },
+    },
+    functions: [
+        MirFunction {
+            name: "main",
+            ret_type: Some(
+                I32,
+            ),
+            params: [],
+            locals: [
+                Local {
+                    name: Some(
+                        "s",
+                    ),
+                    ty: Some(
+                        Shared(
+                            Named(
+                                "Point",
+                            ),
+                        ),
+                    ),
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        Named(
+                            "Point",
+                        ),
+                    ),
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        Shared(
+                            Named(
+                                "Point",
+                            ),
+                        ),
+                    ),
+                },
+            ],
+            blocks: [
+                MirBlock {
+                    insts: [
+                        Assign {
+                            local: LocalId(
+                                1,
+                            ),
+                            value: StructLit {
+                                struct_name: "Point",
+                                field_values: [
+                                    (
+                                        "x",
+                                        Int(
+                                            10,
+                                        ),
+                                    ),
+                                    (
+                                        "y",
+                                        Int(
+                                            20,
+                                        ),
+                                    ),
+                                ],
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                2,
+                            ),
+                            value: SharedNew {
+                                value: Local(
+                                    LocalId(
+                                        1,
+                                    ),
+                                ),
+                                elem_type: Named(
+                                    "Point",
+                                ),
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                0,
+                            ),
+                            value: Move(
+                                LocalId(
+                                    2,
+                                ),
+                            ),
+                        },
+                        Drop(
+                            LocalId(
+                                2,
+                            ),
+                        ),
+                        Drop(
+                            LocalId(
+                                0,
+                            ),
+                        ),
+                        Return(
+                            Some(
+                                Int(
+                                    0,
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+            ],
+        },
+    ],
+}

@@ -221,5 +221,8 @@ fn codegen_interface_auto_borrow() {
     );
 
     // Verify Point is allocated on stack (alloca)
-    assert!(ir.contains("alloca %Point"), "Point should be stack-allocated");
+    assert!(
+        ir.contains("alloca %Point"),
+        "Point should be stack-allocated"
+    );
 }

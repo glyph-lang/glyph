@@ -1,6 +1,6 @@
 # Glyph Implementation Progress
 
-**Last Updated:** January 10, 2026 (Interfaces Phases 0–5 complete)
+**Last Updated:** January 10, 2026 (Shared<T> + interfaces complete)
 
 ## 🎉 Major Milestone Achieved!
 
@@ -76,9 +76,9 @@ glyph-cli run myfile.glyph
 
 ## 📊 Test Coverage
 
-- **70+ passing tests across workspace** (frontend/core/backend/CLI)
-- **34 MIR snapshot tests** (arrays, refs, loops, owns, interface calls)
-- **10 backend codegen tests** including arrays/structs/owns
+- **110+ passing tests across workspace** (frontend/core/backend/CLI)
+- **38 MIR snapshot tests** (arrays, refs, loops, owns, shared, interface calls)
+- **6 backend codegen tests** including arrays/structs/owns/shared/interfaces
 - **Parser + resolver unit tests** plus CLI codegen fixtures
 - **Property-based tests** for lexer span correctness
 
@@ -304,7 +304,7 @@ Source Code (.glyph)
 │  glyph-frontend             │
 │  ├─ Lexer                   │  ✅ Complete
 │  ├─ Parser                  │  ✅ Complete
-│  ├─ (Resolver - future)     │  🔜 Not needed yet
+│  ├─ Resolver                │  ✅ Complete (structs, interfaces, pointers)
 │  ├─ (Type Checker - future) │  🔜 Not needed yet
 │  └─ MIR Lowering            │  ✅ Complete
 └─────────────────────────────┘
@@ -485,22 +485,19 @@ We're following a pragmatic "working executable first" approach:
 ### Current Limitations
 
 1. **No type inference** - all types must be explicitly annotated
-2. **No name resolution** - assumes all identifiers are valid
-3. **No borrow checking** - no lifetime analysis yet
-4. **No function calls** - MIR has placeholder, not implemented in codegen
-5. **No structs yet** - next major feature
-6. **No match expressions** - only if/else
-7. **No loops** - no for/while yet
-8. **No error handling** - no Result/Option or `?` operator
+2. **No borrow checking** - no lifetime analysis yet
+3. **No match expressions** - only if/else
+4. **No error handling** - no Result/Option or `?` operator
+5. **Limited standard library** - minimal runtime/collections
 
 ## 📈 Estimated Timeline
 
 - ✅ **Phase 1 & 2: Basic Compilation** - COMPLETE (3 days)
-- 🔄 **Phase 3: Struct Parsing** - In Progress (2 days estimated)
-- 🔜 **Phase 4: Struct Type Checking** - TODO (2 days estimated)
-- 🔜 **Phase 5: Struct Codegen** - TODO (3 days estimated)
+- ✅ **Phase 3: Struct Parsing** - COMPLETE
+- ✅ **Phase 4: Struct Type Checking** - COMPLETE
+- ✅ **Phase 5: Struct Codegen** - COMPLETE
 
-**Total to working struct support: ~1-2 weeks of focused work**
+**Struct support delivered end-to-end (AST → parser → resolver → MIR → LLVM).**
 
 ## 🎯 Success Metrics
 
@@ -508,10 +505,10 @@ We're following a pragmatic "working executable first" approach:
 - [x] Can execute compiled code via JIT
 - [x] Implicit returns work (Rust-style last expression)
 - [x] All tests pass with snapshot validation
-- [ ] Can compile struct definitions
-- [ ] Can compile struct literals
-- [ ] Can compile field access
-- [ ] End-to-end struct example works
+- [x] Can compile struct definitions
+- [x] Can compile struct literals
+- [x] Can compile field access
+- [x] End-to-end struct example works
 
 ## 🤝 Contributing
 

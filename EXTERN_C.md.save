@@ -1,0 +1,42 @@
+# EXTERN_C.txt — Glyph extern "C" FFI Design Brief
+
+## Purpose
+Provide a **minimal, explicit, and stable foreign-function interface** (FFI) that allows Glyph code to call into C / system libraries for:
+- networking (libc / WinSock)
+- console I/O (write, printf-like primitives)
+- filesystem, time, process APIs
+- bootstrap standard library functionality
+
+Design priorities:
+- correctness over convenience
+- zero hidden allocations or runtime
+- ABI transparency
+- token-efficient surface syntax
+- easy lowering to LLVM
+
+Non-goals:
+- full C header import
+- automatic binding generation
+- variadic functions in v0 (e.g. printf)
+- callbacks / closures across FFI (v0)
+- GC interaction (there is none)
+
+---
+
+## Mental model
+`extern "C"` in Glyph is:
+- a **promise** about ABI and calling convention
+- a **declaration only**, never a definition
+- a thin veneer over what LLVM already understands
+
+Glyph does *not* attempt to “understand C” — it only agrees on layout and calling rules.
+
+---
+
+## Core syntax
+### Function declarations
+```glyph
+extern "C" {
+  fn write(fd: i32, buf: *u8, len: u64) -> i64
+  fn close(fd: i32) -> i32
+}

@@ -1,19 +1,19 @@
 # Next Session Quick Start Guide
 
 **Last Updated:** January 10, 2026
-**Current:** Interfaces COMPLETE ✅ – Ready for Heap Ownership (Own<T>, RawPtr<T>)
+**Current:** Shared<T> Reference Counting COMPLETE ✅ – All Ownership Pointers Implemented
 
 ---
 
 ## 🎯 IMMEDIATE NEXT STEPS
 
-1) **Start Heap Ownership Implementation** (Own<T>, RawPtr<T>)
-   - Phase 1: Type system + parsing for `Own<T>` and `RawPtr<T>` syntax
-   - Phase 2: MIR with move-only semantics and drop glue
-   - Phase 3: LLVM codegen with malloc/free runtime hooks
-   - Reference: See PLAN.md "Heap Ownership Pointers" section and `own.txt` semantics
+1) **Consider Next Major Feature:**
+   - Enums + pattern matching (high value, medium-high complexity)
+   - Better type inference (Hindley-Milner, high complexity)
+   - Standard library development (collections, strings, I/O)
+   - Borrow checker & lifetimes (very high complexity)
 
-**Previous Status:** Interfaces Phases 0–7 complete with full LLVM verification and documentation.
+**Previous Status:** Shared<T> implementation complete with refcounting, clone semantics, and comprehensive testing (110+ tests passing).
 
 ---
 
@@ -26,13 +26,14 @@
 - LLVM codegen with JIT execution
 - Structs, function calls, references, loops
 - Arrays: literals, indexing with bounds checks, `.len()`
+- Ownership pointers: Own<T> (exclusive), Shared<T> (refcounted), RawPtr<T> (unsafe)
 - Interfaces: parsing/impl validation, method-call resolution, auto-borrowing, LLVM codegen verified, full documentation
 
 **Test Coverage:**
-- Workspace tests green (`cargo test`)
-- 34 MIR snapshots (arrays, refs, loops, owns, interface calls)
-- 5 interface codegen tests verifying LLVM IR
-- Backend codegen fixtures (arrays/structs/owns) passing
+- Workspace tests green (`cargo test`) - 110+ tests passing
+- 38 MIR snapshots (arrays, refs, loops, owns, shared, interface calls)
+- 6 codegen tests verifying LLVM IR (interfaces, shared, arrays, structs, owns)
+- Backend codegen fixtures (arrays/structs/owns/shared) passing
 - Resolver/parser/unit coverage intact
 
 **Example Code That Works:**
@@ -75,6 +76,14 @@ fn sum_range(n: i32) -> i32 {
     sum = sum + i
   }
   ret sum  // returns sum of 0..n-1
+}
+
+// Reference-counted pointers (NEW!)
+fn use_shared() -> i32 {
+  let s1 = Shared::new(42)
+  let s2 = s1.clone()  // refcount = 2
+  let s3 = s2.clone()  // refcount = 3
+  ret 0  // drops s3, s2, s1 in order, last one frees
 }
 
 fn main() -> i32 {
@@ -158,68 +167,44 @@ fn sum_to_n(n: i32) -> i32 {
 }
 ```
 
+## Shared<T> Reference Counting ✅ COMPLETE
+
+**Status:** Fully implemented and tested
+
+**Completed Work:**
+- [x] Type system: Type::Shared(Box<Type>) variant
+- [x] Parser: Shared<T> syntax recognition
+- [x] MIR lowering: SharedNew and SharedClone rvalues
+- [x] Copy semantics: No move errors (unlike Own<T>)
+- [x] LLVM codegen: Memory layout [refcount: usize, data: T]
+- [x] Drop glue: Decrement refcount, free when zero
+- [x] 4 MIR snapshot tests + 1 codegen test
+
+**Example Working Code:**
+```glyph
+fn main() -> i32 {
+  let s1 = Shared::new(42)
+  let s2 = s1.clone()  // refcount = 2
+  let s3 = s2.clone()  // refcount = 3
+  ret 0
+  // s3, s2, s1 drop in order, last one frees memory
+}
+```
+
+**See**: `SHARED_DESIGN.md` for full documentation
+
 ## What to Build Next
 
-1) **Heap Ownership pointers (Own<T>, RawPtr<T>)** - NEXT
-   - Deterministic heap allocation with move-only `Own<T>` (Box-like)
-   - Unsafe `RawPtr<T>` escape hatches
-   - Auto-drop on scope exit
-2) Enums + pattern matching
+1) **Enums + pattern matching** - HIGH VALUE
+   - Algebraic data types with payload support
+   - Match expressions with exhaustiveness checking
+   - Option<T> and Result<T, E> types
+2) **Standard library development**
+   - Vec<T>, String, HashMap collections
+   - I/O primitives
+   - Standard prelude
 3) Borrow checker & lifetimes
 4) Generics + trait system
-- Parser for array syntax
-- MIR lowering for arrays and indexing
-- LLVM array/GEP operations
-- Optional bounds checking
-
-**Test Strategy:**
-- Array initialization
-- Array indexing
-- Passing arrays to functions
-- Iterating with for loops
-
-### Option 2: Enums + Pattern Matching
-**Complexity:** Medium-High
-**Value:** Complement structs well
-
-**Features:**
-- Fixed-size arrays: `[i32; 10]`
-- Array literals: `[1, 2, 3, 4, 5]`
-- Indexing: `arr[i]`
-- Slices: `&[T]`
-
-**Implementation:**
-- Array types in type system
-- Bounds checking (optional/runtime)
-- LLVM array/GEP operations
-
-### Option 3: Enums + Pattern Matching
-**Complexity:** High
-**Value:** Powerful language feature
-
-**Features:**
-- Enum definitions with payloads
-- Match expressions (exhaustive)
-- Option[T] and Result[T, E]
-
-**Implementation:**
-- Tagged unions in LLVM
-- Pattern matching compilation
-- Exhaustiveness checking
-
-### Option 4: Better Type System
-**Complexity:** High
-**Value:** Improves correctness
-
-**Features:**
-- Full type inference (Hindley-Milner)
-- Proper type checking in MIR lowering
-- Better error messages
-
-**Implementation:**
-- Type inference engine
-- Constraint solving
-- Type unification
 
 ---
 

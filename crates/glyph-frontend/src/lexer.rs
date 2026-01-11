@@ -101,6 +101,9 @@ fn keyword_or_ident(text: &str) -> TokenKind {
         "enum" => Enum,
         "impl" => Impl,
         "use" => Use,
+        "import" => Import,
+        "from" => From,
+        "as" => As,
         "pub" => Pub,
         "if" => If,
         "else" => Else,
@@ -111,6 +114,7 @@ fn keyword_or_ident(text: &str) -> TokenKind {
         "break" => Break,
         "cont" => Cont,
         "ret" => Ret,
+        "extern" => Extern,
         "true" | "false" => Bool,
         _ => Ident,
     }

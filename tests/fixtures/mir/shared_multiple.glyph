@@ -1,0 +1,6 @@
+fn main() -> i32 {
+  let s1 = Shared::new(99)
+  let s2 = s1.clone()
+  let s3 = s2.clone()
+  ret 0
+}

@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::method_symbols::{inherent_method_symbol, interface_method_symbol};
+use crate::module_resolver::{ImportScope, MultiModuleContext};
 use glyph_core::{
     ast::{Ident, Item, Module},
     diag::Diagnostic,
@@ -8,13 +9,32 @@ use glyph_core::{
 };
 
 /// Context containing resolved type information
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ResolverContext {
     pub struct_types: HashMap<String, StructType>,
     pub inherent_methods: HashMap<String, HashMap<String, MethodInfo>>,
     pub interfaces: HashMap<String, InterfaceType>,
     pub interface_impls: HashMap<String, HashMap<String, HashMap<String, MethodInfo>>>,
     // struct_name -> interface_name -> method_name -> MethodInfo
+    pub extern_functions: HashMap<String, (Vec<Type>, Option<Type>)>,
+    pub current_module: Option<String>,
+    pub import_scope: Option<ImportScope>,
+    pub all_modules: Option<MultiModuleContext>,
+}
+
+impl Default for ResolverContext {
+    fn default() -> Self {
+        Self {
+            struct_types: HashMap::new(),
+            inherent_methods: HashMap::new(),
+            interfaces: HashMap::new(),
+            interface_impls: HashMap::new(),
+            extern_functions: HashMap::new(),
+            current_module: None,
+            import_scope: None,
+            all_modules: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +48,14 @@ pub enum SelfKind {
 pub struct MethodInfo {
     pub function_name: String,
     pub self_kind: SelfKind,
+}
+
+/// Result of resolving a symbol (possibly from another module)
+#[derive(Debug, Clone)]
+pub enum ResolvedSymbol {
+    Struct(String, String),    // (module_id, struct_name)
+    Interface(String, String), // (module_id, interface_name)
+    Function(String, String),  // (module_id, function_name)
 }
 
 #[derive(Debug, Clone)]
@@ -53,6 +81,10 @@ pub fn resolve_types(module: &Module) -> (ResolverContext, Vec<Diagnostic>) {
         inherent_methods: HashMap::new(),
         interfaces: HashMap::new(),
         interface_impls: HashMap::new(),
+        extern_functions: HashMap::new(),
+        current_module: None,
+        import_scope: None,
+        all_modules: None,
     };
     let mut diagnostics = Vec::new();
 
@@ -207,7 +239,74 @@ pub fn resolve_types(module: &Module) -> (ResolverContext, Vec<Diagnostic>) {
         }
     }
 
-    // Third pass: collect inherent methods from structs
+    // Third pass: collect extern function signatures (FFI subset)
+    for item in &module.items {
+        if let Item::ExternFunction(f) = item {
+            let mut params = Vec::new();
+            let mut has_error = false;
+            for param in &f.params {
+                let Some(ty_ident) = param.ty.as_ref() else {
+                    diagnostics.push(Diagnostic::error(
+                        format!(
+                            "extern function '{}' parameter '{}' must have a type",
+                            f.name.0, param.name.0
+                        ),
+                        Some(param.span),
+                    ));
+                    has_error = true;
+                    continue;
+                };
+
+                if let Some(resolved) = resolve_ffi_type(&ty_ident.0) {
+                    params.push(resolved);
+                } else {
+                    diagnostics.push(Diagnostic::error(
+                        format!(
+                            "unsupported FFI parameter type '{}' in extern function '{}'",
+                            ty_ident.0, f.name.0
+                        ),
+                        Some(param.span),
+                    ));
+                    has_error = true;
+                }
+            }
+
+            let ret_type = match &f.ret_type {
+                Some(ty) => {
+                    if let Some(resolved) = resolve_ffi_type(&ty.0) {
+                        Some(resolved)
+                    } else {
+                        diagnostics.push(Diagnostic::error(
+                            format!(
+                                "unsupported FFI return type '{}' in extern function '{}'",
+                                ty.0, f.name.0
+                            ),
+                            Some(f.span),
+                        ));
+                        has_error = true;
+                        None
+                    }
+                }
+                None => None,
+            };
+
+            if !has_error {
+                if ctx.extern_functions.contains_key(&f.name.0)
+                    || ctx.struct_types.contains_key(&f.name.0)
+                {
+                    diagnostics.push(Diagnostic::error(
+                        format!("function '{}' is defined multiple times", f.name.0),
+                        Some(f.span),
+                    ));
+                } else {
+                    ctx.extern_functions
+                        .insert(f.name.0.clone(), (params, ret_type));
+                }
+            }
+        }
+    }
+
+    // Fourth pass: collect inherent methods from structs
     for item in &module.items {
         if let Item::Struct(s) = item {
             let struct_name = s.name.0.clone();
@@ -268,6 +367,113 @@ impl ResolverContext {
     pub fn get_inherent_method(&self, struct_name: &str, method_name: &str) -> Option<&MethodInfo> {
         self.inherent_methods.get(struct_name)?.get(method_name)
     }
+
+    /// Resolve a symbol name (handles qualified names and imports)
+    pub fn resolve_symbol(&self, name: &str) -> Option<ResolvedSymbol> {
+        // Case 1: Qualified name (module::symbol)
+        if name.contains("::") {
+            return self.resolve_qualified_symbol(name);
+        }
+
+        // Case 2: Check direct imports (selective imports)
+        if let Some(scope) = &self.import_scope {
+            if let Some((source_module, original_name)) = scope.direct_symbols.get(name) {
+                return self.resolve_in_module(source_module, original_name);
+            }
+        }
+
+        // Case 3: Local module symbol
+        if let Some(module_id) = &self.current_module {
+            if let Some(symbol) = self.resolve_in_module(module_id, name) {
+                return Some(symbol);
+            }
+            // Extern function in current module
+            if let Some((_, _)) = self.extern_functions.get(name) {
+                return Some(ResolvedSymbol::Function(
+                    module_id.clone(),
+                    name.to_string(),
+                ));
+            }
+        }
+
+        None
+    }
+
+    fn resolve_qualified_symbol(&self, qualified: &str) -> Option<ResolvedSymbol> {
+        let parts: Vec<&str> = qualified.split("::").collect();
+        if parts.len() != 2 {
+            return None; // Only support module::symbol for now
+        }
+
+        let (module_name, symbol_name) = (parts[0], parts[1]);
+
+        // Check if this module is in wildcard imports
+        if let Some(scope) = &self.import_scope {
+            if scope.wildcard_modules.contains(module_name) {
+                return self.resolve_in_module(module_name, symbol_name);
+            }
+        }
+
+        None
+    }
+
+    fn resolve_in_module(&self, module_id: &str, symbol_name: &str) -> Option<ResolvedSymbol> {
+        let all_modules = self.all_modules.as_ref()?;
+        let module_symbols = all_modules.module_symbols.get(module_id)?;
+
+        if module_symbols.structs.contains(symbol_name) {
+            Some(ResolvedSymbol::Struct(
+                module_id.to_string(),
+                symbol_name.to_string(),
+            ))
+        } else if module_symbols.interfaces.contains(symbol_name) {
+            Some(ResolvedSymbol::Interface(
+                module_id.to_string(),
+                symbol_name.to_string(),
+            ))
+        } else if module_symbols.functions.contains(symbol_name) {
+            Some(ResolvedSymbol::Function(
+                module_id.to_string(),
+                symbol_name.to_string(),
+            ))
+        } else {
+            // fallback: if current module, check externs map
+            if self.current_module.as_deref() == Some(module_id) {
+                if self.extern_functions.contains_key(symbol_name) {
+                    return Some(ResolvedSymbol::Function(
+                        module_id.to_string(),
+                        symbol_name.to_string(),
+                    ));
+                }
+            }
+            None
+        }
+    }
+}
+
+fn resolve_ffi_type(name: &str) -> Option<Type> {
+    let trimmed = name.trim();
+
+    if trimmed == "&str" {
+        return Some(Type::Str);
+    }
+
+    if let Some(builtin) = Type::from_name(trimmed) {
+        return Some(builtin);
+    }
+
+    if trimmed == "void" {
+        return Some(Type::Void);
+    }
+
+    // Allow RawPtr<T> for any T (validated recursively)
+    if trimmed.starts_with("RawPtr<") && trimmed.ends_with('>') {
+        let inner = trimmed.trim_start_matches("RawPtr<").trim_end_matches('>');
+        let inner_ty = resolve_ffi_type(inner).unwrap_or(Type::Named(inner.to_string()));
+        return Some(Type::RawPtr(Box::new(inner_ty)));
+    }
+
+    None
 }
 
 /// Detect the self kind from a parameter type
@@ -618,8 +824,8 @@ mod tests {
     use super::*;
     use glyph_core::{
         ast::{
-            Block, Expr, FieldDef, Function, Ident, InlineImpl, InterfaceDef, InterfaceMethod,
-            Literal, Param, Stmt, StructDef,
+            Block, Expr, ExternFunctionDecl, FieldDef, Function, Ident, InlineImpl, InterfaceDef,
+            InterfaceMethod, Literal, Param, Stmt, StructDef,
         },
         span::Span,
     };
@@ -630,7 +836,10 @@ mod tests {
 
     #[test]
     fn resolves_empty_module() {
-        let module = Module { items: vec![] };
+        let module = Module {
+            imports: vec![],
+            items: vec![],
+        };
         let (ctx, diags) = resolve_types(&module);
 
         assert!(ctx.struct_types.is_empty());
@@ -640,6 +849,7 @@ mod tests {
     #[test]
     fn resolves_simple_struct() {
         let module = Module {
+            imports: vec![],
             items: vec![Item::Struct(StructDef {
                 name: Ident("Point".into()),
                 fields: vec![
@@ -676,6 +886,7 @@ mod tests {
     #[test]
     fn detects_duplicate_struct_definitions() {
         let module = Module {
+            imports: vec![],
             items: vec![
                 Item::Struct(StructDef {
                     name: Ident("Point".into()),
@@ -706,6 +917,7 @@ mod tests {
     #[test]
     fn detects_duplicate_field_names() {
         let module = Module {
+            imports: vec![],
             items: vec![Item::Struct(StructDef {
                 name: Ident("Point".into()),
                 fields: vec![
@@ -740,6 +952,7 @@ mod tests {
     #[test]
     fn detects_undefined_struct_types() {
         let module = Module {
+            imports: vec![],
             items: vec![Item::Struct(StructDef {
                 name: Ident("Rect".into()),
                 fields: vec![FieldDef {
@@ -767,6 +980,7 @@ mod tests {
     #[test]
     fn allows_struct_with_struct_field() {
         let module = Module {
+            imports: vec![],
             items: vec![
                 Item::Struct(StructDef {
                     name: Ident("Point".into()),
@@ -807,6 +1021,7 @@ mod tests {
     #[test]
     fn get_field_returns_correct_type_and_index() {
         let module = Module {
+            imports: vec![],
             items: vec![Item::Struct(StructDef {
                 name: Ident("Point".into()),
                 fields: vec![
@@ -846,6 +1061,7 @@ mod tests {
     fn collects_interface_impl_methods() {
         let span = make_span();
         let module = Module {
+            imports: vec![],
             items: vec![
                 Item::Interface(InterfaceDef {
                     name: Ident("Drawable".into()),
@@ -910,6 +1126,7 @@ mod tests {
     fn reports_missing_interface_methods() {
         let span = make_span();
         let module = Module {
+            imports: vec![],
             items: vec![
                 Item::Interface(InterfaceDef {
                     name: Ident("Renderable".into()),
@@ -941,5 +1158,39 @@ mod tests {
             d.message
                 .contains("missing implementations for interface 'Renderable'")
         }));
+    }
+
+    #[test]
+    fn resolves_extern_function_signature() {
+        let module = Module {
+            imports: vec![],
+            items: vec![Item::ExternFunction(ExternFunctionDecl {
+                abi: Some("C".into()),
+                name: Ident("puts".into()),
+                params: vec![Param {
+                    name: Ident("msg".into()),
+                    ty: Some(Ident("RawPtr<i32>".into())),
+                    span: make_span(),
+                }],
+                ret_type: Some(Ident("i32".into())),
+                link_name: None,
+                span: make_span(),
+            })],
+        };
+
+        let (mut ctx, diags) = resolve_types(&module);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+        let sig = ctx.extern_functions.get("puts").expect("extern sig");
+        assert_eq!(sig.0.len(), 1);
+        assert!(matches!(sig.0[0], Type::RawPtr(_)));
+        assert_eq!(sig.1, Some(Type::I32));
+
+        ctx.current_module = Some("main".into());
+        let resolved = ctx.resolve_symbol("puts");
+        assert!(
+            matches!(resolved, Some(ResolvedSymbol::Function(_, ref name)) if name == "puts"),
+            "extern symbol not resolved: {:?}",
+            resolved
+        );
     }
 }

@@ -1,5 +1,6 @@
 use anyhow::Result;
 use glyph_core::mir::MirModule;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EmitKind {
@@ -13,6 +14,8 @@ pub struct CodegenOptions {
     pub emit: EmitKind,
     pub target: Option<String>,
     pub opt_level: u8,
+    pub link_libs: Vec<String>,
+    pub link_search_paths: Vec<PathBuf>,
 }
 
 impl Default for CodegenOptions {
@@ -21,6 +24,8 @@ impl Default for CodegenOptions {
             emit: EmitKind::LlvmIr,
             target: None,
             opt_level: 0,
+            link_libs: Vec::new(),
+            link_search_paths: Vec::new(),
         }
     }
 }
@@ -81,6 +86,7 @@ mod tests {
         let module = MirModule {
             struct_types: std::collections::HashMap::new(),
             functions: vec![],
+            extern_functions: Vec::new(),
         };
         let artifact = backend.emit(&module, &CodegenOptions::default()).unwrap();
         assert!(artifact.llvm_ir.unwrap().contains("placeholder"));

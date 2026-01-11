@@ -3,12 +3,13 @@ use std::ffi::{CStr, CString};
 
 use anyhow::{Result, anyhow, bail};
 use glyph_core::mir::{
-    BlockId, LocalId, MirBlock, MirFunction, MirInst, MirModule, MirValue, Rvalue,
+    BlockId, LocalId, MirBlock, MirExternFunction, MirFunction, MirInst, MirModule, MirValue,
+    Rvalue,
 };
 use glyph_core::types::{StructType, Type};
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
-use llvm_sys::{LLVMBuilder, LLVMContext, LLVMModule};
+use llvm_sys::{LLVMBuilder, LLVMContext, LLVMLinkage, LLVMModule};
 
 pub struct CodegenContext {
     context: *mut LLVMContext,
@@ -18,6 +19,7 @@ pub struct CodegenContext {
     struct_layouts: HashMap<String, StructType>,
     malloc_fn: Option<LLVMValueRef>,
     free_fn: Option<LLVMValueRef>,
+    string_globals: HashMap<String, LLVMValueRef>,
 }
 
 impl CodegenContext {
@@ -36,6 +38,7 @@ impl CodegenContext {
                 struct_layouts: HashMap::new(),
                 malloc_fn: None,
                 free_fn: None,
+                string_globals: HashMap::new(),
             })
         }
     }
@@ -93,13 +96,16 @@ impl CodegenContext {
     fn get_llvm_type(&self, ty: &Type) -> Result<LLVMTypeRef> {
         unsafe {
             Ok(match ty {
+                Type::I8 => LLVMInt8TypeInContext(self.context),
                 Type::I32 => LLVMInt32TypeInContext(self.context),
                 Type::I64 => LLVMInt64TypeInContext(self.context),
+                Type::U8 => LLVMInt8TypeInContext(self.context),
                 Type::U32 => LLVMInt32TypeInContext(self.context),
                 Type::U64 => LLVMInt64TypeInContext(self.context),
                 Type::F32 => LLVMFloatTypeInContext(self.context),
                 Type::F64 => LLVMDoubleTypeInContext(self.context),
                 Type::Bool => LLVMInt1TypeInContext(self.context),
+                Type::Str => LLVMPointerType(LLVMInt8TypeInContext(self.context), 0),
                 Type::Void => LLVMVoidTypeInContext(self.context),
                 Type::Named(name) => self.get_struct_type(name)?,
                 Type::Ref(inner, _) => {
@@ -113,7 +119,7 @@ impl CodegenContext {
                     let elem_llvm = self.get_llvm_type(elem_ty)?;
                     LLVMArrayType(elem_llvm, *size as u32)
                 }
-                Type::Own(inner) | Type::RawPtr(inner) => {
+                Type::Own(inner) | Type::RawPtr(inner) | Type::Shared(inner) => {
                     let elem_ty = self.get_llvm_type(inner)?;
                     LLVMPointerType(elem_ty, 0)
                 }
@@ -150,6 +156,22 @@ impl CodegenContext {
             functions.insert(func.name.clone(), llvm_func);
         }
 
+        for func in &mir_module.extern_functions {
+            let func_type = self.llvm_extern_function_type(func)?;
+            let symbol_name = func.link_name.as_ref().unwrap_or(&func.name);
+            let func_name = CString::new(symbol_name.as_str())?;
+            let llvm_func = unsafe { LLVMAddFunction(self.module, func_name.as_ptr(), func_type) };
+            unsafe { LLVMSetLinkage(llvm_func, LLVMLinkage::LLVMExternalLinkage) };
+            // ABI mapping (v0: only "C" supported; default LLVM CC is C).
+            if let Some(abi) = &func.abi {
+                if abi != "C" {
+                    bail!("unsupported ABI '{}': only \"C\" is supported", abi);
+                }
+                // If additional ABIs are added, map them via LLVMSetFunctionCallConv here.
+            }
+            functions.insert(func.name.clone(), llvm_func);
+        }
+
         Ok(functions)
     }
 
@@ -181,6 +203,29 @@ impl CodegenContext {
                 param_types.as_mut_ptr(),
                 param_types.len() as u32,
                 0, // not variadic
+            )
+        })
+    }
+
+    fn llvm_extern_function_type(&self, func: &MirExternFunction) -> Result<LLVMTypeRef> {
+        let ret_type = func
+            .ret_type
+            .as_ref()
+            .map(|t| self.get_llvm_type(t))
+            .transpose()?
+            .unwrap_or_else(|| unsafe { LLVMVoidTypeInContext(self.context) });
+
+        let mut param_types: Vec<LLVMTypeRef> = Vec::new();
+        for param_ty in &func.params {
+            param_types.push(self.get_llvm_type(param_ty)?);
+        }
+
+        Ok(unsafe {
+            LLVMFunctionType(
+                ret_type,
+                param_types.as_mut_ptr(),
+                param_types.len() as u32,
+                0, // not variadic in v0
             )
         })
     }
@@ -338,6 +383,12 @@ impl CodegenContext {
                     .ok_or_else(|| anyhow!("undefined local {:?}", local))?;
                 self.codegen_drop_own_slot(*slot, inner)
             }
+            Type::Shared(inner) => {
+                let slot = local_map
+                    .get(&local)
+                    .ok_or_else(|| anyhow!("undefined local {:?}", local))?;
+                self.codegen_drop_shared_slot(*slot, inner)
+            }
             _ => Ok(()),
         }
     }
@@ -385,6 +436,175 @@ impl CodegenContext {
         Ok(())
     }
 
+    fn codegen_drop_shared_slot(&mut self, slot: LLVMValueRef, elem_type: &Type) -> Result<()> {
+        unsafe {
+            // 1. Load pointer
+            let ptr_ty = self.get_llvm_type(&Type::Shared(Box::new(elem_type.clone())))?;
+            let load_name = CString::new("shared.drop.load")?;
+            let ptr_val = LLVMBuildLoad2(self.builder, ptr_ty, slot, load_name.as_ptr());
+
+            // 2. Null check (pointer might already be consumed)
+            let null_ptr = LLVMConstPointerNull(ptr_ty);
+            let is_null_name = CString::new("shared.drop.is_null")?;
+            let is_null = LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                ptr_val,
+                null_ptr,
+                is_null_name.as_ptr(),
+            );
+
+            // 3. Create basic blocks
+            let func = LLVMGetBasicBlockParent(LLVMGetInsertBlock(self.builder));
+            let dec_bb = LLVMAppendBasicBlockInContext(
+                self.context,
+                func,
+                CString::new("shared.dec")?.as_ptr(),
+            );
+            let free_bb = LLVMAppendBasicBlockInContext(
+                self.context,
+                func,
+                CString::new("shared.free")?.as_ptr(),
+            );
+            let cont_bb = LLVMAppendBasicBlockInContext(
+                self.context,
+                func,
+                CString::new("shared.cont")?.as_ptr(),
+            );
+
+            // If null, skip to continue
+            LLVMBuildCondBr(self.builder, is_null, cont_bb, dec_bb);
+
+            // 4. Decrement block
+            LLVMPositionBuilderAtEnd(self.builder, dec_bb);
+
+            // Get struct type
+            let usize_ty = LLVMInt64TypeInContext(self.context);
+            let elem_llvm_ty = self.get_llvm_type(elem_type)?;
+            let mut field_tys = vec![usize_ty, elem_llvm_ty];
+            let rc_struct = LLVMStructTypeInContext(self.context, field_tys.as_mut_ptr(), 2, 0);
+
+            // Get refcount pointer
+            let refcount_ptr = LLVMBuildStructGEP2(
+                self.builder,
+                rc_struct,
+                ptr_val,
+                0,
+                CString::new("shared.rc.ptr")?.as_ptr(),
+            );
+
+            // Load old refcount
+            let old_count = LLVMBuildLoad2(
+                self.builder,
+                usize_ty,
+                refcount_ptr,
+                CString::new("shared.rc.old")?.as_ptr(),
+            );
+
+            // Decrement refcount
+            let one = LLVMConstInt(usize_ty, 1, 0);
+            let new_count = LLVMBuildSub(
+                self.builder,
+                old_count,
+                one,
+                CString::new("shared.rc.new")?.as_ptr(),
+            );
+            LLVMBuildStore(self.builder, new_count, refcount_ptr);
+
+            // Check if refcount reached zero
+            let zero = LLVMConstInt(usize_ty, 0, 0);
+            let is_zero = LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                new_count,
+                zero,
+                CString::new("shared.rc.is_zero")?.as_ptr(),
+            );
+
+            // If zero, free; else continue
+            LLVMBuildCondBr(self.builder, is_zero, free_bb, cont_bb);
+
+            // 5. Free block (refcount is zero)
+            LLVMPositionBuilderAtEnd(self.builder, free_bb);
+            self.codegen_free(ptr_val)?;
+
+            // Set slot to null
+            LLVMBuildStore(self.builder, null_ptr, slot);
+            LLVMBuildBr(self.builder, cont_bb);
+
+            // 6. Continue block
+            LLVMPositionBuilderAtEnd(self.builder, cont_bb);
+
+            Ok(())
+        }
+    }
+
+    fn codegen_string_literal(&mut self, content: &str, global_name: &str) -> Result<LLVMValueRef> {
+        if let Some(&ptr) = self.string_globals.get(global_name) {
+            return Ok(ptr);
+        }
+
+        unsafe {
+            // Null-terminated bytes for C interop
+            let mut bytes: Vec<u8> = content.bytes().collect();
+            bytes.push(0);
+
+            let i8_ty = LLVMInt8TypeInContext(self.context);
+            let array_ty = LLVMArrayType(i8_ty, bytes.len() as u32);
+
+            let name_c = CString::new(global_name)?;
+            let global = LLVMAddGlobal(self.module, array_ty, name_c.as_ptr());
+            LLVMSetGlobalConstant(global, 1);
+            LLVMSetLinkage(global, LLVMLinkage::LLVMPrivateLinkage);
+
+            let mut const_bytes: Vec<LLVMValueRef> = bytes
+                .iter()
+                .map(|b| LLVMConstInt(i8_ty, *b as u64, 0))
+                .collect();
+            let init = LLVMConstArray(i8_ty, const_bytes.as_mut_ptr(), const_bytes.len() as u32);
+            LLVMSetInitializer(global, init);
+
+            // Pointer to first character
+            let i32_ty = LLVMInt32TypeInContext(self.context);
+            let zero = LLVMConstInt(i32_ty, 0, 0);
+            let mut indices = vec![zero, zero];
+            let ptr = LLVMConstGEP2(array_ty, global, indices.as_mut_ptr(), indices.len() as u32);
+
+            self.string_globals.insert(global_name.to_string(), ptr);
+            Ok(ptr)
+        }
+    }
+
+    fn mir_value_type(&self, value: &MirValue, func: &MirFunction) -> Option<Type> {
+        match value {
+            MirValue::Unit => Some(Type::Void),
+            MirValue::Int(_) => Some(Type::I32),
+            MirValue::Bool(_) => Some(Type::Bool),
+            MirValue::Local(id) => func
+                .locals
+                .get(id.0 as usize)
+                .and_then(|local| local.ty.clone()),
+        }
+    }
+
+    fn call_param_types(&self, name: &str, mir_module: &MirModule) -> (Vec<Option<Type>>, bool) {
+        if let Some(func) = mir_module.functions.iter().find(|f| f.name == name) {
+            let params = func
+                .params
+                .iter()
+                .map(|id| func.locals.get(id.0 as usize).and_then(|l| l.ty.clone()))
+                .collect();
+            return (params, false);
+        }
+
+        if let Some(ext) = mir_module.extern_functions.iter().find(|f| f.name == name) {
+            let params = ext.params.iter().cloned().map(Some).collect();
+            return (params, true);
+        }
+
+        (Vec::new(), false)
+    }
+
     fn codegen_rvalue(
         &mut self,
         rvalue: &Rvalue,
@@ -403,6 +623,10 @@ impl CodegenContext {
                     let ty = LLVMInt1TypeInContext(self.context);
                     Ok(LLVMConstInt(ty, if *b { 1 } else { 0 }, 0))
                 }
+                Rvalue::StringLit {
+                    content,
+                    global_name,
+                } => self.codegen_string_literal(content, global_name),
                 Rvalue::Move(local_id) => {
                     let local_ptr = local_map
                         .get(local_id)
@@ -506,19 +730,48 @@ impl CodegenContext {
                         .ok_or_else(|| anyhow!("unknown function {}", name))?;
 
                     // Find the MIR function to get its type signature
-                    let target_func = mir_module
-                        .functions
-                        .iter()
-                        .find(|f| f.name == *name)
-                        .ok_or_else(|| anyhow!("function {} not found in MIR module", name))?;
+                    let fn_ty = if let Some(target_func) =
+                        mir_module.functions.iter().find(|f| f.name == *name)
+                    {
+                        self.llvm_function_type(target_func)?
+                    } else if let Some(extern_func) =
+                        mir_module.extern_functions.iter().find(|f| f.name == *name)
+                    {
+                        self.llvm_extern_function_type(extern_func)?
+                    } else {
+                        bail!("function {} not found in MIR module", name);
+                    };
 
-                    // Build the LLVM function type from the MIR function signature
-                    let fn_ty = self.llvm_function_type(target_func)?;
+                    let (param_types, is_extern) = self.call_param_types(name, mir_module);
 
                     // Codegen arguments
                     let mut llvm_args: Vec<LLVMValueRef> = Vec::new();
-                    for arg in args {
-                        llvm_args.push(self.codegen_value(arg, func, local_map)?);
+                    for (idx, arg) in args.iter().enumerate() {
+                        let mut arg_val = self.codegen_value(arg, func, local_map)?;
+
+                        if let Some(Some(param_ty)) = param_types.get(idx) {
+                            if is_extern {
+                                if let Some(arg_ty) = self.mir_value_type(arg, func) {
+                                    if matches!(arg_ty, Type::Str)
+                                        && (matches!(param_ty, Type::RawPtr(_))
+                                            || matches!(param_ty, Type::Str))
+                                    {
+                                        let expected_ty = self.get_llvm_type(param_ty)?;
+                                        if LLVMTypeOf(arg_val) != expected_ty {
+                                            let cast_name = CString::new("str.as_ptr")?;
+                                            arg_val = LLVMBuildBitCast(
+                                                self.builder,
+                                                arg_val,
+                                                expected_ty,
+                                                cast_name.as_ptr(),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        llvm_args.push(arg_val);
                     }
 
                     let call_name = CString::new("call")?;
@@ -557,6 +810,12 @@ impl CodegenContext {
                     self.codegen_own_from_raw(ptr, elem_type, func, local_map)
                 }
                 Rvalue::RawPtrNull { elem_type } => self.codegen_raw_ptr_null(elem_type),
+                Rvalue::SharedNew { elem_type, value } => {
+                    self.codegen_shared_new(elem_type, value, func, local_map)
+                }
+                Rvalue::SharedClone { base, elem_type } => {
+                    self.codegen_shared_clone(*base, elem_type, local_map)
+                }
             }
         }
     }
@@ -887,6 +1146,118 @@ impl CodegenContext {
         Ok(unsafe { LLVMConstPointerNull(ty) })
     }
 
+    fn codegen_shared_new(
+        &mut self,
+        elem_type: &Type,
+        value: &MirValue,
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+    ) -> Result<LLVMValueRef> {
+        unsafe {
+            // 1. Create struct type [refcount: usize, data: T]
+            let usize_ty = LLVMInt64TypeInContext(self.context);
+            let elem_llvm_ty = self.get_llvm_type(elem_type)?;
+            let mut field_tys = vec![usize_ty, elem_llvm_ty];
+            let rc_struct = LLVMStructTypeInContext(
+                self.context,
+                field_tys.as_mut_ptr(),
+                2,
+                0, // not packed
+            );
+
+            // 2. Allocate memory
+            let size_val = LLVMSizeOf(rc_struct);
+            let malloc_fn = self.ensure_malloc_fn()?;
+            let malloc_ty = self.malloc_function_type();
+            let mut args = vec![size_val];
+            let call_name = CString::new("shared.alloc")?;
+            let raw_ptr = LLVMBuildCall2(
+                self.builder,
+                malloc_ty,
+                malloc_fn,
+                args.as_mut_ptr(),
+                args.len() as u32,
+                call_name.as_ptr(),
+            );
+
+            // 3. Cast to typed pointer
+            let typed_ptr_ty = LLVMPointerType(rc_struct, 0);
+            let cast_name = CString::new("shared.ptr")?;
+            let typed_ptr =
+                LLVMBuildBitCast(self.builder, raw_ptr, typed_ptr_ty, cast_name.as_ptr());
+
+            // 4. Initialize refcount to 1
+            let refcount_ptr = LLVMBuildStructGEP2(
+                self.builder,
+                rc_struct,
+                typed_ptr,
+                0,
+                CString::new("shared.rc")?.as_ptr(),
+            );
+            let one = LLVMConstInt(usize_ty, 1, 0);
+            LLVMBuildStore(self.builder, one, refcount_ptr);
+
+            // 5. Store the data value
+            let data_ptr = LLVMBuildStructGEP2(
+                self.builder,
+                rc_struct,
+                typed_ptr,
+                1,
+                CString::new("shared.data")?.as_ptr(),
+            );
+            let value_val = self.codegen_value(value, func, local_map)?;
+            LLVMBuildStore(self.builder, value_val, data_ptr);
+
+            // 6. Return pointer (API returns pointer to whole struct)
+            Ok(typed_ptr)
+        }
+    }
+
+    fn codegen_shared_clone(
+        &mut self,
+        base: LocalId,
+        elem_type: &Type,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+    ) -> Result<LLVMValueRef> {
+        unsafe {
+            // 1. Load the Shared<T> pointer
+            let slot = local_map
+                .get(&base)
+                .ok_or_else(|| anyhow!("undefined local {:?}", base))?;
+            let shared_ty = self.get_llvm_type(&Type::Shared(Box::new(elem_type.clone())))?;
+            let load_name = CString::new("shared.load")?;
+            let ptr_val = LLVMBuildLoad2(self.builder, shared_ty, *slot, load_name.as_ptr());
+
+            // 2. Get struct type for GEP
+            let usize_ty = LLVMInt64TypeInContext(self.context);
+            let elem_llvm_ty = self.get_llvm_type(elem_type)?;
+            let mut field_tys = vec![usize_ty, elem_llvm_ty];
+            let rc_struct = LLVMStructTypeInContext(self.context, field_tys.as_mut_ptr(), 2, 0);
+
+            // 3. Get pointer to refcount field
+            let refcount_ptr = LLVMBuildStructGEP2(
+                self.builder,
+                rc_struct,
+                ptr_val,
+                0,
+                CString::new("shared.rc.ptr")?.as_ptr(),
+            );
+
+            // 4. Load current refcount
+            let rc_name = CString::new("shared.rc.old")?;
+            let old_count = LLVMBuildLoad2(self.builder, usize_ty, refcount_ptr, rc_name.as_ptr());
+
+            // 5. Increment refcount
+            let one = LLVMConstInt(usize_ty, 1, 0);
+            let inc_name = CString::new("shared.rc.new")?;
+            let new_count = LLVMBuildAdd(self.builder, old_count, one, inc_name.as_ptr());
+            LLVMBuildStore(self.builder, new_count, refcount_ptr);
+
+            // 6. Return the same pointer (refcount incremented)
+            Ok(ptr_val)
+        }
+    }
+
     fn ensure_malloc_fn(&mut self) -> Result<LLVMValueRef> {
         if let Some(func) = self.malloc_fn {
             return Ok(func);
@@ -1059,6 +1430,17 @@ impl CodegenContext {
     /// Execute a function via JIT for testing purposes
     /// Note: This creates a clone of the module for JIT execution
     pub fn jit_execute_i32(&self, fn_name: &str) -> Result<i32> {
+        self.jit_execute_i32_with_symbols(fn_name, &HashMap::new())
+    }
+
+    /// Execute a function via JIT with custom symbol resolution
+    /// The symbols map provides address resolution for extern functions
+    /// Note: This creates a clone of the module for JIT execution
+    pub fn jit_execute_i32_with_symbols(
+        &self,
+        fn_name: &str,
+        symbols: &HashMap<String, u64>,
+    ) -> Result<i32> {
         use llvm_sys::execution_engine::*;
         use llvm_sys::target::*;
 
@@ -1092,6 +1474,15 @@ impl CodegenContext {
                     msg
                 };
                 return Err(anyhow!("Failed to create execution engine: {}", err_msg));
+            }
+
+            // Register custom symbols with the execution engine
+            for (sym_name, &addr) in symbols {
+                let sym_name_c = CString::new(sym_name.as_str())?;
+                let func = LLVMGetNamedFunction(module_clone, sym_name_c.as_ptr());
+                if !func.is_null() {
+                    LLVMAddGlobalMapping(ee, func, addr as *mut std::ffi::c_void);
+                }
             }
 
             // Find the function
@@ -1154,6 +1545,7 @@ mod tests {
                     insts: vec![MirInst::Return(Some(MirValue::Int(42)))],
                 }],
             }],
+            extern_functions: Vec::new(),
         };
         ctx.codegen_module(&mir).unwrap();
         let ir = ctx.dump_ir();
@@ -1175,6 +1567,7 @@ mod tests {
                     insts: vec![MirInst::Return(Some(MirValue::Int(42)))],
                 }],
             }],
+            extern_functions: Vec::new(),
         };
         ctx.codegen_module(&mir).unwrap();
         let result = ctx.jit_execute_i32("main").unwrap();
@@ -1229,12 +1622,54 @@ mod tests {
                     ],
                 }],
             }],
+            extern_functions: Vec::new(),
         };
 
         ctx.codegen_module(&mir).unwrap();
         let ir = ctx.dump_ir();
         assert!(ir.contains("%Point = type { i32, i32 }"));
         assert!(ir.contains("getelementptr inbounds"));
+    }
+
+    #[test]
+    fn codegens_extern_declare_and_call() {
+        let mut ctx = CodegenContext::new("test").unwrap();
+        let mir = MirModule {
+            struct_types: HashMap::new(),
+            extern_functions: vec![MirExternFunction {
+                name: "foo".into(),
+                ret_type: Some(Type::I32),
+                params: vec![Type::I32],
+                abi: Some("C".into()),
+                link_name: None,
+            }],
+            functions: vec![MirFunction {
+                name: "main".into(),
+                ret_type: Some(Type::I32),
+                params: vec![],
+                locals: vec![Local {
+                    name: None,
+                    ty: Some(Type::I32),
+                }],
+                blocks: vec![MirBlock {
+                    insts: vec![
+                        MirInst::Assign {
+                            local: LocalId(0),
+                            value: Rvalue::Call {
+                                name: "foo".into(),
+                                args: vec![MirValue::Int(1)],
+                            },
+                        },
+                        MirInst::Return(Some(MirValue::Local(LocalId(0)))),
+                    ],
+                }],
+            }],
+        };
+
+        ctx.codegen_module(&mir).unwrap();
+        let ir = ctx.dump_ir();
+        assert!(ir.contains("declare i32 @foo(i32)"));
+        assert!(ir.contains("call i32 @foo"));
     }
 
     #[test]
@@ -1297,11 +1732,226 @@ mod tests {
                     ],
                 }],
             }],
+            extern_functions: Vec::new(),
         };
 
         ctx.codegen_module(&mir).unwrap();
         let ir = ctx.dump_ir();
         assert!(ir.contains("getelementptr inbounds"));
         assert!(ir.contains("ret i32"));
+    }
+
+    #[test]
+    fn jit_resolves_extern_symbol_from_host() {
+        // Define a test host function that will be called from JIT code
+        extern "C" fn test_add_ten(x: i32) -> i32 {
+            x + 10
+        }
+
+        let mut ctx = CodegenContext::new("test").unwrap();
+        let mir = MirModule {
+            struct_types: HashMap::new(),
+            extern_functions: vec![MirExternFunction {
+                name: "test_add_ten".into(),
+                ret_type: Some(Type::I32),
+                params: vec![Type::I32],
+                abi: Some("C".into()),
+                link_name: None,
+            }],
+            functions: vec![MirFunction {
+                name: "main".into(),
+                ret_type: Some(Type::I32),
+                params: vec![],
+                locals: vec![Local {
+                    name: None,
+                    ty: Some(Type::I32),
+                }],
+                blocks: vec![MirBlock {
+                    insts: vec![
+                        MirInst::Assign {
+                            local: LocalId(0),
+                            value: Rvalue::Call {
+                                name: "test_add_ten".into(),
+                                args: vec![MirValue::Int(5)],
+                            },
+                        },
+                        MirInst::Return(Some(MirValue::Local(LocalId(0)))),
+                    ],
+                }],
+            }],
+        };
+
+        ctx.codegen_module(&mir).unwrap();
+
+        // Create symbol map with the address of our test function
+        let mut symbols = HashMap::new();
+        symbols.insert("test_add_ten".to_string(), test_add_ten as u64);
+
+        // Execute and verify the result
+        let result = ctx.jit_execute_i32_with_symbols("main", &symbols).unwrap();
+        assert_eq!(result, 15);
+    }
+
+    #[test]
+    fn jit_extern_symbol_codegen_without_execution() {
+        // This test verifies that extern functions are declared in LLVM IR
+        // but does NOT attempt to execute code with missing symbols (which would crash)
+        let mut ctx = CodegenContext::new("test").unwrap();
+        let mir = MirModule {
+            struct_types: HashMap::new(),
+            extern_functions: vec![MirExternFunction {
+                name: "missing_function".into(),
+                ret_type: Some(Type::I32),
+                params: vec![],
+                abi: Some("C".into()),
+                link_name: None,
+            }],
+            functions: vec![MirFunction {
+                name: "main".into(),
+                ret_type: Some(Type::I32),
+                params: vec![],
+                locals: vec![Local {
+                    name: None,
+                    ty: Some(Type::I32),
+                }],
+                blocks: vec![MirBlock {
+                    insts: vec![
+                        MirInst::Assign {
+                            local: LocalId(0),
+                            value: Rvalue::Call {
+                                name: "missing_function".into(),
+                                args: vec![],
+                            },
+                        },
+                        MirInst::Return(Some(MirValue::Local(LocalId(0)))),
+                    ],
+                }],
+            }],
+        };
+
+        ctx.codegen_module(&mir).unwrap();
+        let ir = ctx.dump_ir();
+
+        // Verify the extern function is declared
+        assert!(ir.contains("declare i32 @missing_function()"));
+        // Verify it's called
+        assert!(ir.contains("call i32 @missing_function"));
+
+        // Note: Actually executing this code would crash due to missing symbol.
+        // In a production JIT, you'd want symbol resolution validation before execution.
+    }
+
+    #[test]
+    fn jit_hello_world_with_putchar() {
+        // First "Hello World" - calling libc putchar to print 'H'
+        extern "C" fn putchar_wrapper(c: i32) -> i32 {
+            // Mock putchar for testing (real one would write to stdout)
+            c // Just return the character code
+        }
+
+        let mut ctx = CodegenContext::new("test").unwrap();
+        let mir = MirModule {
+            struct_types: HashMap::new(),
+            extern_functions: vec![MirExternFunction {
+                name: "putchar".into(),
+                ret_type: Some(Type::I32),
+                params: vec![Type::I32],
+                abi: Some("C".into()),
+                link_name: None,
+            }],
+            functions: vec![MirFunction {
+                name: "main".into(),
+                ret_type: Some(Type::I32),
+                params: vec![],
+                locals: vec![Local {
+                    name: None,
+                    ty: Some(Type::I32),
+                }],
+                blocks: vec![MirBlock {
+                    insts: vec![
+                        // Call putchar('H') - ASCII 72
+                        MirInst::Assign {
+                            local: LocalId(0),
+                            value: Rvalue::Call {
+                                name: "putchar".into(),
+                                args: vec![MirValue::Int(72)], // 'H'
+                            },
+                        },
+                        MirInst::Return(Some(MirValue::Local(LocalId(0)))),
+                    ],
+                }],
+            }],
+        };
+
+        ctx.codegen_module(&mir).unwrap();
+
+        // Register putchar symbol
+        let mut symbols = HashMap::new();
+        symbols.insert("putchar".to_string(), putchar_wrapper as u64);
+
+        // Execute - should "print" 'H' and return 72
+        let result = ctx.jit_execute_i32_with_symbols("main", &symbols).unwrap();
+        assert_eq!(result, 72); // putchar returns the character it printed
+    }
+
+    #[test]
+    fn jit_hello_world_with_puts_literal() {
+        extern "C" fn puts_wrapper(ptr: *const i8) -> i32 {
+            unsafe { CStr::from_ptr(ptr).to_bytes().len() as i32 }
+        }
+
+        let mut ctx = CodegenContext::new("test").unwrap();
+        let mir = MirModule {
+            struct_types: HashMap::new(),
+            extern_functions: vec![MirExternFunction {
+                name: "puts".into(),
+                ret_type: Some(Type::I32),
+                params: vec![Type::Str],
+                abi: Some("C".into()),
+                link_name: None,
+            }],
+            functions: vec![MirFunction {
+                name: "main".into(),
+                ret_type: Some(Type::I32),
+                params: vec![],
+                locals: vec![
+                    Local {
+                        name: None,
+                        ty: Some(Type::Str),
+                    },
+                    Local {
+                        name: None,
+                        ty: Some(Type::I32),
+                    },
+                ],
+                blocks: vec![MirBlock {
+                    insts: vec![
+                        MirInst::Assign {
+                            local: LocalId(0),
+                            value: Rvalue::StringLit {
+                                content: "Hello".into(),
+                                global_name: ".str.main.0".into(),
+                            },
+                        },
+                        MirInst::Assign {
+                            local: LocalId(1),
+                            value: Rvalue::Call {
+                                name: "puts".into(),
+                                args: vec![MirValue::Local(LocalId(0))],
+                            },
+                        },
+                        MirInst::Return(Some(MirValue::Local(LocalId(1)))),
+                    ],
+                }],
+            }],
+        };
+
+        ctx.codegen_module(&mir).unwrap();
+
+        let mut symbols = HashMap::new();
+        symbols.insert("puts".to_string(), puts_wrapper as u64);
+
+        let result = ctx.jit_execute_i32_with_symbols("main", &symbols).unwrap();
+        assert_eq!(result, 5);
     }
 }

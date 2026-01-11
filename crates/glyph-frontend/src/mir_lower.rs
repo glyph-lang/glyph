@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use glyph_core::ast::{BinaryOp, Block, Expr, Function, Ident, Item, Module, Stmt};
 use glyph_core::diag::Diagnostic;
 use glyph_core::mir::{
-    BlockId, Local, LocalId, MirBlock, MirFunction, MirInst, MirModule, MirValue, Rvalue,
+    BlockId, Local, LocalId, MirBlock, MirExternFunction, MirFunction, MirInst, MirModule,
+    MirValue, Rvalue,
 };
 use glyph_core::span::Span;
 use glyph_core::types::{Mutability, Type};
@@ -14,6 +15,7 @@ use crate::resolver::ResolverContext;
 struct FnSig {
     params: Vec<Option<Type>>,
     ret: Option<Type>,
+    abi: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -35,6 +37,7 @@ pub fn lower_module(module: &Module, resolver: &ResolverContext) -> (MirModule, 
     let mut mir = MirModule {
         struct_types: resolver.struct_types.clone(),
         functions: Vec::new(),
+        extern_functions: Vec::new(),
     };
 
     for item in &module.items {
@@ -46,6 +49,37 @@ pub fn lower_module(module: &Module, resolver: &ResolverContext) -> (MirModule, 
             }
             Item::Struct(_) | Item::Interface(_) | Item::Impl(_) => {
                 // Handled during resolution or desugaring stages.
+            }
+            Item::ExternFunction(func) => {
+                let Some(sig) = fn_sigs.get(&func.name.0) else {
+                    continue;
+                };
+
+                // Extern functions require fully known param types
+                let mut params = Vec::new();
+                for (idx, ty) in sig.params.iter().enumerate() {
+                    if let Some(t) = ty.clone() {
+                        params.push(t);
+                    } else {
+                        diagnostics.push(Diagnostic::error(
+                            format!(
+                                "extern function '{}' parameter {} has unknown type",
+                                func.name.0,
+                                idx + 1
+                            ),
+                            Some(func.span),
+                        ));
+                    }
+                }
+
+                let extern_fn = MirExternFunction {
+                    name: func.name.0.clone(),
+                    ret_type: sig.ret.clone(),
+                    params,
+                    abi: sig.abi.clone(),
+                    link_name: func.link_name.clone(),
+                };
+                mir.extern_functions.push(extern_fn);
             }
         }
     }
@@ -61,56 +95,126 @@ fn collect_function_signatures(
     let mut diagnostics = Vec::new();
 
     for item in &module.items {
-        let Item::Function(func) = item else { continue };
-
-        let name = func.name.0.clone();
-        if signatures.contains_key(&name) {
-            diagnostics.push(Diagnostic::error(
-                format!("function '{}' is defined multiple times", name),
-                Some(func.span),
-            ));
-            continue;
-        }
-
-        let mut param_types = Vec::new();
-        for param in &func.params {
-            let ty = match &param.ty {
-                Some(t) => match resolve_type_name(&t.0, resolver) {
-                    Some(resolved) => Some(resolved),
-                    None => {
-                        diagnostics.push(Diagnostic::error(
-                            format!("unknown type '{}' for parameter '{}'", t.0, param.name.0),
-                            Some(param.span),
-                        ));
-                        None
-                    }
-                },
-                None => None,
-            };
-            param_types.push(ty);
-        }
-
-        let ret_type = match &func.ret_type {
-            Some(t) => match resolve_type_name(&t.0, resolver) {
-                Some(resolved) => Some(resolved),
-                None => {
+        match item {
+            Item::Function(func) => {
+                let name = func.name.0.clone();
+                if signatures.contains_key(&name) {
                     diagnostics.push(Diagnostic::error(
-                        format!("unknown return type '{}' for function '{}'", t.0, name),
+                        format!("function '{}' is defined multiple times", name),
                         Some(func.span),
                     ));
-                    None
+                    continue;
                 }
-            },
-            None => None,
-        };
 
-        signatures.insert(
-            name,
-            FnSig {
-                params: param_types,
-                ret: ret_type,
-            },
-        );
+                let mut param_types = Vec::new();
+                for param in &func.params {
+                    let ty = match &param.ty {
+                        Some(t) => match resolve_type_name(&t.0, resolver) {
+                            Some(resolved) => Some(resolved),
+                            None => {
+                                diagnostics.push(Diagnostic::error(
+                                    format!(
+                                        "unknown type '{}' for parameter '{}'",
+                                        t.0, param.name.0
+                                    ),
+                                    Some(param.span),
+                                ));
+                                None
+                            }
+                        },
+                        None => None,
+                    };
+                    param_types.push(ty);
+                }
+
+                let ret_type = match &func.ret_type {
+                    Some(t) => match resolve_type_name(&t.0, resolver) {
+                        Some(resolved) => Some(resolved),
+                        None => {
+                            diagnostics.push(Diagnostic::error(
+                                format!("unknown return type '{}' for function '{}'", t.0, name),
+                                Some(func.span),
+                            ));
+                            None
+                        }
+                    },
+                    None => None,
+                };
+
+                signatures.insert(
+                    name,
+                    FnSig {
+                        params: param_types,
+                        ret: ret_type,
+                        abi: None,
+                    },
+                );
+            }
+            Item::ExternFunction(func) => {
+                let name = func.name.0.clone();
+                if signatures.contains_key(&name) {
+                    diagnostics.push(Diagnostic::error(
+                        format!("function '{}' is defined multiple times", name),
+                        Some(func.span),
+                    ));
+                    continue;
+                }
+
+                let mut param_types = Vec::new();
+                for param in &func.params {
+                    let ty = match &param.ty {
+                        Some(t) => match resolve_type_name(&t.0, resolver) {
+                            Some(resolved) => Some(resolved),
+                            None => {
+                                diagnostics.push(Diagnostic::error(
+                                    format!(
+                                        "unknown type '{}' for parameter '{}'",
+                                        t.0, param.name.0
+                                    ),
+                                    Some(param.span),
+                                ));
+                                None
+                            }
+                        },
+                        None => {
+                            diagnostics.push(Diagnostic::error(
+                                format!(
+                                    "extern function '{}' parameter '{}' must have a type",
+                                    name, param.name.0
+                                ),
+                                Some(param.span),
+                            ));
+                            None
+                        }
+                    };
+                    param_types.push(ty);
+                }
+
+                let ret_type = match &func.ret_type {
+                    Some(t) => match resolve_type_name(&t.0, resolver) {
+                        Some(resolved) => Some(resolved),
+                        None => {
+                            diagnostics.push(Diagnostic::error(
+                                format!("unknown return type '{}' for function '{}'", t.0, name),
+                                Some(func.span),
+                            ));
+                            None
+                        }
+                    },
+                    None => None,
+                };
+
+                signatures.insert(
+                    name,
+                    FnSig {
+                        params: param_types,
+                        ret: ret_type,
+                        abi: func.abi.clone(),
+                    },
+                );
+            }
+            _ => {}
+        }
     }
 
     (signatures, diagnostics)
@@ -123,15 +227,21 @@ struct LowerCtx<'a> {
     locals: Vec<Local>,
     bindings: HashMap<&'a str, LocalId>,
     next_local: u32,
+    function_name: String,
     blocks: Vec<MirBlock>,
     current: BlockId,
     loop_stack: Vec<LoopContext>,
     scope_stack: Vec<Vec<LocalId>>,
     local_states: Vec<LocalState>,
+    string_counter: u32,
 }
 
 impl<'a> LowerCtx<'a> {
-    fn new(resolver: &'a ResolverContext, fn_sigs: &'a HashMap<String, FnSig>) -> Self {
+    fn new(
+        resolver: &'a ResolverContext,
+        fn_sigs: &'a HashMap<String, FnSig>,
+        function_name: String,
+    ) -> Self {
         let mut blocks = Vec::new();
         blocks.push(MirBlock::default());
         Self {
@@ -141,11 +251,13 @@ impl<'a> LowerCtx<'a> {
             locals: Vec::new(),
             bindings: HashMap::new(),
             next_local: 0,
+            function_name,
             blocks,
             current: BlockId(0),
             loop_stack: Vec::new(),
             scope_stack: vec![Vec::new()],
             local_states: Vec::new(),
+            string_counter: 0,
         }
     }
 
@@ -187,6 +299,13 @@ impl<'a> LowerCtx<'a> {
             scope.push(id);
         }
         id
+    }
+
+    fn fresh_string_global(&mut self) -> String {
+        let fn_part = self.function_name.replace("::", "_");
+        let name = format!(".str.{}.{}", fn_part, self.string_counter);
+        self.string_counter += 1;
+        name
     }
 
     fn new_block(&mut self) -> BlockId {
@@ -269,11 +388,17 @@ impl<'a> LowerCtx<'a> {
 
     fn local_needs_drop(&self, local: LocalId) -> bool {
         self.local_ty(local)
-            .map(|ty| matches!(ty, Type::Own(_)))
+            .map(|ty| matches!(ty, Type::Own(_) | Type::Shared(_)))
             .unwrap_or(false)
     }
 
     fn consume_local(&mut self, local: LocalId, span: Option<Span>) -> bool {
+        // Shared pointers are copyable - they don't move
+        let ty = self.local_ty(local);
+        if matches!(ty, Some(Type::Shared(_))) {
+            return true; // Always allow reuse
+        }
+
         if !self.local_needs_drop(local) {
             return true;
         }
@@ -305,7 +430,7 @@ fn lower_function(
     resolver: &ResolverContext,
     fn_sigs: &HashMap<String, FnSig>,
 ) -> (MirFunction, Vec<Diagnostic>) {
-    let mut ctx = LowerCtx::new(resolver, fn_sigs);
+    let mut ctx = LowerCtx::new(resolver, fn_sigs, func.name.0.clone());
 
     // Resolve return type
     let ret_type = func
@@ -631,6 +756,10 @@ fn lower_expr<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr) -> Option<Rvalue> {
     match expr {
         Expr::Lit(glyph_core::ast::Literal::Int(i), _) => Some(Rvalue::ConstInt(*i)),
         Expr::Lit(glyph_core::ast::Literal::Bool(b), _) => Some(Rvalue::ConstBool(*b)),
+        Expr::Lit(glyph_core::ast::Literal::Str(s), _) => Some(Rvalue::StringLit {
+            content: s.clone(),
+            global_name: ctx.fresh_string_global(),
+        }),
         Expr::Ident(ident, span) => ctx
             .bindings
             .get(ident.0.as_str())
@@ -786,7 +915,23 @@ fn lower_call<'a>(
         return None;
     };
 
-    let Some(sig) = ctx.fn_sigs.get(&name.0) else {
+    // Try to resolve function name (may be qualified or imported)
+    let resolved_name = if let Some(resolved) = ctx.resolver.resolve_symbol(&name.0) {
+        match resolved {
+            crate::resolver::ResolvedSymbol::Function(module_id, func_name) => {
+                if ctx.resolver.current_module.as_ref() == Some(&module_id) {
+                    func_name
+                } else {
+                    format!("{}::{}", module_id, func_name)
+                }
+            }
+            _ => name.0.clone(),
+        }
+    } else {
+        name.0.clone()
+    };
+
+    let Some(sig) = ctx.fn_sigs.get(&resolved_name) else {
         ctx.error(format!("unknown function '{}'", name.0), Some(span));
         return None;
     };
@@ -795,7 +940,7 @@ fn lower_call<'a>(
         ctx.error(
             format!(
                 "function '{}' expects {} arguments but got {}",
-                name.0,
+                resolved_name,
                 sig.params.len(),
                 args.len()
             ),
@@ -804,6 +949,16 @@ fn lower_call<'a>(
         return None;
     }
 
+    // For externs, ensure all parameter types are known
+    if sig.params.iter().any(|p| p.is_none()) {
+        ctx.error(
+            format!("function '{}' has unknown parameter types", resolved_name),
+            Some(span),
+        );
+        return None;
+    }
+
+    // Arity/type check for externs is already covered by sig.params length; here we ensure imports exist.
     if require_value && sig.ret.is_none() {
         ctx.error(
             format!("function '{}' has no return type", name.0),
@@ -825,7 +980,7 @@ fn lower_call<'a>(
     ctx.push_inst(MirInst::Assign {
         local: tmp,
         value: Rvalue::Call {
-            name: name.0.clone(),
+            name: resolved_name,
             args: lowered_args,
         },
     });
@@ -841,6 +996,8 @@ fn infer_expr_type(ctx: &LowerCtx, expr: &Expr) -> Option<glyph_core::types::Typ
             let local = ctx.bindings.get(name.0.as_str()).copied()?;
             ctx.locals.get(local.0 as usize).and_then(|l| l.ty.clone())
         }
+
+        Expr::Lit(glyph_core::ast::Literal::Str(_), _) => Some(Type::Str),
 
         // Struct literal: obvious
         Expr::StructLit { name, .. } => Some(glyph_core::types::Type::Named(name.0.clone())),
@@ -903,6 +1060,18 @@ fn lower_method_call<'a>(
                 return None;
             }
             return lower_own_into_raw(ctx, receiver, span);
+        }
+        "clone" => {
+            if !args.is_empty() {
+                ctx.error(".clone() does not take arguments", Some(span));
+                return None;
+            }
+            // Check if receiver is Shared<T>
+            let base_ty = infer_expr_type(ctx, receiver)?;
+            if matches!(base_ty, Type::Shared(_)) {
+                return lower_shared_clone(ctx, receiver, span);
+            }
+            // If not Shared, fall through to regular method dispatch
         }
         _ => {}
     }
@@ -1121,6 +1290,7 @@ fn lower_static_builtin<'a>(
     match name.0.as_str() {
         "Own::new" => lower_own_new(ctx, args, span),
         "Own::from_raw" => lower_own_from_raw(ctx, args, span),
+        "Shared::new" => lower_shared_new(ctx, args, span),
         _ => None,
     }
 }
@@ -1175,6 +1345,61 @@ fn lower_own_from_raw<'a>(ctx: &mut LowerCtx<'a>, args: &'a [Expr], span: Span) 
         local: tmp,
         value: Rvalue::OwnFromRaw {
             ptr,
+            elem_type: elem_ty,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_shared_new<'a>(ctx: &mut LowerCtx<'a>, args: &'a [Expr], span: Span) -> Option<Rvalue> {
+    if args.len() != 1 {
+        ctx.error("Shared::new expects exactly one argument", Some(span));
+        return None;
+    }
+    let value = lower_value(ctx, &args[0])?;
+    let elem_ty = infer_value_type(&value, ctx).or_else(|| {
+        ctx.error("could not infer type for Shared::new argument", Some(span));
+        None
+    })?;
+
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::Shared(Box::new(elem_ty.clone())));
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::SharedNew {
+            value,
+            elem_type: elem_ty,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_shared_clone<'a>(ctx: &mut LowerCtx<'a>, base: &'a Expr, span: Span) -> Option<Rvalue> {
+    let base_val = lower_value(ctx, base)?;
+    let base_local = match base_val {
+        MirValue::Local(id) => id,
+        _ => {
+            ctx.error(".clone() requires a local variable", Some(span));
+            return None;
+        }
+    };
+    let elem_ty = ctx
+        .locals
+        .get(base_local.0 as usize)
+        .and_then(|l| l.ty.as_ref())
+        .and_then(|ty| ty.shared_inner_type())
+        .cloned()
+        .or_else(|| {
+            ctx.error("could not infer inner type for .clone()", Some(span));
+            None
+        })?;
+
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::Shared(Box::new(elem_ty.clone())));
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::SharedClone {
+            base: base_local,
             elem_type: elem_ty,
         },
     });
@@ -1506,6 +1731,10 @@ fn resolve_type_name(name: &str, resolver: &ResolverContext) -> Option<Type> {
         return None;
     }
 
+    if trimmed == "&str" {
+        return Some(Type::Str);
+    }
+
     if let Some(primitive) = Type::from_name(trimmed) {
         return Some(primitive);
     }
@@ -1522,8 +1751,26 @@ fn resolve_type_name(name: &str, resolver: &ResolverContext) -> Option<Type> {
         return Some(raw_ptr_ty);
     }
 
+    if let Some(shared_ty) = parse_shared_type(trimmed, resolver) {
+        return Some(shared_ty);
+    }
+
     if let Some(reference) = parse_reference_type(trimmed, resolver) {
         return Some(reference);
+    }
+
+    // Try to resolve through imports or qualified names
+    if let Some(resolved) = resolver.resolve_symbol(trimmed) {
+        match resolved {
+            crate::resolver::ResolvedSymbol::Struct(module_id, struct_name) => {
+                if resolver.current_module.as_ref() == Some(&module_id) {
+                    return Some(Type::Named(struct_name));
+                } else {
+                    return Some(Type::Named(format!("{}::{}", module_id, struct_name)));
+                }
+            }
+            _ => {}
+        }
     }
 
     resolver
@@ -1576,6 +1823,10 @@ fn parse_own_type(name: &str, resolver: &ResolverContext) -> Option<Type> {
 
 fn parse_raw_ptr_type(name: &str, resolver: &ResolverContext) -> Option<Type> {
     parse_single_arg_type(name, "RawPtr", resolver).map(|inner| Type::RawPtr(Box::new(inner)))
+}
+
+fn parse_shared_type(name: &str, resolver: &ResolverContext) -> Option<Type> {
+    parse_single_arg_type(name, "Shared", resolver).map(|inner| Type::Shared(Box::new(inner)))
 }
 
 fn parse_single_arg_type(name: &str, keyword: &str, resolver: &ResolverContext) -> Option<Type> {
@@ -1644,6 +1895,13 @@ fn parse_reference_type(name: &str, resolver: &ResolverContext) -> Option<Type> 
 
     let base_name = rest.trim();
     if base_name.is_empty() {
+        return None;
+    }
+
+    if base_name == "str" {
+        if mutabilities.len() == 1 && matches!(mutabilities[0], Mutability::Immutable) {
+            return Some(Type::Str);
+        }
         return None;
     }
 
@@ -1724,6 +1982,7 @@ fn infer_rvalue_type(rv: &Rvalue, ctx: &LowerCtx) -> Option<Type> {
             .locals
             .get(local.0 as usize)
             .and_then(|l| l.ty.as_ref().cloned()),
+        Rvalue::StringLit { .. } => Some(Type::Str),
         Rvalue::Ref { base, mutability } => ctx
             .locals
             .get(base.0 as usize)
@@ -1746,6 +2005,8 @@ fn infer_rvalue_type(rv: &Rvalue, ctx: &LowerCtx) -> Option<Type> {
         Rvalue::OwnIntoRaw { elem_type, .. } => Some(Type::RawPtr(Box::new(elem_type.clone()))),
         Rvalue::OwnFromRaw { elem_type, .. } => Some(Type::Own(Box::new(elem_type.clone()))),
         Rvalue::RawPtrNull { elem_type } => Some(Type::RawPtr(Box::new(elem_type.clone()))),
+        Rvalue::SharedNew { elem_type, .. } => Some(Type::Shared(Box::new(elem_type.clone()))),
+        Rvalue::SharedClone { elem_type, .. } => Some(Type::Shared(Box::new(elem_type.clone()))),
         _ => None,
     }
 }
@@ -1763,6 +2024,7 @@ fn struct_name_from_type(ty: &Type) -> Option<String> {
         Type::Ref(inner, _) => struct_name_from_type(inner),
         Type::Own(inner) => struct_name_from_type(inner),
         Type::RawPtr(inner) => struct_name_from_type(inner),
+        Type::Shared(inner) => struct_name_from_type(inner),
         _ => None,
     }
 }
@@ -1816,6 +2078,19 @@ fn lower_value<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr) -> Option<MirValue> {
     match expr {
         Expr::Lit(glyph_core::ast::Literal::Int(i), _) => Some(MirValue::Int(*i)),
         Expr::Lit(glyph_core::ast::Literal::Bool(b), _) => Some(MirValue::Bool(*b)),
+        Expr::Lit(glyph_core::ast::Literal::Str(s), _) => {
+            let tmp = ctx.fresh_local(None);
+            ctx.locals[tmp.0 as usize].ty = Some(Type::Str);
+            let rv = Rvalue::StringLit {
+                content: s.clone(),
+                global_name: ctx.fresh_string_global(),
+            };
+            ctx.push_inst(MirInst::Assign {
+                local: tmp,
+                value: rv,
+            });
+            Some(MirValue::Local(tmp))
+        }
         Expr::Ident(ident, span) => ctx
             .bindings
             .get(ident.0.as_str())
@@ -1887,7 +2162,8 @@ mod tests {
     use crate::resolver::{ResolverContext, resolve_types};
     use crate::{FrontendOptions, compile_source};
     use glyph_core::ast::{
-        BinaryOp, Block, Expr, FieldDef, Function, Ident, Item, Literal, Module, Stmt, StructDef,
+        BinaryOp, Block, Expr, FieldDef, Function, Ident, Item, Literal, Module, Param, Stmt,
+        StructDef,
     };
     use glyph_core::span::Span;
     use glyph_core::types::{Mutability, StructType, Type};
@@ -1925,6 +2201,7 @@ mod tests {
         };
 
         let module = Module {
+            imports: vec![],
             items: vec![Item::Function(func)],
         };
 
@@ -2071,6 +2348,27 @@ mod tests {
     }
 
     #[test]
+    fn resolve_type_name_parses_str() {
+        let ctx = ResolverContext::default();
+        let ty = resolve_type_name("str", &ctx).expect("type");
+        assert_eq!(ty, Type::Str);
+    }
+
+    #[test]
+    fn resolve_type_name_parses_ref_str() {
+        let ctx = ResolverContext::default();
+        let ty = resolve_type_name("&str", &ctx).expect("type");
+        assert_eq!(ty, Type::Str);
+    }
+
+    #[test]
+    fn resolve_type_name_parses_raw_ptr_u8() {
+        let ctx = ResolverContext::default();
+        let ty = resolve_type_name("RawPtr<u8>", &ctx).expect("type");
+        assert_eq!(ty, Type::RawPtr(Box::new(Type::U8)));
+    }
+
+    #[test]
     fn field_access_auto_dereferences_reference_base() {
         let span = Span::new(0, 5);
         let point_struct = Item::Struct(StructDef {
@@ -2137,6 +2435,7 @@ mod tests {
         };
 
         let module = Module {
+            imports: vec![],
             items: vec![point_struct, Item::Function(func)],
         };
 
@@ -2164,6 +2463,7 @@ mod tests {
             span: Span::new(0, 4),
         };
         let module = Module {
+            imports: vec![],
             items: vec![Item::Function(func)],
         };
         let (mir, diags) = lower_module(&module, &ResolverContext::default());
@@ -2198,6 +2498,7 @@ mod tests {
             span: Span::new(0, 10),
         };
         let module = Module {
+            imports: vec![],
             items: vec![Item::Function(func)],
         };
         let (mir, diags) = lower_module(&module, &ResolverContext::default());
@@ -2267,6 +2568,7 @@ mod tests {
         };
 
         let module = Module {
+            imports: vec![],
             items: vec![point_struct, Item::Function(func)],
         };
 
@@ -2340,6 +2642,7 @@ mod tests {
         };
 
         let module = Module {
+            imports: vec![],
             items: vec![point_struct, Item::Function(func)],
         };
 
@@ -2384,6 +2687,7 @@ mod tests {
         };
 
         let module = Module {
+            imports: vec![],
             items: vec![Item::Function(func)],
         };
 
@@ -2468,5 +2772,135 @@ fn main() -> i32 {
         } else {
             panic!("expected receiver argument to be a local");
         }
+    }
+
+    #[test]
+    fn lowers_extern_function_call() {
+        let module = Module {
+            imports: vec![],
+            items: vec![
+                Item::ExternFunction(glyph_core::ast::ExternFunctionDecl {
+                    abi: Some("C".into()),
+                    name: Ident("puts".into()),
+                    params: vec![Param {
+                        name: Ident("msg".into()),
+                        ty: Some(Ident("i32".into())),
+                        span: Span::new(0, 0),
+                    }],
+                    ret_type: None,
+                    link_name: None,
+                    span: Span::new(0, 0),
+                }),
+                Item::Function(Function {
+                    name: Ident("main".into()),
+                    params: vec![],
+                    ret_type: Some(Ident("i32".into())),
+                    body: Block {
+                        span: Span::new(0, 0),
+                        stmts: vec![
+                            Stmt::Expr(
+                                Expr::Call {
+                                    callee: Box::new(Expr::Ident(
+                                        Ident("puts".into()),
+                                        Span::new(0, 0),
+                                    )),
+                                    args: vec![Expr::Lit(Literal::Int(1), Span::new(0, 0))],
+                                    span: Span::new(0, 0),
+                                },
+                                Span::new(0, 0),
+                            ),
+                            Stmt::Ret(
+                                Some(Expr::Lit(Literal::Int(0), Span::new(0, 0))),
+                                Span::new(0, 0),
+                            ),
+                        ],
+                    },
+                    span: Span::new(0, 0),
+                }),
+            ],
+        };
+
+        let resolver = ResolverContext::default();
+        let (mir, diags) = lower_module(&module, &resolver);
+        assert!(diags.is_empty(), "unexpected diagnostics: {:?}", diags);
+        assert_eq!(mir.extern_functions.len(), 1);
+        assert_eq!(mir.extern_functions[0].name, "puts");
+
+        let main = mir
+            .functions
+            .iter()
+            .find(|f| f.name == "main")
+            .expect("main exists");
+        let mut found_call = false;
+        for block in &main.blocks {
+            for inst in &block.insts {
+                if let MirInst::Assign {
+                    value: Rvalue::Call { name, .. },
+                    ..
+                } = inst
+                {
+                    assert_eq!(name, "puts");
+                    found_call = true;
+                }
+            }
+        }
+        assert!(found_call, "call to extern function not lowered");
+    }
+
+    #[test]
+    fn extern_function_wrong_arity_reports_error() {
+        let module = Module {
+            imports: vec![],
+            items: vec![
+                Item::ExternFunction(glyph_core::ast::ExternFunctionDecl {
+                    abi: Some("C".into()),
+                    name: Ident("puts".into()),
+                    params: vec![Param {
+                        name: Ident("msg".into()),
+                        ty: Some(Ident("i32".into())),
+                        span: Span::new(0, 0),
+                    }],
+                    ret_type: None,
+                    link_name: None,
+                    span: Span::new(0, 0),
+                }),
+                Item::Function(Function {
+                    name: Ident("main".into()),
+                    params: vec![],
+                    ret_type: Some(Ident("i32".into())),
+                    body: Block {
+                        span: Span::new(0, 0),
+                        stmts: vec![
+                            Stmt::Expr(
+                                Expr::Call {
+                                    callee: Box::new(Expr::Ident(
+                                        Ident("puts".into()),
+                                        Span::new(0, 0),
+                                    )),
+                                    args: vec![],
+                                    span: Span::new(0, 0),
+                                },
+                                Span::new(0, 0),
+                            ),
+                            Stmt::Ret(
+                                Some(Expr::Lit(Literal::Int(0), Span::new(0, 0))),
+                                Span::new(0, 0),
+                            ),
+                        ],
+                    },
+                    span: Span::new(0, 0),
+                }),
+            ],
+        };
+
+        let resolver = ResolverContext::default();
+        let (_mir, diags) = lower_module(&module, &resolver);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("expects 1 arguments but got 0")),
+            "expected arity diagnostic, got {:?}",
+            diags
+        );
     }
 }

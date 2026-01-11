@@ -251,15 +251,53 @@ pub mod ast {
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct ImportPath {
+        pub segments: Vec<String>,
+        pub span: Span,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct ImportItem {
+        pub name: Ident,
+        pub alias: Option<Ident>,
+        pub span: Span,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub enum ImportKind {
+        Wildcard,
+        Selective { items: Vec<ImportItem> },
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct Import {
+        pub kind: ImportKind,
+        pub path: ImportPath,
+        pub span: Span,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct ExternFunctionDecl {
+        pub abi: Option<String>,
+        pub name: Ident,
+        pub params: Vec<Param>,
+        pub ret_type: Option<Ident>,
+        pub link_name: Option<String>,
+        pub span: Span,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     pub enum Item {
         Function(Function),
         Struct(StructDef),
         Interface(InterfaceDef),
         Impl(ImplBlock),
+        ExternFunction(ExternFunctionDecl),
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
     pub struct Module {
+        pub imports: Vec<Import>,
         pub items: Vec<Item>,
     }
 }
@@ -287,6 +325,9 @@ pub mod token {
         Enum,
         Impl,
         Use,
+        Import,
+        From,
+        As,
         Pub,
         If,
         Else,
@@ -297,6 +338,7 @@ pub mod token {
         Break,
         Cont,
         Ret,
+        Extern,
         // Identifiers and literals
         Ident,
         Int,
@@ -357,37 +399,47 @@ pub mod types {
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
     pub enum Type {
+        I8,
         I32,
         I64,
+        U8,
         U32,
         U64,
         F32,
         F64,
         Bool,
+        Str,
         Void,
         Named(String),
         Ref(Box<Type>, Mutability),
         Array(Box<Type>, usize),
         Own(Box<Type>),
         RawPtr(Box<Type>),
+        Shared(Box<Type>),
     }
 
     impl Type {
         pub fn from_name(name: &str) -> Option<Self> {
             match name {
+                "i8" => Some(Type::I8),
                 "i32" | "i" => Some(Type::I32),
                 "i64" => Some(Type::I64),
+                "u8" => Some(Type::U8),
                 "u32" | "u" => Some(Type::U32),
                 "u64" => Some(Type::U64),
                 "f32" => Some(Type::F32),
                 "f64" | "f" => Some(Type::F64),
                 "bool" | "b" => Some(Type::Bool),
+                "str" => Some(Type::Str),
                 _ => None,
             }
         }
 
         pub fn is_int(&self) -> bool {
-            matches!(self, Type::I32 | Type::I64 | Type::U32 | Type::U64)
+            matches!(
+                self,
+                Type::I8 | Type::I32 | Type::I64 | Type::U8 | Type::U32 | Type::U64
+            )
         }
 
         pub fn is_float(&self) -> bool {
@@ -452,6 +504,17 @@ pub mod types {
                 _ => None,
             }
         }
+
+        pub fn is_shared(&self) -> bool {
+            matches!(self, Type::Shared(_))
+        }
+
+        pub fn shared_inner_type(&self) -> Option<&Type> {
+            match self {
+                Type::Shared(inner) => Some(inner),
+                _ => None,
+            }
+        }
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -482,10 +545,32 @@ pub mod mir {
         pub ty: Option<Type>,
     }
 
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+    #[derive(Clone, PartialEq, Serialize, Deserialize, Default)]
     pub struct MirModule {
         pub struct_types: HashMap<String, StructType>,
         pub functions: Vec<MirFunction>,
+        pub extern_functions: Vec<MirExternFunction>,
+    }
+
+    impl std::fmt::Debug for MirModule {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let mut ds = f.debug_struct("MirModule");
+            ds.field("struct_types", &self.struct_types);
+            ds.field("functions", &self.functions);
+            if !self.extern_functions.is_empty() {
+                ds.field("extern_functions", &self.extern_functions);
+            }
+            ds.finish()
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct MirExternFunction {
+        pub name: String,
+        pub ret_type: Option<Type>,
+        pub params: Vec<Type>,
+        pub abi: Option<String>,
+        pub link_name: Option<String>,
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -518,6 +603,10 @@ pub mod mir {
         ConstInt(i64),
         ConstBool(bool),
         Move(LocalId),
+        StringLit {
+            content: String,
+            global_name: String,
+        },
         Binary {
             op: BinaryOp,
             lhs: MirValue,
@@ -565,6 +654,14 @@ pub mod mir {
             elem_type: Type,
         },
         RawPtrNull {
+            elem_type: Type,
+        },
+        SharedNew {
+            value: MirValue,
+            elem_type: Type,
+        },
+        SharedClone {
+            base: LocalId,
             elem_type: Type,
         },
     }

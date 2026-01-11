@@ -16,6 +16,8 @@ glyph-core = { path = "../glyph-core" }
 glyph-frontend = { path = "../glyph-frontend" }
 glyph-backend = { path = "../glyph-backend" }
 miette.workspace = true
+walkdir = "2"
 
 [dev-dependencies]
 assert_cmd = "2"
+tempfile = "3"

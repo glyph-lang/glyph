@@ -8,11 +8,16 @@ use glyph_core::{
 mod lexer;
 mod method_symbols;
 mod mir_lower;
+mod module_resolver;
 mod parser;
 mod resolver;
 
 pub use lexer::{LexOutput, lex};
 pub use mir_lower::lower_module;
+pub use module_resolver::{
+    DependencyGraph, ImportScope, ModuleSymbols, MultiModuleContext, build_dependency_graph,
+    resolve_multi_module,
+};
 pub use parser::{ParseOutput, parse};
 pub use resolver::{ResolverContext, resolve_types};
 

@@ -1,0 +1,178 @@
+---
+source: crates/glyph-frontend/tests/mir_fixtures.rs
+expression: out.mir
+---
+MirModule {
+    struct_types: {},
+    functions: [
+        MirFunction {
+            name: "main",
+            ret_type: Some(
+                I32,
+            ),
+            params: [],
+            locals: [
+                Local {
+                    name: Some(
+                        "s1",
+                    ),
+                    ty: Some(
+                        Shared(
+                            I32,
+                        ),
+                    ),
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        Shared(
+                            I32,
+                        ),
+                    ),
+                },
+                Local {
+                    name: Some(
+                        "s2",
+                    ),
+                    ty: Some(
+                        Shared(
+                            I32,
+                        ),
+                    ),
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        Shared(
+                            I32,
+                        ),
+                    ),
+                },
+                Local {
+                    name: Some(
+                        "s3",
+                    ),
+                    ty: Some(
+                        Shared(
+                            I32,
+                        ),
+                    ),
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        Shared(
+                            I32,
+                        ),
+                    ),
+                },
+            ],
+            blocks: [
+                MirBlock {
+                    insts: [
+                        Assign {
+                            local: LocalId(
+                                1,
+                            ),
+                            value: SharedNew {
+                                value: Int(
+                                    99,
+                                ),
+                                elem_type: I32,
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                0,
+                            ),
+                            value: Move(
+                                LocalId(
+                                    1,
+                                ),
+                            ),
+                        },
+                        Assign {
+                            local: LocalId(
+                                3,
+                            ),
+                            value: SharedClone {
+                                base: LocalId(
+                                    0,
+                                ),
+                                elem_type: I32,
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                2,
+                            ),
+                            value: Move(
+                                LocalId(
+                                    3,
+                                ),
+                            ),
+                        },
+                        Assign {
+                            local: LocalId(
+                                5,
+                            ),
+                            value: SharedClone {
+                                base: LocalId(
+                                    2,
+                                ),
+                                elem_type: I32,
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                4,
+                            ),
+                            value: Move(
+                                LocalId(
+                                    5,
+                                ),
+                            ),
+                        },
+                        Drop(
+                            LocalId(
+                                5,
+                            ),
+                        ),
+                        Drop(
+                            LocalId(
+                                4,
+                            ),
+                        ),
+                        Drop(
+                            LocalId(
+                                3,
+                            ),
+                        ),
+                        Drop(
+                            LocalId(
+                                2,
+                            ),
+                        ),
+                        Drop(
+                            LocalId(
+                                1,
+                            ),
+                        ),
+                        Drop(
+                            LocalId(
+                                0,
+                            ),
+                        ),
+                        Return(
+                            Some(
+                                Int(
+                                    0,
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+            ],
+        },
+    ],
+}

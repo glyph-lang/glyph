@@ -1,0 +1,20 @@
+// First "Hello World" using extern C!
+// Demonstrates calling libc's putchar function
+
+extern "C" fn putchar(c: i32) -> i32;
+
+fn print_h() -> i32 {
+    // Print 'H' (ASCII 72)
+    putchar(72)
+}
+
+fn print_hello() -> i32 {
+    // Print "Hello" one character at a time
+    putchar(72);  // 'H'
+    putchar(101); // 'e'
+    putchar(108); // 'l'
+    putchar(108); // 'l'
+    putchar(111); // 'o'
+    putchar(10);  // '\n' newline
+    ret 0
+}

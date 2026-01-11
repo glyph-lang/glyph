@@ -1,8 +1,9 @@
 use crate::method_symbols::{inherent_method_symbol, interface_method_symbol};
 use glyph_core::{
     ast::{
-        BinaryOp, Block, Expr, FieldDef, Function, Ident, ImplBlock, InlineImpl, InterfaceDef,
-        InterfaceMethod, Item, Literal, Module, Param, Stmt, StructDef,
+        BinaryOp, Block, Expr, ExternFunctionDecl, FieldDef, Function, Ident, ImplBlock, Import,
+        ImportItem, ImportKind, ImportPath, InlineImpl, InterfaceDef, InterfaceMethod, Item,
+        Literal, Module, Param, Stmt, StructDef,
     },
     diag::Diagnostic,
     span::Span,
@@ -25,6 +26,17 @@ pub fn parse(tokens: &[Token], source: &str) -> ParseOutput {
         pending_items: Vec::new(),
     };
 
+    let mut imports = Vec::new();
+
+    // Parse imports first (must come before items)
+    while parser.at(TokenKind::Import) {
+        match parser.parse_import() {
+            Some(import) => imports.push(import),
+            None => parser.synchronize(),
+        }
+    }
+
+    // Then parse items
     while !parser.at(TokenKind::Eof) {
         if parser.at(TokenKind::Struct) {
             match parser.parse_struct() {
@@ -55,10 +67,15 @@ pub fn parse(tokens: &[Token], source: &str) -> ParseOutput {
                 Some(func) => parser.items.push(Item::Function(func)),
                 None => parser.synchronize(),
             }
+        } else if parser.at(TokenKind::Extern) {
+            match parser.parse_extern_function() {
+                Some(extern_fn) => parser.items.push(Item::ExternFunction(extern_fn)),
+                None => parser.synchronize(),
+            }
         } else {
             let span = parser.peek().map(|t| t.span);
             parser.diagnostics.push(Diagnostic::error(
-                "expected `fn`, `struct`, `interface`, or `impl`",
+                "expected `fn`, `struct`, `interface`, `impl`, or `extern`",
                 span,
             ));
             parser.synchronize();
@@ -69,6 +86,7 @@ pub fn parse(tokens: &[Token], source: &str) -> ParseOutput {
 
     ParseOutput {
         module: Module {
+            imports,
             items: parser.items,
         },
         diagnostics: parser.diagnostics,
@@ -135,6 +153,66 @@ impl<'a> Parser<'a> {
             ret_type,
             span: Span::new(fn_tok.span.start, body.span.end),
             body,
+        })
+    }
+
+    fn parse_extern_function(&mut self) -> Option<ExternFunctionDecl> {
+        let extern_tok = self.consume(TokenKind::Extern, "expected `extern`")?;
+        let abi = if self.at(TokenKind::Str) {
+            let abi_tok = self.advance().unwrap();
+            let raw = self.slice(abi_tok);
+            Some(raw.trim_matches('"').to_string())
+        } else {
+            None
+        };
+
+        let _fn_tok = self.consume(TokenKind::Fn, "expected `fn` after `extern`")?;
+        let name_tok = self.consume(TokenKind::Ident, "expected function name")?;
+        let name = Ident(self.slice(name_tok));
+
+        self.consume(TokenKind::LParen, "expected `(` after function name")?;
+        let params = self.parse_params();
+        self.consume(TokenKind::RParen, "expected `)` after parameters")?;
+
+        let mut ret_type = None;
+        if self.at(TokenKind::Arrow) {
+            self.advance();
+            ret_type = self.parse_type_annotation();
+        }
+
+        // Validate ABI (v0: only "C" allowed if provided)
+        if let Some(ref abi_str) = abi {
+            if abi_str != "C" {
+                let span = self.peek().map(|t| t.span).or(Some(extern_tok.span));
+                self.diagnostics.push(Diagnostic::error(
+                    format!("unsupported ABI '{}'; only \"C\" is supported", abi_str),
+                    span,
+                ));
+                return None;
+            }
+        }
+
+        // Extern declarations must end with semicolon; bodies are not allowed.
+        if self.at(TokenKind::LBrace) {
+            let span = self.peek().map(|t| t.span);
+            self.diagnostics.push(Diagnostic::error(
+                "extern functions cannot have a body; use `;` to terminate the declaration",
+                span,
+            ));
+            return None;
+        }
+        let end = self.consume(
+            TokenKind::Semicolon,
+            "expected `;` after extern function declaration",
+        )?;
+
+        Some(ExternFunctionDecl {
+            abi,
+            name,
+            params,
+            ret_type,
+            link_name: None,
+            span: Span::new(extern_tok.span.start, end.span.end),
         })
     }
 
@@ -468,7 +546,7 @@ impl<'a> Parser<'a> {
             let ty_tok = self.consume(TokenKind::Ident, "expected type")?;
             let base = self.slice(ty_tok);
 
-            if (base == "Own" || base == "RawPtr") && self.at(TokenKind::Lt) {
+            if (base == "Own" || base == "RawPtr" || base == "Shared") && self.at(TokenKind::Lt) {
                 self.advance();
                 let inner = match self.parse_type_annotation() {
                     Some(ident) => ident.0,
@@ -770,11 +848,16 @@ impl<'a> Parser<'a> {
         let tok = self.advance()?;
         match tok.kind {
             TokenKind::Ident => {
-                // Check if this is a struct literal (Ident followed by `{`)
+                // Parse full path (supports `module::Type`)
+                let ident_expr = self.parse_path_ident(&tok);
                 if self.at(TokenKind::LBrace) {
-                    self.parse_struct_lit(tok)
+                    if let Expr::Ident(name, span) = ident_expr {
+                        self.parse_struct_lit(name, span.start)
+                    } else {
+                        None
+                    }
                 } else {
-                    Some(self.parse_path_ident(&tok))
+                    Some(ident_expr)
                 }
             }
             TokenKind::Int => Some(Expr::Lit(self.literal_from(tok), tok.span)),
@@ -916,10 +999,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_struct_lit(&mut self, name_tok: &'a Token) -> Option<Expr> {
-        let name = Ident(self.slice(name_tok));
-        let start = name_tok.span.start;
-
+    fn parse_struct_lit(&mut self, name: Ident, start: u32) -> Option<Expr> {
         self.consume(TokenKind::LBrace, "expected `{` for struct literal")?;
 
         let mut fields = Vec::new();
@@ -951,7 +1031,7 @@ impl<'a> Parser<'a> {
         match tok.kind {
             TokenKind::Int => Literal::Int(text.parse().unwrap_or(0)),
             TokenKind::Float => Literal::Float(text.parse().unwrap_or(0.0)),
-            TokenKind::Str => Literal::Str(text),
+            TokenKind::Str => Literal::Str(parse_string_literal(&text)),
             TokenKind::Bool => Literal::Bool(matches!(text.as_str(), "true")),
             _ => Literal::Int(0),
         }
@@ -1046,11 +1126,150 @@ impl<'a> Parser<'a> {
             .unwrap_or("")
             .to_string()
     }
+
+    fn parse_import(&mut self) -> Option<Import> {
+        let import_tok = self.consume(TokenKind::Import, "expected 'import'")?;
+        let start = import_tok.span.start;
+
+        // Determine if this is a selective import by looking ahead for "from"
+        let is_selective = self.lookahead_for_from();
+
+        let (kind, path, end) = if is_selective {
+            // Parse: import foo, bar as baz from file_b
+            let mut items = Vec::new();
+
+            loop {
+                let name_tok = self.consume(TokenKind::Ident, "expected symbol name")?;
+                let name = Ident(self.slice(&name_tok));
+                let item_span = name_tok.span;
+
+                let alias = if self.at(TokenKind::As) {
+                    self.advance();
+                    let alias_tok = self.consume(TokenKind::Ident, "expected alias name")?;
+                    Some(Ident(self.slice(&alias_tok)))
+                } else {
+                    None
+                };
+
+                items.push(ImportItem {
+                    name,
+                    alias,
+                    span: item_span,
+                });
+
+                if self.at(TokenKind::Comma) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+
+            self.consume(TokenKind::From, "expected 'from' after import list")?;
+            let path = self.parse_import_path()?;
+            let end = path.span.end;
+            (ImportKind::Selective { items }, path, end)
+        } else {
+            // Parse: import file_b
+            let path = self.parse_import_path()?;
+            let end = path.span.end;
+            (ImportKind::Wildcard, path, end)
+        };
+
+        Some(Import {
+            kind,
+            path,
+            span: Span::new(start, end),
+        })
+    }
+
+    fn parse_import_path(&mut self) -> Option<ImportPath> {
+        // Check for ".." at the start (parent directory import)
+        if self.at(TokenKind::DotDot) {
+            let tok = self.peek()?;
+            self.diagnostics.push(Diagnostic::error(
+                "parent directory imports not allowed (..)",
+                Some(tok.span),
+            ));
+            return None;
+        }
+
+        let first_tok = self.consume(TokenKind::Ident, "expected module name")?;
+        let start = first_tok.span.start;
+        let mut segments = vec![self.slice(&first_tok)];
+        let mut end = first_tok.span.end;
+
+        // Handle paths like "subdir/module"
+        while self.at(TokenKind::Slash) {
+            self.advance();
+
+            // Check for ".." in path segments
+            if self.at(TokenKind::DotDot) {
+                let tok = self.peek()?;
+                self.diagnostics.push(Diagnostic::error(
+                    "parent directory imports not allowed (..)",
+                    Some(tok.span),
+                ));
+                return None;
+            }
+
+            let seg_tok = self.consume(TokenKind::Ident, "expected path segment")?;
+            segments.push(self.slice(&seg_tok));
+            end = seg_tok.span.end;
+        }
+
+        Some(ImportPath {
+            segments,
+            span: Span::new(start, end),
+        })
+    }
+
+    fn lookahead_for_from(&self) -> bool {
+        let mut pos = self.pos;
+        while pos < self.tokens.len() {
+            match self.tokens[pos].kind {
+                TokenKind::From => return true,
+                TokenKind::Semicolon
+                | TokenKind::Eof
+                | TokenKind::Struct
+                | TokenKind::Fn
+                | TokenKind::Interface
+                | TokenKind::Impl => return false,
+                _ => pos += 1,
+            }
+        }
+        false
+    }
+}
+
+fn parse_string_literal(raw: &str) -> String {
+    let trimmed = raw.trim_matches('"');
+    let mut result = String::new();
+    let mut chars = trimmed.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            if let Some(next) = chars.next() {
+                match next {
+                    'n' => result.push('\n'),
+                    't' => result.push('\t'),
+                    'r' => result.push('\r'),
+                    '\\' => result.push('\\'),
+                    '"' => result.push('"'),
+                    other => result.push(other),
+                }
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+
+    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lexer::lex;
     use glyph_core::token::TokenKind;
     use insta::assert_debug_snapshot;
 
@@ -1077,7 +1296,14 @@ mod tests {
         ];
         let out = parse(&tokens, source);
         assert!(out.diagnostics.is_empty());
-        assert_debug_snapshot!(out.module);
+        assert_eq!(out.module.items.len(), 1);
+        match &out.module.items[0] {
+            Item::Function(f) => {
+                assert_eq!(f.name.0, "add");
+                assert_eq!(f.params.len(), 2);
+            }
+            other => panic!("expected function, got {:?}", other),
+        }
     }
 
     // TODO: This test hangs - likely infinite loop in parser when combining
@@ -1135,5 +1361,88 @@ mod tests {
         ];
         let out = parse(&tokens, "fn(");
         assert!(!out.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn parses_extern_function_decl() {
+        let source = r#"extern "C" fn puts(msg: RawPtr<i32>);"#;
+        let lexed = lex(source);
+        let out = parse(&lexed.tokens, source);
+        assert!(
+            out.diagnostics.is_empty(),
+            "unexpected diagnostics: {:?}",
+            out.diagnostics
+        );
+        assert_eq!(out.module.items.len(), 1);
+        match &out.module.items[0] {
+            Item::ExternFunction(f) => {
+                assert_eq!(f.name.0, "puts");
+                assert_eq!(f.abi.as_deref(), Some("C"));
+            }
+            other => panic!("expected extern function, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn rejects_extern_function_body() {
+        let source = r#"extern "C" fn puts() {}"#;
+        let lexed = lex(source);
+        let out = parse(&lexed.tokens, source);
+        assert!(
+            out.diagnostics
+                .iter()
+                .any(|d| d.message.contains("extern functions cannot have a body")),
+            "expected body error, got {:?}",
+            out.diagnostics
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_abi() {
+        let source = r#"extern "sysv64" fn foo();"#;
+        let lexed = lex(source);
+        let out = parse(&lexed.tokens, source);
+        assert!(
+            out.diagnostics
+                .iter()
+                .any(|d| d.message.contains("unsupported ABI")),
+            "expected ABI diagnostic, got {:?}",
+            out.diagnostics
+        );
+    }
+
+    #[test]
+    fn extern_and_normal_function_in_same_module() {
+        let source = r#"extern "C" fn puts(); fn main() { ret }"#;
+        let lexed = lex(source);
+        let out = parse(&lexed.tokens, source);
+        assert!(out.diagnostics.is_empty(), "diags: {:?}", out.diagnostics);
+        assert_eq!(out.module.items.len(), 2);
+    }
+
+    #[test]
+    fn parses_string_literal_content() {
+        let source = r#"fn main() { let msg = "hi\nthere" }"#;
+        let lexed = lex(source);
+        let out = parse(&lexed.tokens, source);
+        assert!(out.diagnostics.is_empty(), "diags: {:?}", out.diagnostics);
+        match &out.module.items[0] {
+            Item::Function(f) => {
+                if let Stmt::Let {
+                    value: Some(expr), ..
+                } = &f.body.stmts[0]
+                {
+                    match expr {
+                        Expr::Lit(Literal::Str(s), _) => {
+                            assert_eq!(s, "hi\nthere");
+                        }
+                        other => panic!("expected string literal, got {:?}", other),
+                    }
+                } else {
+                    panic!("expected let binding");
+                }
+            }
+            other => panic!("expected function, got {:?}", other),
+        }
     }
 }
