@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
+use std::path::Path;
 
 use anyhow::{Result, anyhow, bail};
 use glyph_core::mir::{
@@ -9,6 +10,8 @@ use glyph_core::mir::{
 use glyph_core::types::{EnumType, StructType, Type};
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
+use llvm_sys::target::*;
+use llvm_sys::target_machine::*;
 use llvm_sys::{LLVMBuilder, LLVMContext, LLVMLinkage, LLVMModule};
 
 pub struct CodegenContext {
@@ -1746,6 +1749,87 @@ impl CodegenContext {
             LLVMDisposeExecutionEngine(ee);
 
             Ok(result)
+        }
+    }
+
+    /// Emit an object file (.o) to disk using LLVM's target machine API
+    pub fn emit_object_file(&self, output_path: &Path) -> Result<()> {
+        unsafe {
+            // Initialize all LLVM targets (x86, ARM, etc.)
+            LLVM_InitializeAllTargetInfos();
+            LLVM_InitializeAllTargets();
+            LLVM_InitializeAllTargetMCs();
+            LLVM_InitializeAllAsmPrinters();
+
+            // Get the default target triple for this machine (e.g., "x86_64-apple-darwin24.0.0")
+            let target_triple = LLVMGetDefaultTargetTriple();
+            LLVMSetTarget(self.module, target_triple);
+
+            // Get target from triple
+            let mut target = std::ptr::null_mut();
+            let mut error = std::ptr::null_mut();
+            if LLVMGetTargetFromTriple(target_triple, &mut target, &mut error) != 0 {
+                let err_msg = if error.is_null() {
+                    "unknown error".to_string()
+                } else {
+                    let msg = CStr::from_ptr(error).to_string_lossy().into_owned();
+                    LLVMDisposeMessage(error);
+                    msg
+                };
+                LLVMDisposeMessage(target_triple);
+                return Err(anyhow!("Failed to get target: {}", err_msg));
+            }
+
+            // Create target machine with native CPU features
+            let cpu = CString::new("generic")?;
+            let features = CString::new("")?;
+            let target_machine = LLVMCreateTargetMachine(
+                target,
+                target_triple,
+                cpu.as_ptr(),
+                features.as_ptr(),
+                LLVMCodeGenOptLevel::LLVMCodeGenLevelNone,
+                LLVMRelocMode::LLVMRelocPIC,  // Position-independent code for linking
+                LLVMCodeModel::LLVMCodeModelDefault,
+            );
+
+            if target_machine.is_null() {
+                LLVMDisposeMessage(target_triple);
+                return Err(anyhow!("Failed to create target machine"));
+            }
+
+            // Convert output path to C string
+            let output_path_str = output_path.to_str()
+                .ok_or_else(|| anyhow!("Invalid output path"))?;
+            let output_path_c = CString::new(output_path_str)?;
+
+            // Emit object file to disk
+            let mut error = std::ptr::null_mut();
+            if LLVMTargetMachineEmitToFile(
+                target_machine,
+                self.module,
+                output_path_c.as_ptr() as *mut i8,
+                LLVMCodeGenFileType::LLVMObjectFile,
+                &mut error,
+            ) != 0
+            {
+                let err_msg = if error.is_null() {
+                    "unknown error".to_string()
+                } else {
+                    let msg = CStr::from_ptr(error).to_string_lossy().into_owned();
+                    LLVMDisposeMessage(error);
+                    msg
+                };
+                LLVMDisposeTargetMachine(target_machine);
+                LLVMDisposeMessage(target_triple);
+                return Err(anyhow!("Failed to emit object file: {}", err_msg));
+            }
+
+            // Clean up
+            LLVMDisposeTargetMachine(target_machine);
+            LLVMDisposeMessage(target_triple);
+
+            Ok(())
         }
     }
 }

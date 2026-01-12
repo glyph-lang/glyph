@@ -33,6 +33,8 @@ impl Default for CodegenOptions {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BackendArtifact {
     pub llvm_ir: Option<String>,
+    pub object_file: Option<PathBuf>,
+    pub executable: Option<PathBuf>,
 }
 
 pub trait Backend {
@@ -49,12 +51,17 @@ impl Backend for NullBackend {
                 "; placeholder for {} functions",
                 module.functions.len()
             )),
+            object_file: None,
+            executable: None,
         })
     }
 }
 
 #[cfg(feature = "codegen")]
 pub mod codegen;
+
+#[cfg(feature = "codegen")]
+pub mod linker;
 
 #[cfg(feature = "codegen")]
 pub mod llvm {
@@ -71,7 +78,11 @@ pub mod llvm {
             let mut ctx = CodegenContext::new("glyph_module")?;
             ctx.codegen_module(module)?;
             let ir = ctx.dump_ir();
-            Ok(BackendArtifact { llvm_ir: Some(ir) })
+            Ok(BackendArtifact {
+                llvm_ir: Some(ir),
+                object_file: None,
+                executable: None,
+            })
         }
     }
 }

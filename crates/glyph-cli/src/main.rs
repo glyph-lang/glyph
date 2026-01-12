@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -16,6 +17,8 @@ use walkdir::WalkDir;
 use glyph_backend::NullBackend;
 #[cfg(feature = "codegen")]
 use glyph_backend::llvm::LlvmBackend;
+#[cfg(feature = "codegen")]
+use glyph_backend::{codegen::CodegenContext, linker::{Linker, LinkerOptions}};
 
 #[derive(Parser, Debug)]
 #[command(name = "glyph", version, about = "Glyph language toolchain")]
@@ -199,27 +202,121 @@ fn build(
         return Err(anyhow!("build failed"));
     }
 
-    #[cfg(feature = "codegen")]
-    let backend = LlvmBackend::default();
-    #[cfg(not(feature = "codegen"))]
-    let backend = NullBackend::default();
+    // Determine output file names based on input path
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| anyhow!("Invalid input file path"))?;
 
-    let opts = CodegenOptions {
-        emit: emit.into(),
-        link_libs: link_lib,
-        link_search_paths: link_search,
-        ..Default::default()
-    };
-    let artifact = backend.emit(&output.mir, &opts)?;
-    if let Some(ir) = artifact.llvm_ir {
-        println!("{}", ir);
+    match emit {
+        EmitTarget::Ll => {
+            // Just emit LLVM IR to stdout (existing behavior)
+            #[cfg(feature = "codegen")]
+            {
+                let backend = LlvmBackend::default();
+                let opts = CodegenOptions {
+                    emit: EmitKind::LlvmIr,
+                    link_libs: link_lib,
+                    link_search_paths: link_search,
+                    ..Default::default()
+                };
+                let artifact = backend.emit(&output.mir, &opts)?;
+                if let Some(ir) = artifact.llvm_ir {
+                    println!("{}", ir);
+                }
+            }
+            #[cfg(not(feature = "codegen"))]
+            {
+                let backend = NullBackend::default();
+                let opts = CodegenOptions::default();
+                let artifact = backend.emit(&output.mir, &opts)?;
+                if let Some(ir) = artifact.llvm_ir {
+                    println!("{}", ir);
+                }
+            }
+        }
+        EmitTarget::Obj => {
+            // Generate object file
+            #[cfg(feature = "codegen")]
+            {
+                let obj_path = PathBuf::from(format!("{}.o", stem));
+                let mut ctx = CodegenContext::new("glyph_module")?;
+                ctx.codegen_module(&output.mir)?;
+                ctx.emit_object_file(&obj_path)?;
+                println!("Object file written to: {}", obj_path.display());
+            }
+            #[cfg(not(feature = "codegen"))]
+            {
+                return Err(anyhow!(
+                    "Object file emission requires the 'codegen' feature"
+                ));
+            }
+        }
+        EmitTarget::Exe => {
+            // Generate object file, then link to executable
+            #[cfg(feature = "codegen")]
+            {
+                let obj_path = PathBuf::from(format!("{}.o", stem));
+                let exe_path = PathBuf::from(stem);
+
+                // Generate object file using LLVM
+                let mut ctx = CodegenContext::new("glyph_module")?;
+                ctx.codegen_module(&output.mir)?;
+                ctx.emit_object_file(&obj_path)?;
+
+                // Link to executable
+                let linker = Linker::new();
+                let runtime_lib = Linker::get_runtime_lib_path();
+
+                let linker_opts = LinkerOptions {
+                    output_path: exe_path.clone(),
+                    object_files: vec![obj_path.clone()],
+                    link_libs: link_lib,
+                    link_search_paths: link_search,
+                    runtime_lib_path: runtime_lib,
+                };
+
+                linker.link(&linker_opts)?;
+
+                // Clean up intermediate object file
+                let _ = std::fs::remove_file(obj_path);
+
+                println!("Executable written to: {}", exe_path.display());
+            }
+            #[cfg(not(feature = "codegen"))]
+            {
+                return Err(anyhow!(
+                    "Executable generation requires the 'codegen' feature"
+                ));
+            }
+        }
     }
+
     Ok(())
 }
 
 fn run(path: &PathBuf) -> Result<()> {
+    // Build the executable
     build(path, EmitTarget::Exe, Vec::new(), Vec::new())?;
-    println!("run stub: execution not implemented yet");
+
+    // Determine the executable name from the source file
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| anyhow!("Invalid input file path"))?;
+    let exe_path = PathBuf::from(stem);
+
+    // Execute the program
+    let status = Command::new(format!("./{}", exe_path.display()))
+        .status()
+        .map_err(|e| anyhow!("Failed to execute program: {}", e))?;
+
+    // Check exit status
+    if !status.success() {
+        let code = status.code().unwrap_or(-1);
+        return Err(anyhow!("Program exited with status code: {}", code));
+    }
+
     Ok(())
 }
 
