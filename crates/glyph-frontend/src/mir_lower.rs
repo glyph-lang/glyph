@@ -225,6 +225,30 @@ fn collect_function_signatures(
         }
     }
 
+    // Also make local functions/externs addressable via fully-qualified module path.
+    if let Some(module_id) = &resolver.current_module {
+        let module_prefix = module_id.replace('/', "::");
+        let local_names: Vec<String> = module
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Function(f) => Some(f.name.0.clone()),
+                Item::ExternFunction(f) => Some(f.name.0.clone()),
+                _ => None,
+            })
+            .collect();
+
+        for name in local_names {
+            let qualified = format!("{}::{}", module_prefix, name);
+            if signatures.contains_key(&qualified) {
+                continue;
+            }
+            if let Some(sig) = signatures.get(&name).cloned() {
+                signatures.insert(qualified, sig);
+            }
+        }
+    }
+
     // Enum variant constructors act like functions returning the enum type.
     for (enum_name, enum_ty) in &resolver.enum_types {
         for (idx, variant) in enum_ty.variants.iter().enumerate() {
@@ -351,6 +375,60 @@ fn collect_function_signatures(
                         _ => {}
                     }
                 }
+            }
+        }
+
+        // Built-in std helpers needed for print/println even without explicit imports.
+        if all_modules.module_symbols.contains_key("std/io") {
+            let mut insert_builtin = |key: &str, params: Vec<Option<Type>>, ret: Option<Type>, abi: Option<String>| {
+                if signatures.contains_key(key) {
+                    return;
+                }
+                signatures.insert(
+                    key.to_string(),
+                    FnSig {
+                        params,
+                        ret,
+                        abi,
+                        target_name: key
+                            .split("::")
+                            .last()
+                            .unwrap_or(key)
+                            .to_string(),
+                        enum_ctor: None,
+                    },
+                );
+            };
+
+            insert_builtin(
+                "std::io::raw_write",
+                vec![
+                    Some(Type::I32),
+                    Some(Type::RawPtr(Box::new(Type::U8))),
+                    Some(Type::U32),
+                ],
+                Some(Type::I32),
+                Some("C".into()),
+            );
+
+            let stdout_ref = Type::Ref(Box::new(Type::Named("Stdout".into())), Mutability::Mutable);
+            let fmt_builtins = [
+                ("std::fmt::fmt_i32", Type::I32),
+                ("std::fmt::fmt_u32", Type::U32),
+                ("std::fmt::fmt_i64", Type::I64),
+                ("std::fmt::fmt_u64", Type::U64),
+                ("std::fmt::fmt_bool", Type::Bool),
+                ("std::fmt::fmt_str", Type::Str),
+                ("std::fmt::fmt_char", Type::Char),
+            ];
+
+            for (key, ty) in fmt_builtins {
+                insert_builtin(
+                    key,
+                    vec![Some(ty.clone()), Some(stdout_ref.clone())],
+                    None,
+                    None,
+                );
             }
         }
     }
@@ -1211,6 +1289,15 @@ enum PrintSegment<'a> {
     Expr(&'a Expr, Span),
 }
 
+fn resolve_builtin_target(ctx: &mut LowerCtx<'_>, key: &str, span: Span) -> Option<String> {
+    if let Some(sig) = ctx.fn_sigs.get(key) {
+        Some(sig.target_name.clone())
+    } else {
+        ctx.error(format!("unknown function '{}'", key), Some(span));
+        None
+    }
+}
+
 fn lower_print_builtin<'a>(
     ctx: &mut LowerCtx<'a>,
     args: &'a [Expr],
@@ -1275,6 +1362,7 @@ fn lower_print_builtin<'a>(
     for seg in segments {
         match seg {
             PrintSegment::Literal(s) => {
+                let raw_write = resolve_builtin_target(ctx, "std::io::raw_write", span)?;
                 let str_local = ctx.fresh_local(None);
                 ctx.locals[str_local.0 as usize].ty = Some(Type::Str);
                 let global = ctx.fresh_string_global();
@@ -1290,7 +1378,7 @@ fn lower_print_builtin<'a>(
                 ctx.push_inst(MirInst::Assign {
                     local: out,
                     value: Rvalue::Call {
-                        name: "std::io::raw_write".into(),
+                        name: raw_write,
                         args: vec![
                             MirValue::Int(fd),
                             MirValue::Local(str_local),
@@ -1320,84 +1408,91 @@ fn lower_print_builtin<'a>(
 
                 match val_ty {
                     Some(Type::I32) => {
+                        let fmt = resolve_builtin_target(ctx, "std::fmt::fmt_i32", seg_span)?;
                         let out = ctx.fresh_local(None);
                         ctx.locals[out.0 as usize].ty = Some(Type::Void);
                         ctx.push_inst(MirInst::Assign {
                             local: out,
                             value: Rvalue::Call {
-                                name: "std::fmt::fmt_i32".into(),
+                                name: fmt,
                                 args: vec![val.clone(), MirValue::Local(writer_ref)],
                             },
                         });
                         last = Some(out);
                     }
                     Some(Type::U32) => {
+                        let fmt = resolve_builtin_target(ctx, "std::fmt::fmt_u32", seg_span)?;
                         let out = ctx.fresh_local(None);
                         ctx.locals[out.0 as usize].ty = Some(Type::Void);
                         ctx.push_inst(MirInst::Assign {
                             local: out,
                             value: Rvalue::Call {
-                                name: "std::fmt::fmt_u32".into(),
+                                name: fmt,
                                 args: vec![val.clone(), MirValue::Local(writer_ref)],
                             },
                         });
                         last = Some(out);
                     }
                     Some(Type::I64) => {
+                        let fmt = resolve_builtin_target(ctx, "std::fmt::fmt_i64", seg_span)?;
                         let out = ctx.fresh_local(None);
                         ctx.locals[out.0 as usize].ty = Some(Type::Void);
                         ctx.push_inst(MirInst::Assign {
                             local: out,
                             value: Rvalue::Call {
-                                name: "std::fmt::fmt_i64".into(),
+                                name: fmt,
                                 args: vec![val.clone(), MirValue::Local(writer_ref)],
                             },
                         });
                         last = Some(out);
                     }
                     Some(Type::U64) => {
+                        let fmt = resolve_builtin_target(ctx, "std::fmt::fmt_u64", seg_span)?;
                         let out = ctx.fresh_local(None);
                         ctx.locals[out.0 as usize].ty = Some(Type::Void);
                         ctx.push_inst(MirInst::Assign {
                             local: out,
                             value: Rvalue::Call {
-                                name: "std::fmt::fmt_u64".into(),
+                                name: fmt,
                                 args: vec![val.clone(), MirValue::Local(writer_ref)],
                             },
                         });
                         last = Some(out);
                     }
                     Some(Type::Bool) => {
+                        let fmt = resolve_builtin_target(ctx, "std::fmt::fmt_bool", seg_span)?;
                         let out = ctx.fresh_local(None);
                         ctx.locals[out.0 as usize].ty = Some(Type::Void);
                         ctx.push_inst(MirInst::Assign {
                             local: out,
                             value: Rvalue::Call {
-                                name: "std::fmt::fmt_bool".into(),
+                                name: fmt,
                                 args: vec![val.clone(), MirValue::Local(writer_ref)],
                             },
                         });
                         last = Some(out);
                     }
                     Some(Type::Char) => {
+                        let fmt = resolve_builtin_target(ctx, "std::fmt::fmt_char", seg_span)?;
                         let out = ctx.fresh_local(None);
                         ctx.locals[out.0 as usize].ty = Some(Type::Void);
                         ctx.push_inst(MirInst::Assign {
                             local: out,
                             value: Rvalue::Call {
-                                name: "std::fmt::fmt_char".into(),
+                                name: fmt,
                                 args: vec![val.clone(), MirValue::Local(writer_ref)],
                             },
                         });
                         last = Some(out);
                     }
                     Some(Type::Str) => {
+                        let fmt = resolve_builtin_target(ctx, "std::fmt::fmt_str", seg_span)?;
                         let out = ctx.fresh_local(None);
                         ctx.locals[out.0 as usize].ty = Some(Type::Void);
                         ctx.push_inst(MirInst::Assign {
                             local: out,
                             value: Rvalue::Call {
-                                name: "std::fmt::fmt_str".into(),
+                                name: fmt,
                                 args: vec![val.clone(), MirValue::Local(writer_ref)],
                             },
                         });
@@ -1406,7 +1501,8 @@ fn lower_print_builtin<'a>(
                     Some(Type::Named(struct_name)) => {
                         // Resolve Format impl
                         // Call free function fmt_<type> if available.
-                        let fmt_fn = format!("std::fmt::fmt_{}", struct_name);
+                        let fmt_fn_key = format!("std::fmt::fmt_{}", struct_name);
+                        let fmt_fn = resolve_builtin_target(ctx, &fmt_fn_key, seg_span)?;
                         let out = ctx.fresh_local(None);
                         ctx.locals[out.0 as usize].ty = Some(Type::Void);
 

@@ -31,7 +31,7 @@ pub fn parse(tokens: &[Token], source: &str) -> ParseOutput {
     let mut imports = Vec::new();
 
     // Parse imports first (must come before items)
-    while parser.at(TokenKind::Import) {
+    while parser.at(TokenKind::Import) || parser.at(TokenKind::From) {
         match parser.parse_import() {
             Some(import) => imports.push(import),
             None => parser.synchronize(),
@@ -1390,6 +1390,60 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_import(&mut self) -> Option<Import> {
+        if self.at(TokenKind::From) {
+            let from_tok = self.consume(TokenKind::From, "expected 'from'")?;
+            let start = from_tok.span.start;
+            let path = self.parse_import_path()?;
+
+            self.consume(TokenKind::Import, "expected 'import' after module path")?;
+
+            let mut items = Vec::new();
+
+            let first_tok = self.consume(TokenKind::Ident, "expected symbol name")?;
+            let mut end_span = first_tok.span.end;
+            let mut alias = None;
+            if self.at(TokenKind::As) {
+                self.advance();
+                let alias_tok = self.consume(TokenKind::Ident, "expected alias name")?;
+                end_span = alias_tok.span.end;
+                alias = Some(Ident(self.slice(&alias_tok)));
+            }
+
+            items.push(ImportItem {
+                name: Ident(self.slice(&first_tok)),
+                alias,
+                span: first_tok.span,
+            });
+
+            while self.at(TokenKind::Comma) {
+                self.advance();
+                let name_tok = self.consume(TokenKind::Ident, "expected symbol name")?;
+                let name = Ident(self.slice(&name_tok));
+                end_span = name_tok.span.end;
+
+                let alias = if self.at(TokenKind::As) {
+                    self.advance();
+                    let alias_tok = self.consume(TokenKind::Ident, "expected alias name")?;
+                    end_span = alias_tok.span.end;
+                    Some(Ident(self.slice(&alias_tok)))
+                } else {
+                    None
+                };
+
+                items.push(ImportItem {
+                    name,
+                    alias,
+                    span: name_tok.span,
+                });
+            }
+
+            return Some(Import {
+                kind: ImportKind::Selective { items },
+                path,
+                span: Span::new(start, end_span),
+            });
+        }
+
         let import_tok = self.consume(TokenKind::Import, "expected 'import'")?;
         let start = import_tok.span.start;
 
@@ -1750,6 +1804,41 @@ fn main() {
         let out = parse(&lexed.tokens, source);
         assert!(out.diagnostics.is_empty(), "diags: {:?}", out.diagnostics);
         assert_eq!(out.module.items.len(), 2);
+    }
+
+    #[test]
+    fn parses_from_import_statement() {
+        let source = r#"from std import println
+fn main() { println("hi") }"#;
+        let lexed = lex(source);
+        let out = parse(&lexed.tokens, source);
+        assert!(out.diagnostics.is_empty(), "diags: {:?}", out.diagnostics);
+        assert_eq!(out.module.imports.len(), 1);
+        match &out.module.imports[0].kind {
+            ImportKind::Selective { items } => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].name.0, "println");
+            }
+            other => panic!("expected selective import, got {:?}", other),
+        }
+        assert_eq!(out.module.imports[0].path.segments, vec!["std"]);
+    }
+
+    #[test]
+    fn parses_from_import_with_alias() {
+        let source = r#"from std import println as p
+fn main() { p("hi") }"#;
+        let lexed = lex(source);
+        let out = parse(&lexed.tokens, source);
+        assert!(out.diagnostics.is_empty(), "diags: {:?}", out.diagnostics);
+        match &out.module.imports[0].kind {
+            ImportKind::Selective { items } => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].name.0, "println");
+                assert_eq!(items[0].alias.as_ref().map(|a| a.0.as_str()), Some("p"));
+            }
+            other => panic!("expected selective import, got {:?}", other),
+        }
     }
 
     #[test]

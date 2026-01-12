@@ -500,6 +500,13 @@ impl ResolverContext {
         let module_path = parts[..parts.len() - 1].join("/");
         let symbol_name = parts.last().unwrap().to_string();
 
+        // Allow fully-qualified references to the current module without needing imports.
+        if self.current_module.as_deref() == Some(&module_path) {
+            if let Some(resolved) = self.resolve_in_module(&module_path, &symbol_name) {
+                return Some(resolved);
+            }
+        }
+
         // Check if this module (or a prefix) is available via wildcard imports
         if let Some(scope) = &self.import_scope {
             if scope.wildcard_modules.contains(&module_path)
@@ -508,6 +515,15 @@ impl ResolverContext {
                     .iter()
                     .any(|m| module_path.starts_with(&format!("{}/", m)))
             {
+                if let Some(resolved) = self.resolve_in_module(&module_path, &symbol_name) {
+                    return Some(resolved);
+                }
+            }
+        }
+
+        // Fallback: if the module exists in the program graph, allow absolute qualified access.
+        if let Some(all) = &self.all_modules {
+            if all.module_symbols.contains_key(&module_path) {
                 return self.resolve_in_module(&module_path, &symbol_name);
             }
         }

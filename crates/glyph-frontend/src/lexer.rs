@@ -76,6 +76,33 @@ pub fn lex(source: &str) -> LexOutput {
                     break;
                 }
             },
+            b'/' => {
+                if i + 1 < bytes.len() {
+                    match bytes[i + 1] {
+                        b'/' => {
+                            i = consume_line_comment(bytes, i + 2);
+                            continue;
+                        }
+                        b'*' => match consume_block_comment(bytes, i) {
+                            Ok(end) => {
+                                i = end;
+                                continue;
+                            }
+                            Err(pos) => {
+                                diags.push(Diagnostic::error(
+                                    "unterminated block comment",
+                                    Some(Span::new(start, pos as u32)),
+                                ));
+                                break;
+                            }
+                        },
+                        _ => {}
+                    }
+                }
+
+                toks.push(Token::new(TokenKind::Slash, Span::new(start, (i + 1) as u32)));
+                i += 1;
+            }
             _ => {
                 if let Some((kind, end)) = consume_operator(bytes, i) {
                     toks.push(Token::new(kind, Span::new(start, end as u32)));
@@ -196,6 +223,28 @@ fn consume_char(bytes: &[u8], start: usize) -> Result<usize, usize> {
     Ok(i + 1)
 }
 
+fn consume_line_comment(bytes: &[u8], start: usize) -> usize {
+    let mut i = start;
+    while i < bytes.len() {
+        if bytes[i] == b'\n' {
+            break;
+        }
+        i += 1;
+    }
+    i
+}
+
+fn consume_block_comment(bytes: &[u8], start: usize) -> Result<usize, usize> {
+    let mut i = start + 2;
+    while i + 1 < bytes.len() {
+        if bytes[i] == b'*' && bytes[i + 1] == b'/' {
+            return Ok(i + 2);
+        }
+        i += 1;
+    }
+    Err(bytes.len())
+}
+
 fn consume_interpolated_string(bytes: &[u8], start: usize) -> Result<usize, usize> {
     let mut i = start + 2; // skip $" prefix
     while i < bytes.len() {
@@ -277,6 +326,36 @@ mod tests {
         let out = lex(src);
         assert!(out.diagnostics.is_empty());
         assert_debug_snapshot!(out.tokens);
+    }
+
+    #[test]
+    fn skips_line_and_block_comments() {
+        let src = "let a = 1 // line\n /* block */ let b = 2";
+        let out = lex(src);
+        assert!(out.diagnostics.is_empty());
+        let kinds: Vec<TokenKind> = out.tokens.into_iter().map(|t| t.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Let,
+                TokenKind::Ident,
+                TokenKind::Eq,
+                TokenKind::Int,
+                TokenKind::Let,
+                TokenKind::Ident,
+                TokenKind::Eq,
+                TokenKind::Int,
+                TokenKind::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn reports_unterminated_block_comment() {
+        let src = "let a = /* oops";
+        let out = lex(src);
+        assert!(!out.diagnostics.is_empty());
+        assert_eq!(out.diagnostics[0].severity, Severity::Error);
     }
 
     #[test]

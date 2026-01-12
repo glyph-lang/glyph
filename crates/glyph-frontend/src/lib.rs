@@ -195,4 +195,18 @@ mod tests {
             )))
         ));
     }
-}
+
+    #[test]
+    fn compiles_std_println_from_import() {
+        let source = "from std import println\nfn main() { println(\"hi\") }";
+        let output = compile_source(
+            source,
+            FrontendOptions {
+                emit_mir: true,
+                include_std: true,
+            },
+        );
+        assert!(output.diagnostics.is_empty(), "diags: {:?}", output.diagnostics);
+    }
+ }
+
