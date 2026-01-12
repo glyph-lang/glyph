@@ -6,7 +6,7 @@ use glyph_core::mir::{
     BlockId, LocalId, MirBlock, MirExternFunction, MirFunction, MirInst, MirModule, MirValue,
     Rvalue,
 };
-use glyph_core::types::{StructType, Type};
+use glyph_core::types::{EnumType, StructType, Type};
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
 use llvm_sys::{LLVMBuilder, LLVMContext, LLVMLinkage, LLVMModule};
@@ -17,6 +17,8 @@ pub struct CodegenContext {
     builder: *mut LLVMBuilder,
     struct_types: HashMap<String, LLVMTypeRef>,
     struct_layouts: HashMap<String, StructType>,
+    enum_types: HashMap<String, LLVMTypeRef>,
+    enum_layouts: HashMap<String, EnumType>,
     malloc_fn: Option<LLVMValueRef>,
     free_fn: Option<LLVMValueRef>,
     string_globals: HashMap<String, LLVMValueRef>,
@@ -36,6 +38,8 @@ impl CodegenContext {
                 builder,
                 struct_types: HashMap::new(),
                 struct_layouts: HashMap::new(),
+                enum_types: HashMap::new(),
+                enum_layouts: HashMap::new(),
                 malloc_fn: None,
                 free_fn: None,
                 string_globals: HashMap::new(),
@@ -57,8 +61,7 @@ impl CodegenContext {
         }
     }
 
-    fn register_struct_types(&mut self, mir_module: &MirModule) -> Result<()> {
-        // First pass: create named struct types
+    fn create_named_types(&mut self, mir_module: &MirModule) -> Result<()> {
         for (name, layout) in &mir_module.struct_types {
             let name_c = CString::new(name.as_str())?;
             let llvm_ty = unsafe { LLVMStructCreateNamed(self.context, name_c.as_ptr()) };
@@ -66,7 +69,17 @@ impl CodegenContext {
             self.struct_layouts.insert(name.clone(), layout.clone());
         }
 
-        // Second pass: set struct bodies
+        for (name, layout) in &mir_module.enum_types {
+            let name_c = CString::new(name.as_str())?;
+            let llvm_ty = unsafe { LLVMStructCreateNamed(self.context, name_c.as_ptr()) };
+            self.enum_types.insert(name.clone(), llvm_ty);
+            self.enum_layouts.insert(name.clone(), layout.clone());
+        }
+
+        Ok(())
+    }
+
+    fn register_struct_types(&mut self, mir_module: &MirModule) -> Result<()> {
         for (name, layout) in &mir_module.struct_types {
             let llvm_ty = *self
                 .struct_types
@@ -86,11 +99,45 @@ impl CodegenContext {
         Ok(())
     }
 
+    fn register_enum_types(&mut self, mir_module: &MirModule) -> Result<()> {
+        for (name, layout) in &mir_module.enum_types {
+            let llvm_ty = *self
+                .enum_types
+                .get(name)
+                .ok_or_else(|| anyhow!("missing llvm type for enum {}", name))?;
+
+            let mut field_tys: Vec<LLVMTypeRef> = Vec::new();
+            // tag
+            field_tys.push(unsafe { LLVMInt32TypeInContext(self.context) });
+            for variant in &layout.variants {
+                let ty = if let Some(payload) = &variant.payload {
+                    self.get_llvm_type(payload)?
+                } else {
+                    unsafe { LLVMInt8TypeInContext(self.context) }
+                };
+                field_tys.push(ty);
+            }
+
+            unsafe {
+                LLVMStructSetBody(llvm_ty, field_tys.as_mut_ptr(), field_tys.len() as u32, 0);
+            }
+        }
+
+        Ok(())
+    }
+
     fn get_struct_type(&self, name: &str) -> Result<LLVMTypeRef> {
         self.struct_types
             .get(name)
             .copied()
             .ok_or_else(|| anyhow!("unknown struct type {}", name))
+    }
+
+    fn get_enum_type(&self, name: &str) -> Result<LLVMTypeRef> {
+        self.enum_types
+            .get(name)
+            .copied()
+            .ok_or_else(|| anyhow!("unknown enum type {}", name))
     }
 
     fn get_llvm_type(&self, ty: &Type) -> Result<LLVMTypeRef> {
@@ -105,9 +152,12 @@ impl CodegenContext {
                 Type::F32 => LLVMFloatTypeInContext(self.context),
                 Type::F64 => LLVMDoubleTypeInContext(self.context),
                 Type::Bool => LLVMInt1TypeInContext(self.context),
+                Type::Char => LLVMInt32TypeInContext(self.context),
                 Type::Str => LLVMPointerType(LLVMInt8TypeInContext(self.context), 0),
+                Type::String => LLVMPointerType(LLVMInt8TypeInContext(self.context), 0),
                 Type::Void => LLVMVoidTypeInContext(self.context),
                 Type::Named(name) => self.get_struct_type(name)?,
+                Type::Enum(name) => self.get_enum_type(name)?,
                 Type::Ref(inner, _) => {
                     // TODO(Phase 6): Implement proper reference type support
                     // References should lower to LLVM pointer types
@@ -128,7 +178,9 @@ impl CodegenContext {
     }
 
     pub fn codegen_module(&mut self, mir_module: &MirModule) -> Result<()> {
+        self.create_named_types(mir_module)?;
         self.register_struct_types(mir_module)?;
+        self.register_enum_types(mir_module)?;
 
         // Declare all functions up-front so calls can reference any order.
         let functions = self.declare_functions(mir_module)?;
@@ -389,6 +441,12 @@ impl CodegenContext {
                     .ok_or_else(|| anyhow!("undefined local {:?}", local))?;
                 self.codegen_drop_shared_slot(*slot, inner)
             }
+            Type::String => {
+                let slot = local_map
+                    .get(&local)
+                    .ok_or_else(|| anyhow!("undefined local {:?}", local))?;
+                self.codegen_drop_string_slot(*slot)
+            }
             _ => Ok(()),
         }
     }
@@ -537,6 +595,45 @@ impl CodegenContext {
 
             Ok(())
         }
+    }
+
+    fn codegen_drop_string_slot(&mut self, slot: LLVMValueRef) -> Result<()> {
+        unsafe {
+            let ptr_ty = self.get_llvm_type(&Type::String)?;
+            let load_name = CString::new("string.ptr")?;
+            let ptr_val = LLVMBuildLoad2(self.builder, ptr_ty, slot, load_name.as_ptr());
+            let null_ptr = LLVMConstPointerNull(ptr_ty);
+            let cmp_name = CString::new("string.isnull")?;
+            let is_null = LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                ptr_val,
+                null_ptr,
+                cmp_name.as_ptr(),
+            );
+
+            let func = LLVMGetBasicBlockParent(LLVMGetInsertBlock(self.builder));
+            let drop_bb = LLVMAppendBasicBlockInContext(
+                self.context,
+                func,
+                CString::new("string.drop")?.as_ptr(),
+            );
+            let cont_bb = LLVMAppendBasicBlockInContext(
+                self.context,
+                func,
+                CString::new("string.drop.cont")?.as_ptr(),
+            );
+
+            LLVMBuildCondBr(self.builder, is_null, cont_bb, drop_bb);
+
+            LLVMPositionBuilderAtEnd(self.builder, drop_bb);
+            self.codegen_free(ptr_val)?;
+            LLVMBuildStore(self.builder, null_ptr, slot);
+            LLVMBuildBr(self.builder, cont_bb);
+
+            LLVMPositionBuilderAtEnd(self.builder, cont_bb);
+        }
+        Ok(())
     }
 
     fn codegen_string_literal(&mut self, content: &str, global_name: &str) -> Result<LLVMValueRef> {
@@ -723,6 +820,119 @@ impl CodegenContext {
                     field_name: _,
                     field_index,
                 } => self.codegen_field_access(*base, *field_index as usize, func, local_map),
+                Rvalue::EnumConstruct {
+                    enum_name,
+                    variant_index,
+                    payload,
+                } => {
+                    let llvm_enum = self.get_enum_type(enum_name)?;
+                    let layout = self
+                        .enum_layouts
+                        .get(enum_name)
+                        .ok_or_else(|| anyhow!("missing enum layout for {}", enum_name))?;
+
+                    let alloca_name = CString::new(format!("{}_tmp", enum_name))?;
+                    let alloca =
+                        LLVMBuildAlloca(self.builder, llvm_enum, alloca_name.as_ptr());
+
+                    // Store tag at field 0
+                    let tag_ptr = LLVMBuildStructGEP2(
+                        self.builder,
+                        llvm_enum,
+                        alloca,
+                        0,
+                        CString::new("enum.tag").unwrap().as_ptr(),
+                    );
+                    let tag_val = LLVMConstInt(
+                        LLVMInt32TypeInContext(self.context),
+                        *variant_index as u64,
+                        0,
+                    );
+                    LLVMBuildStore(self.builder, tag_val, tag_ptr);
+
+                    // Store payload into its slot (index offset by 1)
+                    let field_index = 1 + *variant_index;
+                    let field_ptr = LLVMBuildStructGEP2(
+                        self.builder,
+                        llvm_enum,
+                        alloca,
+                        field_index,
+                        CString::new("enum.payload").unwrap().as_ptr(),
+                    );
+
+                    let variant_ty = layout
+                        .variants
+                        .get(*variant_index as usize)
+                        .ok_or_else(|| anyhow!("invalid variant index for {}", enum_name))?
+                        .payload
+                        .clone();
+
+                    if let Some(val) = payload {
+                        let llvm_val = self.codegen_value(val, func, local_map)?;
+                        LLVMBuildStore(self.builder, llvm_val, field_ptr);
+                    } else {
+                        let placeholder_ty = if let Some(ty) = variant_ty.as_ref() {
+                            self.get_llvm_type(ty)?
+                        } else {
+                            LLVMInt8TypeInContext(self.context)
+                        };
+                        let zero = if let Some(ty) = variant_ty.as_ref() {
+                            let llvm_ty = self.get_llvm_type(ty)?;
+                            LLVMConstNull(llvm_ty)
+                        } else {
+                            LLVMConstInt(placeholder_ty, 0, 0)
+                        };
+                        LLVMBuildStore(self.builder, zero, field_ptr);
+                    }
+
+                    let load_name = CString::new(format!("{}_val", enum_name))?;
+                    Ok(LLVMBuildLoad2(
+                        self.builder,
+                        llvm_enum,
+                        alloca,
+                        load_name.as_ptr(),
+                    ))
+                }
+                Rvalue::EnumTag { base } => {
+                    let (enum_name, enum_ptr) = self.enum_pointer_for_local(*base, func, local_map)?;
+                    let llvm_enum = self.get_enum_type(&enum_name)?;
+                    let tag_ptr = LLVMBuildStructGEP2(
+                        self.builder,
+                        llvm_enum,
+                        enum_ptr,
+                        0,
+                        CString::new("enum.tag.ptr")?.as_ptr(),
+                    );
+                    let tag_ty = LLVMInt32TypeInContext(self.context);
+                    Ok(LLVMBuildLoad2(
+                        self.builder,
+                        tag_ty,
+                        tag_ptr,
+                        CString::new("enum.tag.load")?.as_ptr(),
+                    ))
+                }
+                Rvalue::EnumPayload {
+                    base,
+                    variant_index,
+                    payload_type,
+                } => {
+                    let (enum_name, enum_ptr) = self.enum_pointer_for_local(*base, func, local_map)?;
+                    let llvm_enum = self.get_enum_type(&enum_name)?;
+                    let payload_ptr = LLVMBuildStructGEP2(
+                        self.builder,
+                        llvm_enum,
+                        enum_ptr,
+                        1 + *variant_index,
+                        CString::new("enum.payload.ptr")?.as_ptr(),
+                    );
+                    let llvm_payload_ty = self.get_llvm_type(payload_type)?;
+                    Ok(LLVMBuildLoad2(
+                        self.builder,
+                        llvm_payload_ty,
+                        payload_ptr,
+                        CString::new("enum.payload")?.as_ptr(),
+                    ))
+                }
                 Rvalue::Call { name, args } => {
                     let callee = functions
                         .get(name)
@@ -752,9 +962,13 @@ impl CodegenContext {
                         if let Some(Some(param_ty)) = param_types.get(idx) {
                             if is_extern {
                                 if let Some(arg_ty) = self.mir_value_type(arg, func) {
-                                    if matches!(arg_ty, Type::Str)
+                                    if (matches!(arg_ty, Type::Str)
                                         && (matches!(param_ty, Type::RawPtr(_))
-                                            || matches!(param_ty, Type::Str))
+                                            || matches!(param_ty, Type::Str)))
+                                        || (matches!(arg_ty, Type::String)
+                                            && (matches!(param_ty, Type::RawPtr(_))
+                                                || matches!(param_ty, Type::Str)
+                                                || matches!(param_ty, Type::String)))
                                     {
                                         let expected_ty = self.get_llvm_type(param_ty)?;
                                         if LLVMTypeOf(arg_val) != expected_ty {
@@ -1427,6 +1641,36 @@ impl CodegenContext {
         }
     }
 
+    fn enum_pointer_for_local(
+        &mut self,
+        local: LocalId,
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+    ) -> Result<(String, LLVMValueRef)> {
+        let mut ty = func
+            .locals
+            .get(local.0 as usize)
+            .and_then(|l| l.ty.clone())
+            .ok_or_else(|| anyhow!("enum base has unknown type"))?;
+        let mut ptr = *local_map
+            .get(&local)
+            .ok_or_else(|| anyhow!("undefined local {:?}", local))?;
+
+        loop {
+            match ty.clone() {
+                Type::Enum(name) => return Ok((name, ptr)),
+                Type::Ref(inner, mutability) => {
+                    let ref_ty = Type::Ref(inner.clone(), mutability);
+                    let load_ty = self.get_llvm_type(&ref_ty)?;
+                    let load_name = CString::new("deref.enum")?;
+                    ptr = unsafe { LLVMBuildLoad2(self.builder, load_ty, ptr, load_name.as_ptr()) };
+                    ty = *inner;
+                }
+                _ => bail!("base is not an enum"),
+            }
+        }
+    }
+
     /// Execute a function via JIT for testing purposes
     /// Note: This creates a clone of the module for JIT execution
     pub fn jit_execute_i32(&self, fn_name: &str) -> Result<i32> {
@@ -1536,6 +1780,7 @@ mod tests {
         let mut ctx = CodegenContext::new("test").unwrap();
         let mir = MirModule {
             struct_types: HashMap::new(),
+            enum_types: HashMap::new(),
             functions: vec![MirFunction {
                 name: "main".into(),
                 ret_type: Some(Type::I32),
@@ -1558,6 +1803,7 @@ mod tests {
         let mut ctx = CodegenContext::new("test").unwrap();
         let mir = MirModule {
             struct_types: HashMap::new(),
+            enum_types: HashMap::new(),
             functions: vec![MirFunction {
                 name: "main".into(),
                 ret_type: Some(Type::I32),
@@ -1588,6 +1834,7 @@ mod tests {
 
         let mir = MirModule {
             struct_types,
+            enum_types: HashMap::new(),
             functions: vec![MirFunction {
                 name: "main".into(),
                 ret_type: Some(Type::Named("Point".into())),
@@ -1636,6 +1883,7 @@ mod tests {
         let mut ctx = CodegenContext::new("test").unwrap();
         let mir = MirModule {
             struct_types: HashMap::new(),
+            enum_types: HashMap::new(),
             extern_functions: vec![MirExternFunction {
                 name: "foo".into(),
                 ret_type: Some(Type::I32),
@@ -1686,6 +1934,7 @@ mod tests {
 
         let mir = MirModule {
             struct_types,
+            enum_types: HashMap::new(),
             functions: vec![MirFunction {
                 name: "main".into(),
                 ret_type: Some(Type::I32),
@@ -1751,6 +2000,7 @@ mod tests {
         let mut ctx = CodegenContext::new("test").unwrap();
         let mir = MirModule {
             struct_types: HashMap::new(),
+            enum_types: HashMap::new(),
             extern_functions: vec![MirExternFunction {
                 name: "test_add_ten".into(),
                 ret_type: Some(Type::I32),
@@ -1799,6 +2049,7 @@ mod tests {
         let mut ctx = CodegenContext::new("test").unwrap();
         let mir = MirModule {
             struct_types: HashMap::new(),
+            enum_types: HashMap::new(),
             extern_functions: vec![MirExternFunction {
                 name: "missing_function".into(),
                 ret_type: Some(Type::I32),
@@ -1852,6 +2103,7 @@ mod tests {
         let mut ctx = CodegenContext::new("test").unwrap();
         let mir = MirModule {
             struct_types: HashMap::new(),
+            enum_types: HashMap::new(),
             extern_functions: vec![MirExternFunction {
                 name: "putchar".into(),
                 ret_type: Some(Type::I32),
@@ -1903,6 +2155,7 @@ mod tests {
         let mut ctx = CodegenContext::new("test").unwrap();
         let mir = MirModule {
             struct_types: HashMap::new(),
+            enum_types: HashMap::new(),
             extern_functions: vec![MirExternFunction {
                 name: "puts".into(),
                 ret_type: Some(Type::I32),

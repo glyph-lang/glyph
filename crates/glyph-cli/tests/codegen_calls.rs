@@ -16,7 +16,13 @@ fn load_fixture(name: &str) -> String {
 #[test]
 fn codegen_call_basic() {
     let src = load_fixture("call_basic.glyph");
-    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    let out = compile_source(
+        &src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: false,
+        },
+    );
     assert!(
         out.diagnostics.is_empty(),
         "unexpected diagnostics: {:?}",
@@ -46,7 +52,13 @@ fn codegen_call_basic() {
 #[test]
 fn codegen_call_recursive() {
     let src = load_fixture("factorial.glyph");
-    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    let out = compile_source(
+        &src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: false,
+        },
+    );
     assert!(
         out.diagnostics.is_empty(),
         "unexpected diagnostics: {:?}",
@@ -78,7 +90,13 @@ fn codegen_call_recursive() {
 #[test]
 fn codegen_call_struct_return() {
     let src = load_fixture("struct_return.glyph");
-    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    let out = compile_source(
+        &src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: false,
+        },
+    );
     assert!(
         out.diagnostics.is_empty(),
         "unexpected diagnostics: {:?}",

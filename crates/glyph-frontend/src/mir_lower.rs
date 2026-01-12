@@ -16,6 +16,15 @@ struct FnSig {
     params: Vec<Option<Type>>,
     ret: Option<Type>,
     abi: Option<String>,
+    /// The actual target name to call in MIR (unqualified, without aliases).
+    target_name: String,
+    enum_ctor: Option<EnumCtorInfo>,
+}
+
+#[derive(Debug, Clone)]
+struct EnumCtorInfo {
+    enum_name: String,
+    variant_index: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +45,7 @@ pub fn lower_module(module: &Module, resolver: &ResolverContext) -> (MirModule, 
 
     let mut mir = MirModule {
         struct_types: resolver.struct_types.clone(),
+        enum_types: resolver.enum_types.clone(),
         functions: Vec::new(),
         extern_functions: Vec::new(),
     };
@@ -49,6 +59,9 @@ pub fn lower_module(module: &Module, resolver: &ResolverContext) -> (MirModule, 
             }
             Item::Struct(_) | Item::Interface(_) | Item::Impl(_) => {
                 // Handled during resolution or desugaring stages.
+            }
+            Item::Enum(_) => {
+                // Enums are type-level; constructors are lowered via call sites.
             }
             Item::ExternFunction(func) => {
                 let Some(sig) = fn_sigs.get(&func.name.0) else {
@@ -94,6 +107,72 @@ fn collect_function_signatures(
     let mut signatures = HashMap::new();
     let mut diagnostics = Vec::new();
 
+    fn resolve_fn_sig(
+        resolver: &ResolverContext,
+        diagnostics: &mut Vec<Diagnostic>,
+        key_name: &str,
+        target_name: &str,
+        params: &[glyph_core::ast::Param],
+        ret_type: &Option<Ident>,
+        abi: Option<String>,
+        is_extern: bool,
+        span: Span,
+    ) -> FnSig {
+        let mut param_types = Vec::new();
+        for param in params {
+            let ty = match &param.ty {
+                Some(t) => match resolve_type_name(&t.0, resolver) {
+                    Some(resolved) => Some(resolved),
+                    None => {
+                        diagnostics.push(Diagnostic::error(
+                            format!(
+                                "unknown type '{}' for parameter '{}'",
+                                t.0, param.name.0
+                            ),
+                            Some(param.span),
+                        ));
+                        None
+                    }
+                },
+                None => {
+                    if is_extern {
+                        diagnostics.push(Diagnostic::error(
+                            format!(
+                                "extern function '{}' parameter '{}' must have a type",
+                                key_name, param.name.0
+                            ),
+                            Some(param.span),
+                        ));
+                    }
+                    None
+                }
+            };
+            param_types.push(ty);
+        }
+
+        let ret_type = match ret_type {
+            Some(t) => match resolve_type_name(&t.0, resolver) {
+                Some(resolved) => Some(resolved),
+                None => {
+                    diagnostics.push(Diagnostic::error(
+                        format!("unknown return type '{}' for function '{}'", t.0, key_name),
+                        Some(span),
+                    ));
+                    None
+                }
+            },
+            None => None,
+        };
+
+        FnSig {
+            params: param_types,
+            ret: ret_type,
+            abi,
+            target_name: target_name.to_string(),
+            enum_ctor: None,
+        }
+    }
+
     for item in &module.items {
         match item {
             Item::Function(func) => {
@@ -106,49 +185,18 @@ fn collect_function_signatures(
                     continue;
                 }
 
-                let mut param_types = Vec::new();
-                for param in &func.params {
-                    let ty = match &param.ty {
-                        Some(t) => match resolve_type_name(&t.0, resolver) {
-                            Some(resolved) => Some(resolved),
-                            None => {
-                                diagnostics.push(Diagnostic::error(
-                                    format!(
-                                        "unknown type '{}' for parameter '{}'",
-                                        t.0, param.name.0
-                                    ),
-                                    Some(param.span),
-                                ));
-                                None
-                            }
-                        },
-                        None => None,
-                    };
-                    param_types.push(ty);
-                }
-
-                let ret_type = match &func.ret_type {
-                    Some(t) => match resolve_type_name(&t.0, resolver) {
-                        Some(resolved) => Some(resolved),
-                        None => {
-                            diagnostics.push(Diagnostic::error(
-                                format!("unknown return type '{}' for function '{}'", t.0, name),
-                                Some(func.span),
-                            ));
-                            None
-                        }
-                    },
-                    None => None,
-                };
-
-                signatures.insert(
-                    name,
-                    FnSig {
-                        params: param_types,
-                        ret: ret_type,
-                        abi: None,
-                    },
+                let sig = resolve_fn_sig(
+                    resolver,
+                    &mut diagnostics,
+                    &name,
+                    &name,
+                    &func.params,
+                    &func.ret_type,
+                    None,
+                    false,
+                    func.span,
                 );
+                signatures.insert(name, sig);
             }
             Item::ExternFunction(func) => {
                 let name = func.name.0.clone();
@@ -160,60 +208,150 @@ fn collect_function_signatures(
                     continue;
                 }
 
-                let mut param_types = Vec::new();
-                for param in &func.params {
-                    let ty = match &param.ty {
-                        Some(t) => match resolve_type_name(&t.0, resolver) {
-                            Some(resolved) => Some(resolved),
-                            None => {
-                                diagnostics.push(Diagnostic::error(
-                                    format!(
-                                        "unknown type '{}' for parameter '{}'",
-                                        t.0, param.name.0
-                                    ),
-                                    Some(param.span),
-                                ));
-                                None
-                            }
-                        },
-                        None => {
-                            diagnostics.push(Diagnostic::error(
-                                format!(
-                                    "extern function '{}' parameter '{}' must have a type",
-                                    name, param.name.0
-                                ),
-                                Some(param.span),
-                            ));
-                            None
-                        }
-                    };
-                    param_types.push(ty);
-                }
-
-                let ret_type = match &func.ret_type {
-                    Some(t) => match resolve_type_name(&t.0, resolver) {
-                        Some(resolved) => Some(resolved),
-                        None => {
-                            diagnostics.push(Diagnostic::error(
-                                format!("unknown return type '{}' for function '{}'", t.0, name),
-                                Some(func.span),
-                            ));
-                            None
-                        }
-                    },
-                    None => None,
-                };
-
-                signatures.insert(
-                    name,
-                    FnSig {
-                        params: param_types,
-                        ret: ret_type,
-                        abi: func.abi.clone(),
-                    },
+                let sig = resolve_fn_sig(
+                    resolver,
+                    &mut diagnostics,
+                    &name,
+                    &name,
+                    &func.params,
+                    &func.ret_type,
+                    func.abi.clone(),
+                    true,
+                    func.span,
                 );
+                signatures.insert(name, sig);
             }
             _ => {}
+        }
+    }
+
+    // Enum variant constructors act like functions returning the enum type.
+    for (enum_name, enum_ty) in &resolver.enum_types {
+        for (idx, variant) in enum_ty.variants.iter().enumerate() {
+            let ctor_name = format!("{}::{}", enum_name, variant.name);
+            let mut params = Vec::new();
+            if let Some(payload_ty) = &variant.payload {
+                params.push(Some(payload_ty.clone()));
+            }
+            let ctor_sig = FnSig {
+                params: params.clone(),
+                ret: Some(Type::Enum(enum_name.clone())),
+                abi: None,
+                target_name: ctor_name.clone(),
+                enum_ctor: Some(EnumCtorInfo {
+                    enum_name: enum_name.clone(),
+                    variant_index: idx,
+                }),
+            };
+            if !signatures.contains_key(&ctor_name) {
+                signatures.insert(ctor_name.clone(), ctor_sig.clone());
+            }
+
+            // Also make unqualified variant name available if not shadowed.
+            if !signatures.contains_key(&variant.name) {
+                let mut unqualified_sig = ctor_sig.clone();
+                unqualified_sig.target_name = ctor_name;
+                signatures.insert(variant.name.clone(), unqualified_sig);
+            }
+        }
+    }
+
+    // Add signatures for imported symbols so qualified std calls resolve correctly.
+    if let (Some(import_scope), Some(all_modules)) = (&resolver.import_scope, &resolver.all_modules)
+    {
+        // Selective imports (with optional alias)
+        for (local_name, (source_module, original_name)) in &import_scope.direct_symbols {
+            if signatures.contains_key(local_name) {
+                continue;
+            }
+
+            if let Some(module) = all_modules.modules.get(source_module) {
+                for item in &module.items {
+                    match item {
+                        Item::Function(func) if func.name.0 == *original_name => {
+                            let sig = resolve_fn_sig(
+                                resolver,
+                                &mut diagnostics,
+                                local_name,
+                                &func.name.0,
+                                &func.params,
+                                &func.ret_type,
+                                None,
+                                false,
+                                func.span,
+                            );
+                            signatures.insert(local_name.clone(), sig);
+                            break;
+                        }
+                        Item::ExternFunction(func) if func.name.0 == *original_name => {
+                            let sig = resolve_fn_sig(
+                                resolver,
+                                &mut diagnostics,
+                                local_name,
+                                &func.name.0,
+                                &func.params,
+                                &func.ret_type,
+                                func.abi.clone(),
+                                true,
+                                func.span,
+                            );
+                            signatures.insert(local_name.clone(), sig);
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        // Wildcard imports: make qualified names available (e.g., std::io::fopen).
+        for wildcard in &import_scope.wildcard_modules {
+            for (module_id, module) in all_modules.modules.iter().filter(|(id, _)| {
+                *id == wildcard || id.starts_with(&format!("{}/", wildcard))
+            }) {
+                let module_prefix = module_id.replace('/', "::");
+                for item in &module.items {
+                    match item {
+                        Item::Function(func) => {
+                            let key = format!("{}::{}", module_prefix, func.name.0);
+                            if signatures.contains_key(&key) {
+                                continue;
+                            }
+                            let sig = resolve_fn_sig(
+                                resolver,
+                                &mut diagnostics,
+                                &key,
+                                &func.name.0,
+                                &func.params,
+                                &func.ret_type,
+                                None,
+                                false,
+                                func.span,
+                            );
+                            signatures.insert(key, sig);
+                        }
+                        Item::ExternFunction(func) => {
+                            let key = format!("{}::{}", module_prefix, func.name.0);
+                            if signatures.contains_key(&key) {
+                                continue;
+                            }
+                            let sig = resolve_fn_sig(
+                                resolver,
+                                &mut diagnostics,
+                                &key,
+                                &func.name.0,
+                                &func.params,
+                                &func.ret_type,
+                                func.abi.clone(),
+                                true,
+                                func.span,
+                            );
+                            signatures.insert(key, sig);
+                        }
+                        _ => {}
+                    }
+                }
+            }
         }
     }
 
@@ -388,7 +526,7 @@ impl<'a> LowerCtx<'a> {
 
     fn local_needs_drop(&self, local: LocalId) -> bool {
         self.local_ty(local)
-            .map(|ty| matches!(ty, Type::Own(_) | Type::Shared(_)))
+            .map(|ty| matches!(ty, Type::Own(_) | Type::Shared(_) | Type::String))
             .unwrap_or(false)
     }
 
@@ -603,6 +741,202 @@ fn lower_block<'a>(ctx: &mut LowerCtx<'a>, block: &'a Block) -> Option<MirValue>
     result
 }
 
+fn rvalue_from_value(val: MirValue) -> Option<Rvalue> {
+    match val {
+        MirValue::Int(i) => Some(Rvalue::ConstInt(i)),
+        MirValue::Bool(b) => Some(Rvalue::ConstBool(b)),
+        MirValue::Local(id) => Some(Rvalue::Move(id)),
+        MirValue::Unit => None,
+    }
+}
+
+fn lower_match<'a>(
+    ctx: &mut LowerCtx<'a>,
+    scrutinee: &'a Expr,
+    arms: &'a [glyph_core::ast::MatchArm],
+    require_value: bool,
+    span: Span,
+) -> Option<Rvalue> {
+    // Evaluate scrutinee into a local
+    let scrut_val = lower_value(ctx, scrutinee)?;
+    let scrut_local = match scrut_val {
+        MirValue::Local(id) => id,
+        MirValue::Int(_) | MirValue::Bool(_) | MirValue::Unit => {
+            let tmp = ctx.fresh_local(None);
+            let rv = rvalue_from_value(scrut_val)?;
+            ctx.locals[tmp.0 as usize].ty = None;
+            ctx.push_inst(MirInst::Assign { local: tmp, value: rv });
+            tmp
+        }
+    };
+
+    let enum_name = match ctx.locals[scrut_local.0 as usize].ty.clone() {
+        Some(Type::Enum(name)) => name,
+        _ => {
+            ctx.error("match scrutinee must be an enum value", Some(span));
+            return None;
+        }
+    };
+
+    let enum_def = match ctx.resolver.get_enum(&enum_name) {
+        Some(e) => e.clone(),
+        None => {
+            ctx.error(
+                format!("unknown enum type '{}'", enum_name),
+                Some(span),
+            );
+            return None;
+        }
+    };
+
+    // Exhaustiveness check
+    let mut seen_variants = std::collections::HashSet::new();
+    let mut has_wildcard = false;
+    for arm in arms {
+        match &arm.pattern {
+            glyph_core::ast::MatchPattern::Wildcard => has_wildcard = true,
+            glyph_core::ast::MatchPattern::Variant { name, .. } => {
+                seen_variants.insert(name.0.clone());
+            }
+        }
+    }
+    if !has_wildcard && seen_variants.len() < enum_def.variants.len() {
+        ctx.error(
+            "non-exhaustive match: cover all variants or add `_` arm",
+            Some(span),
+        );
+    }
+
+    // Tag extraction
+    let tag_local = ctx.fresh_local(None);
+    ctx.locals[tag_local.0 as usize].ty = Some(Type::I32);
+    ctx.push_inst(MirInst::Assign {
+        local: tag_local,
+        value: Rvalue::EnumTag { base: scrut_local },
+    });
+
+    // Result local if needed
+    let mut result_local = None;
+
+    let join_block = ctx.new_block();
+    let mut arm_blocks = Vec::new();
+    for _ in arms {
+        arm_blocks.push(ctx.new_block());
+    }
+
+    // Build chain of comparisons
+    let mut current = ctx.current;
+    for (idx, arm) in arms.iter().enumerate() {
+        let arm_block = arm_blocks[idx];
+        match &arm.pattern {
+            glyph_core::ast::MatchPattern::Wildcard => {
+                ctx.blocks[current.0 as usize].insts.push(MirInst::Goto(arm_block));
+                break;
+            }
+            glyph_core::ast::MatchPattern::Variant { name, .. } => {
+                let variant_index = enum_def
+                    .variants
+                    .iter()
+                    .position(|v| v.name == name.0)
+                    .unwrap_or_else(|| {
+                        ctx.error(
+                            format!("unknown variant '{}' for enum '{}'", name.0, enum_name),
+                            Some(arm.span),
+                        );
+                        0
+                    });
+                let cond_local = ctx.fresh_local(None);
+                ctx.locals[cond_local.0 as usize].ty = Some(Type::Bool);
+                ctx.push_inst(MirInst::Assign {
+                    local: cond_local,
+                    value: Rvalue::Binary {
+                        op: BinaryOp::Eq,
+                        lhs: MirValue::Local(tag_local),
+                        rhs: MirValue::Int(variant_index as i64),
+                    },
+                });
+
+                let else_block = if idx == arms.len() - 1 {
+                    let sink = ctx.new_block();
+                    ctx.blocks[sink.0 as usize].insts.push(MirInst::Goto(join_block));
+                    sink
+                } else {
+                    ctx.new_block()
+                };
+
+                ctx.blocks[current.0 as usize].insts.push(MirInst::If {
+                    cond: MirValue::Local(cond_local),
+                    then_bb: arm_block,
+                    else_bb: else_block,
+                });
+
+                current = else_block;
+            }
+        }
+    }
+
+    // Lower arms
+    for (idx, arm) in arms.iter().enumerate() {
+        let arm_block = arm_blocks[idx];
+        ctx.switch_to(arm_block);
+        ctx.enter_scope();
+
+        if let glyph_core::ast::MatchPattern::Variant { name, binding } = &arm.pattern {
+            if let Some(bind_ident) = binding {
+                if let Some(variant) = enum_def.variants.iter().find(|v| v.name == name.0) {
+                    if let Some(payload_ty) = variant.payload.clone() {
+                        let binding_local = ctx.fresh_local(Some(&bind_ident.0));
+                        ctx.locals[binding_local.0 as usize].ty = Some(payload_ty.clone());
+                        ctx.bindings.insert(&bind_ident.0, binding_local);
+                        ctx.push_inst(MirInst::Assign {
+                            local: binding_local,
+                            value: Rvalue::EnumPayload {
+                                base: scrut_local,
+                                variant_index: enum_def
+                                    .variants
+                                    .iter()
+                                    .position(|v| v.name == name.0)
+                                    .unwrap_or(0)
+                                    as u32,
+                                payload_type: payload_ty,
+                            },
+                        });
+                    }
+                }
+            }
+        }
+
+        let arm_val = lower_value(ctx, &arm.expr);
+        if require_value {
+            if let Some(val) = arm_val {
+                let res_local = *result_local.get_or_insert_with(|| {
+                    let l = ctx.fresh_local(None);
+                    ctx.locals[l.0 as usize].ty = match &val {
+                        MirValue::Local(id) => ctx.locals[id.0 as usize].ty.clone(),
+                        MirValue::Int(_) => Some(Type::I32),
+                        MirValue::Bool(_) => Some(Type::Bool),
+                        MirValue::Unit => None,
+                    };
+                    l
+                });
+
+                if let Some(rv) = rvalue_from_value(val) {
+                    ctx.push_inst(MirInst::Assign { local: res_local, value: rv });
+                }
+            }
+        }
+
+        if !ctx.terminated() {
+            ctx.push_inst(MirInst::Goto(join_block));
+        }
+        ctx.exit_scope();
+    }
+
+    ctx.switch_to(join_block);
+
+    result_local.map(Rvalue::Move)
+}
+
 fn lower_if<'a>(
     ctx: &mut LowerCtx<'a>,
     cond: &'a Expr,
@@ -760,6 +1094,12 @@ fn lower_expr<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr) -> Option<Rvalue> {
             content: s.clone(),
             global_name: ctx.fresh_string_global(),
         }),
+        Expr::InterpString { segments, span } => lower_interp_string(ctx, segments, *span),
+        Expr::Match {
+            scrutinee,
+            arms,
+            span,
+        } => lower_match(ctx, scrutinee, arms, true, *span),
         Expr::Ident(ident, span) => ctx
             .bindings
             .get(ident.0.as_str())
@@ -840,6 +1180,260 @@ fn lower_binary<'a>(
     Some(Rvalue::Move(tmp))
 }
 
+fn lower_interp_string(
+    ctx: &mut LowerCtx<'_>,
+    segments: &[glyph_core::ast::InterpSegment],
+    span: Span,
+) -> Option<Rvalue> {
+    let mut buf = String::new();
+    for seg in segments {
+        match seg {
+            glyph_core::ast::InterpSegment::Literal(s) => buf.push_str(s),
+            glyph_core::ast::InterpSegment::Expr(_) => {
+                ctx.error(
+                    "interpolation holes are not yet lowered; only literal segments are supported",
+                    Some(span),
+                );
+                return None;
+            }
+        }
+    }
+
+    Some(Rvalue::StringLit {
+        content: buf,
+        global_name: ctx.fresh_string_global(),
+    })
+}
+
+#[derive(Clone)]
+enum PrintSegment<'a> {
+    Literal(String),
+    Expr(&'a Expr, Span),
+}
+
+fn lower_print_builtin<'a>(
+    ctx: &mut LowerCtx<'a>,
+    args: &'a [Expr],
+    span: Span,
+    add_newline: bool,
+    is_err: bool,
+) -> Option<Rvalue> {
+    if args.len() != 1 {
+        ctx.error(
+            "print/println expects exactly one argument",
+            Some(span),
+        );
+        return None;
+    }
+
+    let fd = if is_err { 2 } else { 1 };
+    let arg = &args[0];
+
+    let mut segments: Vec<PrintSegment<'a>> = Vec::new();
+    match arg {
+        Expr::Lit(glyph_core::ast::Literal::Str(s), _) => {
+            segments.push(PrintSegment::Literal(s.clone()));
+        }
+        Expr::InterpString { segments: segs, span: interp_span } => {
+            for seg in segs {
+                match seg {
+                    glyph_core::ast::InterpSegment::Literal(s) => {
+                        segments.push(PrintSegment::Literal(s.clone()))
+                    }
+                    glyph_core::ast::InterpSegment::Expr(e) => {
+                        segments.push(PrintSegment::Expr(e, *interp_span))
+                    }
+                }
+            }
+        }
+        _ => {
+            ctx.error(
+                "print/println currently require a string or interpolated string",
+                Some(span),
+            );
+            return None;
+        }
+    }
+
+    if add_newline {
+        segments.push(PrintSegment::Literal("\n".into()));
+    }
+
+    // Build writer: Stdout or Stderr
+    let writer_struct = if is_err { "Stderr" } else { "Stdout" };
+    let writer_local = ctx.fresh_local(None);
+    ctx.locals[writer_local.0 as usize].ty = Some(Type::Named(writer_struct.to_string()));
+    ctx.push_inst(MirInst::Assign {
+        local: writer_local,
+        value: Rvalue::StructLit {
+            struct_name: writer_struct.to_string(),
+            field_values: vec![("fd".into(), MirValue::Int(fd))],
+        },
+    });
+
+    let mut last = None;
+    for seg in segments {
+        match seg {
+            PrintSegment::Literal(s) => {
+                let str_local = ctx.fresh_local(None);
+                ctx.locals[str_local.0 as usize].ty = Some(Type::Str);
+                let global = ctx.fresh_string_global();
+                ctx.push_inst(MirInst::Assign {
+                    local: str_local,
+                    value: Rvalue::StringLit {
+                        content: s.clone(),
+                        global_name: global,
+                    },
+                });
+                let out = ctx.fresh_local(None);
+                ctx.locals[out.0 as usize].ty = Some(Type::I32);
+                ctx.push_inst(MirInst::Assign {
+                    local: out,
+                    value: Rvalue::Call {
+                        name: "std::io::raw_write".into(),
+                        args: vec![
+                            MirValue::Int(fd),
+                            MirValue::Local(str_local),
+                            MirValue::Int(s.len() as i64),
+                        ],
+                    },
+                });
+                last = Some(out);
+            }
+            PrintSegment::Expr(expr, seg_span) => {
+                let val = lower_value(ctx, expr)?;
+                let val_ty = infer_value_type(&val, ctx);
+
+                // Prepare &mut writer for all formatting calls
+                let writer_ref = ctx.fresh_local(None);
+                ctx.locals[writer_ref.0 as usize].ty = Some(Type::Ref(
+                    Box::new(Type::Named(writer_struct.to_string())),
+                    glyph_core::types::Mutability::Mutable,
+                ));
+                ctx.push_inst(MirInst::Assign {
+                    local: writer_ref,
+                    value: Rvalue::Ref {
+                        base: writer_local,
+                        mutability: glyph_core::types::Mutability::Mutable,
+                    },
+                });
+
+                match val_ty {
+                    Some(Type::I32) => {
+                        let out = ctx.fresh_local(None);
+                        ctx.locals[out.0 as usize].ty = Some(Type::Void);
+                        ctx.push_inst(MirInst::Assign {
+                            local: out,
+                            value: Rvalue::Call {
+                                name: "std::fmt::fmt_i32".into(),
+                                args: vec![val.clone(), MirValue::Local(writer_ref)],
+                            },
+                        });
+                        last = Some(out);
+                    }
+                    Some(Type::U32) => {
+                        let out = ctx.fresh_local(None);
+                        ctx.locals[out.0 as usize].ty = Some(Type::Void);
+                        ctx.push_inst(MirInst::Assign {
+                            local: out,
+                            value: Rvalue::Call {
+                                name: "std::fmt::fmt_u32".into(),
+                                args: vec![val.clone(), MirValue::Local(writer_ref)],
+                            },
+                        });
+                        last = Some(out);
+                    }
+                    Some(Type::I64) => {
+                        let out = ctx.fresh_local(None);
+                        ctx.locals[out.0 as usize].ty = Some(Type::Void);
+                        ctx.push_inst(MirInst::Assign {
+                            local: out,
+                            value: Rvalue::Call {
+                                name: "std::fmt::fmt_i64".into(),
+                                args: vec![val.clone(), MirValue::Local(writer_ref)],
+                            },
+                        });
+                        last = Some(out);
+                    }
+                    Some(Type::U64) => {
+                        let out = ctx.fresh_local(None);
+                        ctx.locals[out.0 as usize].ty = Some(Type::Void);
+                        ctx.push_inst(MirInst::Assign {
+                            local: out,
+                            value: Rvalue::Call {
+                                name: "std::fmt::fmt_u64".into(),
+                                args: vec![val.clone(), MirValue::Local(writer_ref)],
+                            },
+                        });
+                        last = Some(out);
+                    }
+                    Some(Type::Bool) => {
+                        let out = ctx.fresh_local(None);
+                        ctx.locals[out.0 as usize].ty = Some(Type::Void);
+                        ctx.push_inst(MirInst::Assign {
+                            local: out,
+                            value: Rvalue::Call {
+                                name: "std::fmt::fmt_bool".into(),
+                                args: vec![val.clone(), MirValue::Local(writer_ref)],
+                            },
+                        });
+                        last = Some(out);
+                    }
+                    Some(Type::Char) => {
+                        let out = ctx.fresh_local(None);
+                        ctx.locals[out.0 as usize].ty = Some(Type::Void);
+                        ctx.push_inst(MirInst::Assign {
+                            local: out,
+                            value: Rvalue::Call {
+                                name: "std::fmt::fmt_char".into(),
+                                args: vec![val.clone(), MirValue::Local(writer_ref)],
+                            },
+                        });
+                        last = Some(out);
+                    }
+                    Some(Type::Str) => {
+                        let out = ctx.fresh_local(None);
+                        ctx.locals[out.0 as usize].ty = Some(Type::Void);
+                        ctx.push_inst(MirInst::Assign {
+                            local: out,
+                            value: Rvalue::Call {
+                                name: "std::fmt::fmt_str".into(),
+                                args: vec![val.clone(), MirValue::Local(writer_ref)],
+                            },
+                        });
+                        last = Some(out);
+                    }
+                    Some(Type::Named(struct_name)) => {
+                        // Resolve Format impl
+                        // Call free function fmt_<type> if available.
+                        let fmt_fn = format!("std::fmt::fmt_{}", struct_name);
+                        let out = ctx.fresh_local(None);
+                        ctx.locals[out.0 as usize].ty = Some(Type::Void);
+
+                        ctx.push_inst(MirInst::Assign {
+                            local: out,
+                            value: Rvalue::Call {
+                                name: fmt_fn,
+                                args: vec![val.clone(), MirValue::Local(writer_ref)],
+                            },
+                        });
+                        last = Some(out);
+                    }
+                    _ => {
+                        ctx.error(
+                            "Format not implemented for this type; supported: i32, u32, i64, u64, bool, char, str, and types with fmt_<type> in std::fmt",
+                            Some(seg_span),
+                        );
+                        return None;
+                    }
+                }
+            }
+        }
+    }
+
+    last.map(Rvalue::Move)
+}
+
 fn lower_logical<'a>(
     ctx: &mut LowerCtx<'a>,
     op: &glyph_core::ast::BinaryOp,
@@ -915,23 +1509,7 @@ fn lower_call<'a>(
         return None;
     };
 
-    // Try to resolve function name (may be qualified or imported)
-    let resolved_name = if let Some(resolved) = ctx.resolver.resolve_symbol(&name.0) {
-        match resolved {
-            crate::resolver::ResolvedSymbol::Function(module_id, func_name) => {
-                if ctx.resolver.current_module.as_ref() == Some(&module_id) {
-                    func_name
-                } else {
-                    format!("{}::{}", module_id, func_name)
-                }
-            }
-            _ => name.0.clone(),
-        }
-    } else {
-        name.0.clone()
-    };
-
-    let Some(sig) = ctx.fn_sigs.get(&resolved_name) else {
+    let Some(sig) = ctx.fn_sigs.get(&name.0) else {
         ctx.error(format!("unknown function '{}'", name.0), Some(span));
         return None;
     };
@@ -940,7 +1518,7 @@ fn lower_call<'a>(
         ctx.error(
             format!(
                 "function '{}' expects {} arguments but got {}",
-                resolved_name,
+                name.0,
                 sig.params.len(),
                 args.len()
             ),
@@ -952,7 +1530,7 @@ fn lower_call<'a>(
     // For externs, ensure all parameter types are known
     if sig.params.iter().any(|p| p.is_none()) {
         ctx.error(
-            format!("function '{}' has unknown parameter types", resolved_name),
+            format!("function '{}' has unknown parameter types", name.0),
             Some(span),
         );
         return None;
@@ -977,13 +1555,27 @@ fn lower_call<'a>(
         ctx.locals[tmp.0 as usize].ty = Some(ret.clone());
     }
 
-    ctx.push_inst(MirInst::Assign {
-        local: tmp,
-        value: Rvalue::Call {
-            name: resolved_name,
-            args: lowered_args,
-        },
-    });
+    if let Some(enum_ctor) = &sig.enum_ctor {
+        let payload = lowered_args.get(0).cloned();
+        ctx.push_inst(MirInst::Assign {
+            local: tmp,
+            value: Rvalue::EnumConstruct {
+                enum_name: enum_ctor.enum_name.clone(),
+                variant_index: enum_ctor.variant_index as u32,
+                payload,
+            },
+        });
+    } else {
+        let call_target = sig.target_name.clone();
+
+        ctx.push_inst(MirInst::Assign {
+            local: tmp,
+            value: Rvalue::Call {
+                name: call_target,
+                args: lowered_args,
+            },
+        });
+    }
 
     Some(Rvalue::Move(tmp))
 }
@@ -997,7 +1589,11 @@ fn infer_expr_type(ctx: &LowerCtx, expr: &Expr) -> Option<glyph_core::types::Typ
             ctx.locals.get(local.0 as usize).and_then(|l| l.ty.clone())
         }
 
+        Expr::Lit(glyph_core::ast::Literal::Int(_), _) => Some(Type::I32),
+        Expr::Lit(glyph_core::ast::Literal::Bool(_), _) => Some(Type::Bool),
+        Expr::Lit(glyph_core::ast::Literal::Char(_), _) => Some(Type::Char),
         Expr::Lit(glyph_core::ast::Literal::Str(_), _) => Some(Type::Str),
+        Expr::InterpString { .. } => Some(Type::Str),
 
         // Struct literal: obvious
         Expr::StructLit { name, .. } => Some(glyph_core::types::Type::Named(name.0.clone())),
@@ -1291,8 +1887,32 @@ fn lower_static_builtin<'a>(
         "Own::new" => lower_own_new(ctx, args, span),
         "Own::from_raw" => lower_own_from_raw(ctx, args, span),
         "Shared::new" => lower_shared_new(ctx, args, span),
+        "String::from_str" => lower_string_from(ctx, args, span),
+        "print" | "std::print" => lower_print_builtin(ctx, args, span, false, false),
+        "println" | "std::println" => lower_print_builtin(ctx, args, span, true, false),
+        "eprint" | "std::eprint" => lower_print_builtin(ctx, args, span, false, true),
+        "eprintln" | "std::eprintln" => lower_print_builtin(ctx, args, span, true, true),
         _ => None,
     }
+}
+
+fn lower_string_from<'a>(ctx: &mut LowerCtx<'a>, args: &'a [Expr], span: Span) -> Option<Rvalue> {
+    if args.len() != 1 {
+        ctx.error("String::from expects exactly one argument", Some(span));
+        return None;
+    }
+    let value = lower_value(ctx, &args[0])?;
+
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::String);
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::Call {
+            name: "strdup".into(),
+            args: vec![value],
+        },
+    });
+    Some(Rvalue::Move(tmp))
 }
 
 fn lower_own_new<'a>(ctx: &mut LowerCtx<'a>, args: &'a [Expr], span: Span) -> Option<Rvalue> {
@@ -1755,6 +2375,14 @@ fn resolve_type_name(name: &str, resolver: &ResolverContext) -> Option<Type> {
         return Some(shared_ty);
     }
 
+    if resolver.get_enum(trimmed).is_some() {
+        return Some(Type::Enum(trimmed.to_string()));
+    }
+
+    if resolver.get_struct(trimmed).is_some() {
+        return Some(Type::Named(trimmed.to_string()));
+    }
+
     if let Some(reference) = parse_reference_type(trimmed, resolver) {
         return Some(reference);
     }
@@ -1768,6 +2396,9 @@ fn resolve_type_name(name: &str, resolver: &ResolverContext) -> Option<Type> {
                 } else {
                     return Some(Type::Named(format!("{}::{}", module_id, struct_name)));
                 }
+            }
+            crate::resolver::ResolvedSymbol::Enum(_, enum_name) => {
+                return Some(Type::Enum(enum_name));
             }
             _ => {}
         }
@@ -2007,6 +2638,9 @@ fn infer_rvalue_type(rv: &Rvalue, ctx: &LowerCtx) -> Option<Type> {
         Rvalue::RawPtrNull { elem_type } => Some(Type::RawPtr(Box::new(elem_type.clone()))),
         Rvalue::SharedNew { elem_type, .. } => Some(Type::Shared(Box::new(elem_type.clone()))),
         Rvalue::SharedClone { elem_type, .. } => Some(Type::Shared(Box::new(elem_type.clone()))),
+        Rvalue::EnumConstruct { enum_name, .. } => Some(Type::Enum(enum_name.clone())),
+        Rvalue::EnumTag { .. } => Some(Type::I32),
+        Rvalue::EnumPayload { payload_type, .. } => Some(payload_type.clone()),
         _ => None,
     }
 }
@@ -2045,6 +2679,8 @@ fn expr_span(expr: &Expr) -> Option<Span> {
         Expr::ArrayLit { span, .. } => Some(*span),
         Expr::Index { span, .. } => Some(*span),
         Expr::MethodCall { span, .. } => Some(*span),
+        Expr::Match { span, .. } => Some(*span),
+        Expr::InterpString { span, .. } => Some(*span),
     }
 }
 
@@ -2078,6 +2714,15 @@ fn lower_value<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr) -> Option<MirValue> {
     match expr {
         Expr::Lit(glyph_core::ast::Literal::Int(i), _) => Some(MirValue::Int(*i)),
         Expr::Lit(glyph_core::ast::Literal::Bool(b), _) => Some(MirValue::Bool(*b)),
+        Expr::Lit(glyph_core::ast::Literal::Char(c), _) => {
+            let tmp = ctx.fresh_local(None);
+            ctx.locals[tmp.0 as usize].ty = Some(Type::Char);
+            ctx.push_inst(MirInst::Assign {
+                local: tmp,
+                value: Rvalue::ConstInt(*c as i64),
+            });
+            Some(MirValue::Local(tmp))
+        }
         Expr::Lit(glyph_core::ast::Literal::Str(s), _) => {
             let tmp = ctx.fresh_local(None);
             ctx.locals[tmp.0 as usize].ty = Some(Type::Str);
@@ -2089,6 +2734,13 @@ fn lower_value<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr) -> Option<MirValue> {
                 local: tmp,
                 value: rv,
             });
+            Some(MirValue::Local(tmp))
+        }
+        Expr::InterpString { segments, span } => {
+            let rv = lower_interp_string(ctx, segments, *span)?;
+            let tmp = ctx.fresh_local(None);
+            ctx.locals[tmp.0 as usize].ty = Some(Type::Str);
+            ctx.push_inst(MirInst::Assign { local: tmp, value: rv });
             Some(MirValue::Local(tmp))
         }
         Expr::Ident(ident, span) => ctx
@@ -2117,6 +2769,11 @@ fn lower_value<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr) -> Option<MirValue> {
             args,
             span,
         } => lower_method_call(ctx, receiver, method, args, *span).and_then(rvalue_to_value),
+        Expr::Match {
+            scrutinee,
+            arms,
+            span,
+        } => lower_match(ctx, scrutinee, arms, true, *span).and_then(rvalue_to_value),
         Expr::If {
             cond,
             then_block,
@@ -2166,7 +2823,7 @@ mod tests {
         StructDef,
     };
     use glyph_core::span::Span;
-    use glyph_core::types::{Mutability, StructType, Type};
+    use glyph_core::types::{EnumType, Mutability, StructType, Type};
 
     #[test]
     fn lowers_reference_expression() {
@@ -2366,6 +3023,27 @@ mod tests {
         let ctx = ResolverContext::default();
         let ty = resolve_type_name("RawPtr<u8>", &ctx).expect("type");
         assert_eq!(ty, Type::RawPtr(Box::new(Type::U8)));
+    }
+
+    #[test]
+    fn resolve_type_name_parses_string_type() {
+        let ctx = ResolverContext::default();
+        let ty = resolve_type_name("String", &ctx).expect("type");
+        assert_eq!(ty, Type::String);
+    }
+
+    #[test]
+    fn resolve_type_name_parses_enum_type() {
+        let mut ctx = ResolverContext::default();
+        ctx.enum_types.insert(
+            "Option".into(),
+            EnumType {
+                name: "Option".into(),
+                variants: vec![],
+            },
+        );
+        let ty = resolve_type_name("Option", &ctx).expect("type");
+        assert_eq!(ty, Type::Enum("Option".into()));
     }
 
     #[test]
@@ -2730,7 +3408,13 @@ fn main() -> i32 {
 }
 "#;
 
-        let out = compile_source(src, FrontendOptions { emit_mir: true });
+        let out = compile_source(
+            src,
+            FrontendOptions {
+                emit_mir: true,
+                include_std: false,
+            },
+        );
         assert!(
             out.diagnostics.is_empty(),
             "unexpected diagnostics: {:?}",

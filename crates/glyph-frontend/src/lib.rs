@@ -11,6 +11,7 @@ mod mir_lower;
 mod module_resolver;
 mod parser;
 mod resolver;
+mod stdlib;
 
 pub use lexer::{LexOutput, lex};
 pub use mir_lower::lower_module;
@@ -20,10 +21,13 @@ pub use module_resolver::{
 };
 pub use parser::{ParseOutput, parse};
 pub use resolver::{ResolverContext, resolve_types};
+pub use stdlib::std_modules;
 
 #[derive(Debug, Clone, Default)]
 pub struct FrontendOptions {
     pub emit_mir: bool,
+    /// Include the built-in std modules during lowering (import std will work).
+    pub include_std: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -55,24 +59,65 @@ pub fn compile_source(source: &str, opts: FrontendOptions) -> FrontendOutput {
 
     let mut mir = MirModule::default();
 
-    let mut resolver_ctx = None;
-
     if diagnostics.is_empty() {
         if let Some(ref m) = module {
-            let (ctx, resolve_diags) = resolver::resolve_types(m);
-            diagnostics.extend(resolve_diags);
-            if diagnostics.is_empty() {
-                resolver_ctx = Some(ctx);
-            }
-        }
-    }
+            if opts.include_std {
+                // Multi-module path with injected std
+                let mut modules = std_modules();
+                modules.insert("main".to_string(), m.clone());
 
-    if diagnostics.is_empty() {
-        if let (Some(ref m), Some(ref ctx)) = (module.as_ref(), resolver_ctx.as_ref()) {
-            let (lowered, lower_diags) = mir_lower::lower_module(m, ctx);
-            diagnostics.extend(lower_diags);
-            if diagnostics.is_empty() {
-                mir = lowered;
+                match module_resolver::resolve_multi_module(modules, std::path::Path::new(".")) {
+                    Ok((multi_ctx, compile_order)) => {
+                        let mut merged = MirModule::default();
+                        let mut seen_externs = std::collections::HashSet::new();
+
+                        for module_id in compile_order {
+                            let module = multi_ctx.modules.get(&module_id).unwrap();
+
+                            let (mut ctx, resolve_diags) = resolver::resolve_types(module);
+                            diagnostics.extend(resolve_diags);
+                            if !diagnostics.is_empty() {
+                                break;
+                            }
+
+                            ctx.current_module = Some(module_id.clone());
+                            ctx.import_scope = multi_ctx.import_scopes.get(&module_id).cloned();
+                            ctx.all_modules = Some(multi_ctx.clone());
+                            resolver::populate_imported_types(&mut ctx);
+
+                            let (lowered, lower_diags) = mir_lower::lower_module(module, &ctx);
+                            diagnostics.extend(lower_diags);
+                            if !diagnostics.is_empty() {
+                                break;
+                            }
+
+                            merged.struct_types.extend(lowered.struct_types.into_iter());
+                            merged.enum_types.extend(lowered.enum_types.into_iter());
+                            merged.functions.extend(lowered.functions);
+
+                            for ex in lowered.extern_functions {
+                                if seen_externs.insert(ex.name.clone()) {
+                                    merged.extern_functions.push(ex);
+                                }
+                            }
+                        }
+
+                        if diagnostics.is_empty() {
+                            mir = merged;
+                        }
+                    }
+                    Err(diags) => diagnostics.extend(diags),
+                }
+            } else {
+                let (ctx, resolve_diags) = resolver::resolve_types(m);
+                diagnostics.extend(resolve_diags);
+                if diagnostics.is_empty() {
+                    let (lowered, lower_diags) = mir_lower::lower_module(m, &ctx);
+                    diagnostics.extend(lower_diags);
+                    if diagnostics.is_empty() {
+                        mir = lowered;
+                    }
+                }
             }
         }
     }
@@ -122,14 +167,26 @@ mod tests {
 
     #[test]
     fn emit_mir_option_lowers_function() {
-        let output = compile_source("fn main() { ret }", FrontendOptions { emit_mir: true });
+        let output = compile_source(
+            "fn main() { ret }",
+            FrontendOptions {
+                emit_mir: true,
+                include_std: false,
+            },
+        );
         assert_eq!(output.mir.functions.len(), 1);
         assert_eq!(output.mir.functions[0].name, "main");
     }
 
     #[test]
     fn emit_mir_const_return_value() {
-        let output = compile_source("fn main() { ret 1 }", FrontendOptions { emit_mir: true });
+        let output = compile_source(
+            "fn main() { ret 1 }",
+            FrontendOptions {
+                emit_mir: true,
+                include_std: false,
+            },
+        );
         let insts = &output.mir.functions[0].blocks[0].insts;
         assert!(matches!(
             insts.last(),

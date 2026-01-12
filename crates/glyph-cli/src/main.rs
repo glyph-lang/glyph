@@ -185,7 +185,13 @@ fn build(
     link_search: Vec<PathBuf>,
 ) -> Result<()> {
     let source = load_source(path)?;
-    let output = compile_source(&source, FrontendOptions { emit_mir: true });
+    let output = compile_source(
+        &source,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: true,
+        },
+    );
     if !output.diagnostics.is_empty() {
         for diag in output.diagnostics {
             eprintln!("{:?}", diag);

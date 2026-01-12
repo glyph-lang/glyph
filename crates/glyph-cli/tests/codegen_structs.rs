@@ -16,7 +16,13 @@ fn load_fixture(name: &str) -> String {
 #[test]
 fn codegen_struct_basic() {
     let src = load_fixture("struct_basic.glyph");
-    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    let out = compile_source(
+        &src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: false,
+        },
+    );
     assert!(
         out.diagnostics.is_empty(),
         "unexpected diagnostics: {:?}",
@@ -41,7 +47,13 @@ fn codegen_struct_basic() {
 #[test]
 fn codegen_struct_field_access() {
     let src = load_fixture("struct_field_access.glyph");
-    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    let out = compile_source(
+        &src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: false,
+        },
+    );
     assert!(
         out.diagnostics.is_empty(),
         "unexpected diagnostics: {:?}",
@@ -67,7 +79,13 @@ fn codegen_struct_field_access() {
 #[test]
 fn codegen_struct_field_sum() {
     let src = load_fixture("struct_field_sum.glyph");
-    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    let out = compile_source(
+        &src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: false,
+        },
+    );
     assert!(
         out.diagnostics.is_empty(),
         "unexpected diagnostics: {:?}",

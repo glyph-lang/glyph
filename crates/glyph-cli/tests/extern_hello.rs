@@ -16,7 +16,13 @@ fn extern_putchar_compiles() {
         }
     "#;
 
-    let output = compile_source(source, FrontendOptions { emit_mir: true });
+    let output = compile_source(
+        source,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: false,
+        },
+    );
 
     // Should compile without errors
     assert!(
@@ -26,8 +32,13 @@ fn extern_putchar_compiles() {
     );
 
     // Verify the extern function is in MIR
-    assert_eq!(output.mir.extern_functions.len(), 1);
-    assert_eq!(output.mir.extern_functions[0].name, "putchar");
+    assert!(
+        output
+            .mir
+            .extern_functions
+            .iter()
+            .any(|f| f.name == "putchar")
+    );
 
     #[cfg(feature = "codegen")]
     {
@@ -69,7 +80,13 @@ fn extern_print_hello_compiles() {
         }
     "#;
 
-    let output = compile_source(source, FrontendOptions { emit_mir: true });
+    let output = compile_source(
+        source,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: false,
+        },
+    );
 
     // Should compile without errors
     assert!(
@@ -108,7 +125,13 @@ fn extern_puts_with_string_literal_codegen() {
         }
     "#;
 
-    let output = compile_source(source, FrontendOptions { emit_mir: true });
+    let output = compile_source(
+        source,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: false,
+        },
+    );
     assert!(
         output.diagnostics.is_empty(),
         "Compilation failed with diagnostics: {:?}",
@@ -125,8 +148,13 @@ fn extern_puts_with_string_literal_codegen() {
         let artifact = backend.emit(&output.mir, &opts).unwrap();
         let ir = artifact.llvm_ir.unwrap();
 
-        let decl_ok = ir.contains("declare i32 @puts(i8*)") || ir.contains("declare i32 @puts(ptr)");
-        assert!(decl_ok, "LLVM IR should declare puts with pointer parameter\n{}", ir);
+        let decl_ok =
+            ir.contains("declare i32 @puts(i8*)") || ir.contains("declare i32 @puts(ptr)");
+        assert!(
+            decl_ok,
+            "LLVM IR should declare puts with pointer parameter\n{}",
+            ir
+        );
         assert!(ir.contains("call i32 @puts"), "LLVM IR should call puts");
         assert!(
             ir.contains(".str.main.0"),

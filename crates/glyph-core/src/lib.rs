@@ -78,11 +78,16 @@ pub mod ast {
         Float(f64),
         Bool(bool),
         Str(String),
+        Char(char),
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     pub enum Expr {
         Lit(Literal, Span),
+        InterpString {
+            segments: Vec<InterpSegment>,
+            span: Span,
+        },
         Ident(Ident, Span),
         Binary {
             op: BinaryOp,
@@ -144,6 +149,33 @@ pub mod ast {
             args: Vec<Expr>,
             span: Span,
         },
+        Match {
+            scrutinee: Box<Expr>,
+            arms: Vec<MatchArm>,
+            span: Span,
+        },
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub enum InterpSegment {
+        Literal(String),
+        Expr(Expr),
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub enum MatchPattern {
+        Wildcard,
+        Variant {
+            name: Ident,
+            binding: Option<Ident>,
+        },
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct MatchArm {
+        pub pattern: MatchPattern,
+        pub expr: Expr,
+        pub span: Span,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -221,6 +253,20 @@ pub mod ast {
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct EnumVariantDef {
+        pub name: Ident,
+        pub payload: Option<Ident>,
+        pub span: Span,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct EnumDef {
+        pub name: Ident,
+        pub variants: Vec<EnumVariantDef>,
+        pub span: Span,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     pub struct InlineImpl {
         pub interface: Ident,
         pub methods: Vec<Function>,
@@ -290,6 +336,7 @@ pub mod ast {
     pub enum Item {
         Function(Function),
         Struct(StructDef),
+        Enum(EnumDef),
         Interface(InterfaceDef),
         Impl(ImplBlock),
         ExternFunction(ExternFunctionDecl),
@@ -344,6 +391,8 @@ pub mod token {
         Int,
         Float,
         Str,
+        Char,
+        InterpStr,
         Bool,
         // Punctuation / operators
         LParen,
@@ -408,9 +457,12 @@ pub mod types {
         F32,
         F64,
         Bool,
+        Char,
         Str,
+        String,
         Void,
         Named(String),
+        Enum(String),
         Ref(Box<Type>, Mutability),
         Array(Box<Type>, usize),
         Own(Box<Type>),
@@ -427,10 +479,12 @@ pub mod types {
                 "u8" => Some(Type::U8),
                 "u32" | "u" => Some(Type::U32),
                 "u64" => Some(Type::U64),
+                "char" | "c" => Some(Type::Char),
                 "f32" => Some(Type::F32),
                 "f64" | "f" => Some(Type::F64),
                 "bool" | "b" => Some(Type::Bool),
                 "str" => Some(Type::Str),
+                "String" => Some(Type::String),
                 _ => None,
             }
         }
@@ -438,7 +492,7 @@ pub mod types {
         pub fn is_int(&self) -> bool {
             matches!(
                 self,
-                Type::I8 | Type::I32 | Type::I64 | Type::U8 | Type::U32 | Type::U64
+                Type::I8 | Type::I32 | Type::I64 | Type::U8 | Type::U32 | Type::U64 | Type::Char
             )
         }
 
@@ -522,11 +576,23 @@ pub mod types {
         pub name: String,
         pub fields: Vec<(String, Type)>,
     }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub struct EnumVariant {
+        pub name: String,
+        pub payload: Option<Type>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub struct EnumType {
+        pub name: String,
+        pub variants: Vec<EnumVariant>,
+    }
 }
 
 pub mod mir {
     use super::ast::BinaryOp;
-    use super::types::{Mutability, StructType, Type};
+    use super::types::{EnumType, Mutability, StructType, Type};
     use serde::{Deserialize, Serialize};
     use std::collections::HashMap;
 
@@ -548,6 +614,7 @@ pub mod mir {
     #[derive(Clone, PartialEq, Serialize, Deserialize, Default)]
     pub struct MirModule {
         pub struct_types: HashMap<String, StructType>,
+        pub enum_types: HashMap<String, EnumType>,
         pub functions: Vec<MirFunction>,
         pub extern_functions: Vec<MirExternFunction>,
     }
@@ -556,6 +623,9 @@ pub mod mir {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             let mut ds = f.debug_struct("MirModule");
             ds.field("struct_types", &self.struct_types);
+            if !self.enum_types.is_empty() {
+                ds.field("enum_types", &self.enum_types);
+            }
             ds.field("functions", &self.functions);
             if !self.extern_functions.is_empty() {
                 ds.field("extern_functions", &self.extern_functions);
@@ -663,6 +733,19 @@ pub mod mir {
         SharedClone {
             base: LocalId,
             elem_type: Type,
+        },
+        EnumConstruct {
+            enum_name: String,
+            variant_index: u32,
+            payload: Option<MirValue>,
+        },
+        EnumTag {
+            base: LocalId,
+        },
+        EnumPayload {
+            base: LocalId,
+            variant_index: u32,
+            payload_type: Type,
         },
     }
 

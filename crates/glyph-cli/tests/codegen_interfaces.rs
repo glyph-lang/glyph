@@ -16,7 +16,13 @@ fn load_fixture(name: &str) -> String {
 #[test]
 fn codegen_interface_basic() {
     let src = load_fixture("interface_basic.glyph");
-    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    let out = compile_source(
+        &src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: false,
+        },
+    );
     assert!(
         out.diagnostics.is_empty(),
         "unexpected diagnostics: {:?}",
@@ -57,7 +63,13 @@ fn codegen_interface_basic() {
 #[test]
 fn codegen_interface_multi() {
     let src = load_fixture("interface_multi.glyph");
-    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    let out = compile_source(
+        &src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: false,
+        },
+    );
     assert!(
         out.diagnostics.is_empty(),
         "unexpected diagnostics: {:?}",
@@ -100,7 +112,13 @@ fn codegen_interface_multi() {
 #[test]
 fn codegen_interface_mixed() {
     let src = load_fixture("interface_mixed.glyph");
-    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    let out = compile_source(
+        &src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: false,
+        },
+    );
     assert!(
         out.diagnostics.is_empty(),
         "unexpected diagnostics: {:?}",
@@ -145,7 +163,13 @@ fn codegen_interface_mixed() {
 #[test]
 fn codegen_interface_by_value() {
     let src = load_fixture("interface_by_value.glyph");
-    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    let out = compile_source(
+        &src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: false,
+        },
+    );
     assert!(
         out.diagnostics.is_empty(),
         "unexpected diagnostics: {:?}",
@@ -189,7 +213,13 @@ fn codegen_interface_by_value() {
 #[test]
 fn codegen_interface_auto_borrow() {
     let src = load_fixture("interface_auto_borrow.glyph");
-    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    let out = compile_source(
+        &src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: false,
+        },
+    );
     assert!(
         out.diagnostics.is_empty(),
         "unexpected diagnostics: {:?}",

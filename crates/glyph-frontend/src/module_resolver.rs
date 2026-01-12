@@ -3,6 +3,8 @@ use glyph_core::diag::Diagnostic;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 
+use crate::stdlib::std_modules;
+
 /// Dependency graph for tracking module dependencies
 #[derive(Debug, Clone)]
 pub struct DependencyGraph {
@@ -168,6 +170,12 @@ pub fn build_dependency_graph(
 
             graph.add_dependency(module_id.clone(), dep_module_id);
         }
+
+        // Ensure module is represented even if it has no imports
+        graph
+            .edges
+            .entry(module_id.clone())
+            .or_insert_with(HashSet::new);
     }
 
     if !diagnostics.is_empty() {
@@ -206,6 +214,7 @@ pub struct MultiModuleContext {
 #[derive(Debug, Clone)]
 pub struct ModuleSymbols {
     pub structs: HashSet<String>,
+    pub enums: HashSet<String>,
     pub interfaces: HashSet<String>,
     pub functions: HashSet<String>,
 }
@@ -214,6 +223,7 @@ impl ModuleSymbols {
     pub fn new() -> Self {
         Self {
             structs: HashSet::new(),
+            enums: HashSet::new(),
             interfaces: HashSet::new(),
             functions: HashSet::new(),
         }
@@ -231,6 +241,9 @@ fn collect_module_symbols(modules: &HashMap<String, Module>) -> HashMap<String, 
             match item {
                 Item::Struct(s) => {
                     symbols.structs.insert(s.name.0.clone());
+                }
+                Item::Enum(e) => {
+                    symbols.enums.insert(e.name.0.clone());
                 }
                 Item::Interface(i) => {
                     symbols.interfaces.insert(i.name.0.clone());
@@ -284,6 +297,7 @@ fn build_import_scopes(
                         // Check if symbol exists in source module
                         if let Some(symbols) = module_symbols.get(&source_module) {
                             let exists = symbols.structs.contains(&original_name)
+                                || symbols.enums.contains(&original_name)
                                 || symbols.interfaces.contains(&original_name)
                                 || symbols.functions.contains(&original_name);
 
@@ -336,9 +350,14 @@ fn build_import_scopes(
 /// Main entry point for multi-module resolution
 /// Returns the multi-module context and compilation order
 pub fn resolve_multi_module(
-    modules: HashMap<String, Module>,
+    mut modules: HashMap<String, Module>,
     _root_dir: &Path, // Reserved for future use
 ) -> Result<(MultiModuleContext, Vec<String>), Vec<Diagnostic>> {
+    // Inject built-in std modules if they are not already provided by the user
+    for (id, module) in std_modules() {
+        modules.entry(id).or_insert(module);
+    }
+
     // Step 1: Build dependency graph
     let dep_graph = build_dependency_graph(&modules)?;
 
@@ -912,5 +931,45 @@ mod tests {
         let scopes = build_import_scopes(&modules, &symbols).expect("scopes");
         let main_scope = scopes.get("main").unwrap();
         assert!(main_scope.direct_symbols.contains_key("puts"));
+    }
+
+    #[test]
+    fn std_modules_are_injected_and_importable() {
+        use std::path::Path;
+
+        let src = "import std; fn main() { ret }";
+        let lexed = crate::lex(src);
+        let parsed = crate::parse(&lexed.tokens, src);
+
+        let mut modules = HashMap::new();
+        modules.insert("main".to_string(), parsed.module);
+
+        let (ctx, order) = resolve_multi_module(modules, Path::new(".")).expect("resolve std");
+
+        assert!(ctx.modules.contains_key("std"));
+        assert!(ctx.modules.contains_key("std/io"));
+        assert!(ctx.modules.contains_key("std/string"));
+        assert!(
+            order.contains(&"std/io".to_string()),
+            "compile order should include std/io"
+        );
+        assert!(
+            order.contains(&"std/string".to_string()),
+            "compile order should include std/string"
+        );
+
+        let scope = ctx.import_scopes.get("main").unwrap();
+        assert!(
+            scope.wildcard_modules.contains("std"),
+            "import std should register std wildcard"
+        );
+
+        let std_io_symbols = ctx.module_symbols.get("std/io").unwrap();
+        assert!(std_io_symbols.functions.contains("puts"));
+        assert!(std_io_symbols.functions.contains("fopen"));
+        assert!(std_io_symbols.functions.contains("read"));
+        assert!(std_io_symbols.functions.contains("write"));
+        let std_string_symbols = ctx.module_symbols.get("std/string").unwrap();
+        assert!(std_string_symbols.functions.contains("strdup"));
     }
 }

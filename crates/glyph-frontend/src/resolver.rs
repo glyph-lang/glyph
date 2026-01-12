@@ -5,13 +5,14 @@ use crate::module_resolver::{ImportScope, MultiModuleContext};
 use glyph_core::{
     ast::{Ident, Item, Module},
     diag::Diagnostic,
-    types::{StructType, Type},
+    types::{EnumType, StructType, Type},
 };
 
 /// Context containing resolved type information
 #[derive(Debug, Clone)]
 pub struct ResolverContext {
     pub struct_types: HashMap<String, StructType>,
+    pub enum_types: HashMap<String, EnumType>,
     pub inherent_methods: HashMap<String, HashMap<String, MethodInfo>>,
     pub interfaces: HashMap<String, InterfaceType>,
     pub interface_impls: HashMap<String, HashMap<String, HashMap<String, MethodInfo>>>,
@@ -26,6 +27,7 @@ impl Default for ResolverContext {
     fn default() -> Self {
         Self {
             struct_types: HashMap::new(),
+            enum_types: HashMap::new(),
             inherent_methods: HashMap::new(),
             interfaces: HashMap::new(),
             interface_impls: HashMap::new(),
@@ -56,6 +58,7 @@ pub enum ResolvedSymbol {
     Struct(String, String),    // (module_id, struct_name)
     Interface(String, String), // (module_id, interface_name)
     Function(String, String),  // (module_id, function_name)
+    Enum(String, String),      // (module_id, enum_name)
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +81,7 @@ pub struct InterfaceMethodSig {
 pub fn resolve_types(module: &Module) -> (ResolverContext, Vec<Diagnostic>) {
     let mut ctx = ResolverContext {
         struct_types: HashMap::new(),
+        enum_types: HashMap::new(),
         inherent_methods: HashMap::new(),
         interfaces: HashMap::new(),
         interface_impls: HashMap::new(),
@@ -87,6 +91,61 @@ pub fn resolve_types(module: &Module) -> (ResolverContext, Vec<Diagnostic>) {
         all_modules: None,
     };
     let mut diagnostics = Vec::new();
+
+    // Collect enum definitions
+    for item in &module.items {
+        if let Item::Enum(e) = item {
+            let enum_name = e.name.0.clone();
+
+            if ctx.enum_types.contains_key(&enum_name) || ctx.struct_types.contains_key(&enum_name)
+            {
+                diagnostics.push(Diagnostic::error(
+                    format!("type '{}' is defined multiple times", enum_name),
+                    Some(e.span),
+                ));
+                continue;
+            }
+
+            let mut seen_variants = std::collections::HashSet::new();
+            let mut variants = Vec::new();
+            for variant in &e.variants {
+                if !seen_variants.insert(variant.name.0.clone()) {
+                    diagnostics.push(Diagnostic::error(
+                        format!(
+                            "variant '{}' is defined multiple times in enum '{}'",
+                            variant.name.0, enum_name
+                        ),
+                        Some(variant.span),
+                    ));
+                    continue;
+                }
+
+                let payload_ty = match &variant.payload {
+                    Some(payload_ident) => {
+                        if let Some(builtin) = Type::from_name(&payload_ident.0) {
+                            Some(builtin)
+                        } else {
+                            Some(Type::Named(payload_ident.0.clone()))
+                        }
+                    }
+                    None => None,
+                };
+
+                variants.push(glyph_core::types::EnumVariant {
+                    name: variant.name.0.clone(),
+                    payload: payload_ty,
+                });
+            }
+
+            ctx.enum_types.insert(
+                enum_name.clone(),
+                EnumType {
+                    name: enum_name,
+                    variants,
+                },
+            );
+        }
+    }
 
     // First pass: collect all interface definitions
     for item in &module.items {
@@ -113,6 +172,8 @@ pub fn resolve_types(module: &Module) -> (ResolverContext, Vec<Diagnostic>) {
                             raw_param_types.push(Some(ty_ident.0.clone()));
                             if let Some(builtin) = Type::from_name(&ty_ident.0) {
                                 Some(builtin)
+                            } else if ctx.enum_types.contains_key(&ty_ident.0) {
+                                Some(Type::Enum(ty_ident.0.clone()))
                             } else if ty_ident.0.chars().all(|c| c.is_alphanumeric() || c == '_') {
                                 Some(Type::Named(ty_ident.0.clone()))
                             } else {
@@ -132,6 +193,8 @@ pub fn resolve_types(module: &Module) -> (ResolverContext, Vec<Diagnostic>) {
                     Some(ty) => {
                         if let Some(builtin) = Type::from_name(&ty.0) {
                             (Some(builtin), Some(ty.0.clone()))
+                        } else if ctx.enum_types.contains_key(&ty.0) {
+                            (Some(Type::Enum(ty.0.clone())), Some(ty.0.clone()))
                         } else if ty.0.chars().all(|c| c.is_alphanumeric() || c == '_') {
                             (Some(Type::Named(ty.0.clone())), Some(ty.0.clone()))
                         } else {
@@ -166,7 +229,7 @@ pub fn resolve_types(module: &Module) -> (ResolverContext, Vec<Diagnostic>) {
             let struct_name = s.name.0.clone();
 
             // Check for duplicate struct definitions
-            if ctx.struct_types.contains_key(&struct_name) {
+            if ctx.struct_types.contains_key(&struct_name) || ctx.enum_types.contains_key(&struct_name) {
                 diagnostics.push(Diagnostic::error(
                     format!("struct '{}' is defined multiple times", struct_name),
                     Some(s.span),
@@ -196,6 +259,8 @@ pub fn resolve_types(module: &Module) -> (ResolverContext, Vec<Diagnostic>) {
                 // Resolve field type
                 let field_type = if let Some(ty) = Type::from_name(field_ty_name) {
                     ty
+                } else if ctx.enum_types.contains_key(field_ty_name) {
+                    Type::Enum(field_ty_name.to_string())
                 } else {
                     // Assume it's a named type (struct) - will validate in second pass
                     Type::Named(field_ty_name.to_string())
@@ -216,6 +281,7 @@ pub fn resolve_types(module: &Module) -> (ResolverContext, Vec<Diagnostic>) {
 
     // Second pass: validate that all Named types reference actual structs
     let struct_names: std::collections::HashSet<_> = ctx.struct_types.keys().cloned().collect();
+    let enum_names: std::collections::HashSet<_> = ctx.enum_types.keys().cloned().collect();
 
     for item in &module.items {
         if let Item::Struct(s) = item {
@@ -224,13 +290,34 @@ pub fn resolve_types(module: &Module) -> (ResolverContext, Vec<Diagnostic>) {
             if let Some(struct_type) = ctx.struct_types.get(struct_name) {
                 for (field_name, field_type) in &struct_type.fields {
                     if let Type::Named(type_name) = field_type {
-                        if !struct_names.contains(type_name) {
+                        if !struct_names.contains(type_name) && !enum_names.contains(type_name) {
                             diagnostics.push(Diagnostic::error(
                                 format!(
                                     "undefined type '{}' used in field '{}' of struct '{}'",
                                     type_name, field_name, struct_name
                                 ),
                                 Some(s.span),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Validate enum payload types
+    for item in &module.items {
+        if let Item::Enum(e) = item {
+            if let Some(enum_type) = ctx.enum_types.get(&e.name.0) {
+                for variant in &enum_type.variants {
+                    if let Some(Type::Named(type_name)) = &variant.payload {
+                        if !struct_names.contains(type_name) && !enum_names.contains(type_name) {
+                            diagnostics.push(Diagnostic::error(
+                                format!(
+                                    "undefined type '{}' used in variant '{}' of enum '{}'",
+                                    type_name, variant.name, e.name.0
+                                ),
+                                Some(e.span),
                             ));
                         }
                     }
@@ -349,6 +436,10 @@ impl ResolverContext {
         self.struct_types.get(name)
     }
 
+    pub fn get_enum(&self, name: &str) -> Option<&EnumType> {
+        self.enum_types.get(name)
+    }
+
     /// Get the type and index of a field in a struct
     pub fn get_field(&self, struct_name: &str, field_name: &str) -> Option<(Type, usize)> {
         let struct_type = self.get_struct(struct_name)?;
@@ -401,16 +492,23 @@ impl ResolverContext {
 
     fn resolve_qualified_symbol(&self, qualified: &str) -> Option<ResolvedSymbol> {
         let parts: Vec<&str> = qualified.split("::").collect();
-        if parts.len() != 2 {
-            return None; // Only support module::symbol for now
+        if parts.len() < 2 {
+            return None;
         }
 
-        let (module_name, symbol_name) = (parts[0], parts[1]);
+        // Everything except the last segment is the module path
+        let module_path = parts[..parts.len() - 1].join("/");
+        let symbol_name = parts.last().unwrap().to_string();
 
-        // Check if this module is in wildcard imports
+        // Check if this module (or a prefix) is available via wildcard imports
         if let Some(scope) = &self.import_scope {
-            if scope.wildcard_modules.contains(module_name) {
-                return self.resolve_in_module(module_name, symbol_name);
+            if scope.wildcard_modules.contains(&module_path)
+                || scope
+                    .wildcard_modules
+                    .iter()
+                    .any(|m| module_path.starts_with(&format!("{}/", m)))
+            {
+                return self.resolve_in_module(&module_path, &symbol_name);
             }
         }
 
@@ -423,6 +521,11 @@ impl ResolverContext {
 
         if module_symbols.structs.contains(symbol_name) {
             Some(ResolvedSymbol::Struct(
+                module_id.to_string(),
+                symbol_name.to_string(),
+            ))
+        } else if module_symbols.enums.contains(symbol_name) {
+            Some(ResolvedSymbol::Enum(
                 module_id.to_string(),
                 symbol_name.to_string(),
             ))
@@ -451,11 +554,133 @@ impl ResolverContext {
     }
 }
 
+/// Populate the resolver context with struct/enum types made available through imports.
+/// This enables cross-module type usage during lowering without requiring explicit
+/// duplication in the source module.
+pub fn populate_imported_types(ctx: &mut ResolverContext) {
+    let (Some(scope), Some(all_modules)) = (&ctx.import_scope, &ctx.all_modules) else {
+        return;
+    };
+
+    for (local_name, (source_module, original_name)) in &scope.direct_symbols {
+        if ctx.struct_types.contains_key(local_name) || ctx.enum_types.contains_key(local_name) {
+            continue;
+        }
+        if let Some(module) = all_modules.modules.get(source_module) {
+            for item in &module.items {
+                match item {
+                    Item::Struct(s) if s.name.0 == *original_name => {
+                        let mut st = struct_type_from_def(s, ctx);
+                        st.name = local_name.clone();
+                        ctx.struct_types.insert(local_name.clone(), st);
+                        break;
+                    }
+                    Item::Enum(e) if e.name.0 == *original_name => {
+                        let mut et = enum_type_from_def(e, ctx);
+                        et.name = local_name.clone();
+                        ctx.enum_types.insert(local_name.clone(), et);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    for wildcard in &scope.wildcard_modules {
+        for (_module_id, module) in all_modules
+            .modules
+            .iter()
+            .filter(|(id, _)| *id == wildcard || id.starts_with(&format!("{}/", wildcard)))
+        {
+            for item in &module.items {
+                match item {
+                    Item::Struct(s) => {
+                        if ctx.struct_types.contains_key(&s.name.0) {
+                            continue;
+                        }
+                        let st = struct_type_from_def(s, ctx);
+                        ctx.struct_types.insert(st.name.clone(), st);
+                    }
+                    Item::Enum(e) => {
+                        if ctx.enum_types.contains_key(&e.name.0) {
+                            continue;
+                        }
+                        let et = enum_type_from_def(e, ctx);
+                        ctx.enum_types.insert(et.name.clone(), et);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+fn struct_type_from_def(def: &glyph_core::ast::StructDef, ctx: &ResolverContext) -> StructType {
+    let mut fields = Vec::new();
+    for field in &def.fields {
+        let field_ty_name = field.ty.0.as_str();
+        let field_type = if let Some(ty) = Type::from_name(field_ty_name) {
+            ty
+        } else if ctx.enum_types.contains_key(field_ty_name) {
+            Type::Enum(field_ty_name.to_string())
+        } else if ctx.struct_types.contains_key(field_ty_name) {
+            Type::Named(field_ty_name.to_string())
+        } else {
+            Type::Named(field_ty_name.to_string())
+        };
+        fields.push((field.name.0.clone(), field_type));
+    }
+
+    StructType {
+        name: def.name.0.clone(),
+        fields,
+    }
+}
+
+fn enum_type_from_def(def: &glyph_core::ast::EnumDef, ctx: &ResolverContext) -> EnumType {
+    let mut variants = Vec::new();
+    for variant in &def.variants {
+        let payload_ty = match &variant.payload {
+            Some(payload_ident) => {
+                if let Some(builtin) = Type::from_name(&payload_ident.0) {
+                    Some(builtin)
+                } else if ctx.enum_types.contains_key(&payload_ident.0) {
+                    Some(Type::Enum(payload_ident.0.clone()))
+                } else if ctx.struct_types.contains_key(&payload_ident.0) {
+                    Some(Type::Named(payload_ident.0.clone()))
+                } else {
+                    Some(Type::Named(payload_ident.0.clone()))
+                }
+            }
+            None => None,
+        };
+
+        variants.push(glyph_core::types::EnumVariant {
+            name: variant.name.0.clone(),
+            payload: payload_ty,
+        });
+    }
+
+    EnumType {
+        name: def.name.0.clone(),
+        variants,
+    }
+}
+
 fn resolve_ffi_type(name: &str) -> Option<Type> {
     let trimmed = name.trim();
 
     if trimmed == "&str" {
         return Some(Type::Str);
+    }
+
+    if trimmed == "String" {
+        return Some(Type::String);
+    }
+
+    if trimmed == "String" {
+        return Some(Type::String);
     }
 
     if let Some(builtin) = Type::from_name(trimmed) {
@@ -640,6 +865,10 @@ fn record_interface_impl(
         }
 
         for (idx, expected_raw) in iface_sig.raw_param_types.iter().enumerate() {
+            // Skip self; already validated separately for struct receiver.
+            if idx == 0 {
+                continue;
+            }
             if let Some(expected) = expected_raw {
                 let actual = method
                     .params

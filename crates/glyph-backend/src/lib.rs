@@ -85,6 +85,7 @@ mod tests {
         let backend = NullBackend::default();
         let module = MirModule {
             struct_types: std::collections::HashMap::new(),
+            enum_types: std::collections::HashMap::new(),
             functions: vec![],
             extern_functions: Vec::new(),
         };

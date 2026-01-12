@@ -37,6 +37,19 @@ pub fn lex(source: &str) -> LexOutput {
                 toks.push(Token::new(kind, Span::new(start, end as u32)));
                 i = end;
             }
+            b'$' if i + 1 < bytes.len() && bytes[i + 1] == b'"' => match consume_interpolated_string(bytes, i) {
+                Ok(end) => {
+                    toks.push(Token::new(TokenKind::InterpStr, Span::new(start, end as u32)));
+                    i = end;
+                }
+                Err(pos) => {
+                    diags.push(Diagnostic::error(
+                        "unterminated interpolated string literal",
+                        Some(Span::new(start, pos as u32)),
+                    ));
+                    break;
+                }
+            },
             b'"' => match consume_string(bytes, i) {
                 Ok(end) => {
                     toks.push(Token::new(TokenKind::Str, Span::new(start, end as u32)));
@@ -45,6 +58,19 @@ pub fn lex(source: &str) -> LexOutput {
                 Err(pos) => {
                     diags.push(Diagnostic::error(
                         "unterminated string literal",
+                        Some(Span::new(start, pos as u32)),
+                    ));
+                    break;
+                }
+            },
+            b'\'' => match consume_char(bytes, i) {
+                Ok(end) => {
+                    toks.push(Token::new(TokenKind::Char, Span::new(start, end as u32)));
+                    i = end;
+                }
+                Err(pos) => {
+                    diags.push(Diagnostic::error(
+                        "unterminated or invalid char literal",
                         Some(Span::new(start, pos as u32)),
                     ));
                     break;
@@ -138,6 +164,40 @@ fn consume_number(bytes: &[u8], start: usize) -> (usize, TokenKind) {
 
 fn consume_string(bytes: &[u8], start: usize) -> Result<usize, usize> {
     let mut i = start + 1; // skip opening quote
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => {
+                i += 2; // skip escape
+            }
+            b'"' => return Ok(i + 1),
+            _ => i += 1,
+        }
+    }
+    Err(i)
+}
+
+fn consume_char(bytes: &[u8], start: usize) -> Result<usize, usize> {
+    let mut i = start + 1; // skip opening quote
+    if i >= bytes.len() {
+        return Err(i);
+    }
+
+    if bytes[i] == b'\\' {
+        // escape sequence takes two bytes like '\n'
+        i += 2;
+    } else {
+        i += 1;
+    }
+
+    if i >= bytes.len() || bytes[i] != b'\'' {
+        return Err(i.min(bytes.len()));
+    }
+
+    Ok(i + 1)
+}
+
+fn consume_interpolated_string(bytes: &[u8], start: usize) -> Result<usize, usize> {
+    let mut i = start + 2; // skip $" prefix
     while i < bytes.len() {
         match bytes[i] {
             b'\\' => {

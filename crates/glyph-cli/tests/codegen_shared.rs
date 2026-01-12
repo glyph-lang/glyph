@@ -15,7 +15,13 @@ fn load_fixture(name: &str) -> String {
 
 fn compile_ir(name: &str) -> String {
     let src = load_fixture(name);
-    let out = compile_source(&src, FrontendOptions { emit_mir: true });
+    let out = compile_source(
+        &src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: false,
+        },
+    );
     assert!(
         out.diagnostics.is_empty(),
         "unexpected diagnostics: {:?}",

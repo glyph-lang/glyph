@@ -1,9 +1,10 @@
 use crate::method_symbols::{inherent_method_symbol, interface_method_symbol};
 use glyph_core::{
     ast::{
-        BinaryOp, Block, Expr, ExternFunctionDecl, FieldDef, Function, Ident, ImplBlock, Import,
-        ImportItem, ImportKind, ImportPath, InlineImpl, InterfaceDef, InterfaceMethod, Item,
-        Literal, Module, Param, Stmt, StructDef,
+        BinaryOp, Block, EnumDef, EnumVariantDef, Expr, ExternFunctionDecl, FieldDef, Function,
+        Ident, ImplBlock, Import, ImportItem, ImportKind, ImportPath, InlineImpl, InterfaceDef,
+        InterfaceMethod, InterpSegment, Item, Literal, MatchArm, MatchPattern, Module, Param,
+        Stmt, StructDef,
     },
     diag::Diagnostic,
     span::Span,
@@ -24,6 +25,7 @@ pub fn parse(tokens: &[Token], source: &str) -> ParseOutput {
         diagnostics: Vec::new(),
         items: Vec::new(),
         pending_items: Vec::new(),
+        suppress_struct_literals: false,
     };
 
     let mut imports = Vec::new();
@@ -42,6 +44,14 @@ pub fn parse(tokens: &[Token], source: &str) -> ParseOutput {
             match parser.parse_struct() {
                 Some(s) => {
                     parser.items.push(Item::Struct(s));
+                    parser.flush_pending_items();
+                }
+                None => parser.synchronize(),
+            }
+        } else if parser.at(TokenKind::Enum) {
+            match parser.parse_enum() {
+                Some(e) => {
+                    parser.items.push(Item::Enum(e));
                     parser.flush_pending_items();
                 }
                 None => parser.synchronize(),
@@ -75,7 +85,7 @@ pub fn parse(tokens: &[Token], source: &str) -> ParseOutput {
         } else {
             let span = parser.peek().map(|t| t.span);
             parser.diagnostics.push(Diagnostic::error(
-                "expected `fn`, `struct`, `interface`, `impl`, or `extern`",
+                "expected `fn`, `struct`, `enum`, `interface`, `impl`, or `extern`",
                 span,
             ));
             parser.synchronize();
@@ -100,6 +110,7 @@ struct Parser<'a> {
     diagnostics: Vec<Diagnostic>,
     items: Vec<Item>,
     pending_items: Vec<Item>,
+    suppress_struct_literals: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -347,6 +358,51 @@ impl<'a> Parser<'a> {
             methods,
             inline_impls,
             span: Span::new(struct_tok.span.start, end.span.end),
+        })
+    }
+
+    fn parse_enum(&mut self) -> Option<EnumDef> {
+        let enum_tok = self.consume(TokenKind::Enum, "expected `enum`")?;
+        let name_tok = self.consume(TokenKind::Ident, "expected enum name")?;
+        let name = Ident(self.slice(name_tok));
+
+        self.consume(TokenKind::LBrace, "expected `{` after enum name")?;
+
+        let mut variants = Vec::new();
+        while !self.at(TokenKind::RBrace) && !self.at(TokenKind::Eof) {
+            let variant_tok = match self.consume(TokenKind::Ident, "expected variant name") {
+                Some(tok) => tok,
+                None => break,
+            };
+            let variant_name = Ident(self.slice(variant_tok));
+            let mut payload = None;
+            let mut end = variant_tok.span.end;
+
+            if self.at(TokenKind::LParen) {
+                self.advance();
+                payload = self.parse_type_annotation();
+                let close = self.consume(TokenKind::RParen, "expected `)` after variant payload")?;
+                end = close.span.end;
+            }
+
+            if self.at(TokenKind::Comma) {
+                let comma = self.advance().unwrap();
+                end = comma.span.end;
+            }
+
+            variants.push(EnumVariantDef {
+                name: variant_name,
+                payload,
+                span: Span::new(variant_tok.span.start, end),
+            });
+        }
+
+        let end_tok = self.consume(TokenKind::RBrace, "expected `}` after enum variants")?;
+
+        Some(EnumDef {
+            name,
+            variants,
+            span: Span::new(enum_tok.span.start, end_tok.span.end),
         })
     }
 
@@ -698,7 +754,76 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expr(&mut self) -> Option<Expr> {
+        self.parse_match_expr()
+    }
+
+    fn parse_match_expr(&mut self) -> Option<Expr> {
+        if self.at(TokenKind::Match) {
+            let match_tok = self.advance().unwrap();
+            let prev = self.suppress_struct_literals;
+            self.suppress_struct_literals = true;
+            let scrutinee = self.parse_binary_expr();
+            self.suppress_struct_literals = prev;
+            let scrutinee = scrutinee?;
+            self.consume(TokenKind::LBrace, "expected `{` after match scrutinee")?;
+
+            let mut arms = Vec::new();
+            while !self.at(TokenKind::RBrace) && !self.at(TokenKind::Eof) {
+                let pattern = self.parse_match_pattern()?;
+                if self.at(TokenKind::FatArrow) {
+                    self.advance();
+                } else if self.at(TokenKind::Eq) {
+                    // Be tolerant if lexer produced '=' followed by '>'
+                    self.advance();
+                    self.consume(TokenKind::Gt, "expected `>` after `=` in match arm")?;
+                } else {
+                    self.consume(TokenKind::FatArrow, "expected `=>` after match pattern")?;
+                }
+                let expr = self.parse_expr()?;
+                let mut end = self.expr_end(&expr);
+                if self.at(TokenKind::Comma) {
+                    let comma = self.advance().unwrap();
+                    end = comma.span.end;
+                }
+                arms.push(MatchArm {
+                    pattern,
+                    span: Span::new(self.expr_start(&expr), end),
+                    expr,
+                });
+            }
+
+            let end_tok = self.consume(TokenKind::RBrace, "expected `}` to close match")?;
+            return Some(Expr::Match {
+                scrutinee: Box::new(scrutinee),
+                arms,
+                span: Span::new(match_tok.span.start, end_tok.span.end),
+            });
+        }
+
         self.parse_binary_expr()
+    }
+
+    fn parse_match_pattern(&mut self) -> Option<MatchPattern> {
+        if self.at(TokenKind::Ident) {
+            let tok = self.peek().unwrap();
+            if self.slice(tok) == "_" {
+                self.advance();
+                return Some(MatchPattern::Wildcard);
+            }
+        }
+
+        let variant_tok = self.consume(TokenKind::Ident, "expected variant name")?;
+        let name = Ident(self.slice(variant_tok));
+        let mut binding = None;
+        if self.at(TokenKind::LParen) {
+            self.advance();
+            if let Some(b) = self.consume(TokenKind::Ident, "expected binding name") {
+                binding = Some(Ident(self.slice(b)));
+            }
+            self.consume(TokenKind::RParen, "expected `)` after binding")?;
+        }
+
+        Some(MatchPattern::Variant { name, binding })
     }
 
     fn parse_binary_expr(&mut self) -> Option<Expr> {
@@ -718,6 +843,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_call_or_primary(&mut self) -> Option<Expr> {
+        if self.at(TokenKind::Match) {
+            return self.parse_match_expr();
+        }
         // Check for reference prefix (&expr or &mut expr)
         if self.at(TokenKind::Amp) {
             let start_tok = self.peek().unwrap();
@@ -850,7 +978,7 @@ impl<'a> Parser<'a> {
             TokenKind::Ident => {
                 // Parse full path (supports `module::Type`)
                 let ident_expr = self.parse_path_ident(&tok);
-                if self.at(TokenKind::LBrace) {
+                if !self.suppress_struct_literals && self.at(TokenKind::LBrace) {
                     if let Expr::Ident(name, span) = ident_expr {
                         self.parse_struct_lit(name, span.start)
                     } else {
@@ -863,6 +991,8 @@ impl<'a> Parser<'a> {
             TokenKind::Int => Some(Expr::Lit(self.literal_from(tok), tok.span)),
             TokenKind::Float => Some(Expr::Lit(self.literal_from(tok), tok.span)),
             TokenKind::Str => Some(Expr::Lit(self.literal_from(tok), tok.span)),
+            TokenKind::Char => Some(Expr::Lit(self.literal_from(tok), tok.span)),
+            TokenKind::InterpStr => self.parse_interpolated_string(tok),
             TokenKind::Bool => Some(Expr::Lit(self.literal_from(tok), tok.span)),
             TokenKind::LParen => {
                 let expr = self.parse_expr();
@@ -913,6 +1043,133 @@ impl<'a> Parser<'a> {
                 None
             }
         }
+    }
+
+    fn parse_interpolated_string(&mut self, tok: &Token) -> Option<Expr> {
+        let raw = self.slice(tok);
+        if raw.len() < 3 {
+            self.diagnostics.push(Diagnostic::error(
+                "invalid interpolated string",
+                Some(tok.span),
+            ));
+            return None;
+        }
+
+        let mut segments = Vec::new();
+        let content = &raw[2..raw.len().saturating_sub(1)]; // strip $" and closing "
+        let bytes = content.as_bytes();
+        let mut i = 0usize;
+        let mut literal = String::new();
+
+        while i < bytes.len() {
+            if bytes[i] == b'{' {
+                if i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+                    literal.push('{');
+                    i += 2;
+                    continue;
+                }
+
+                // Flush current literal segment
+                if !literal.is_empty() {
+                    segments.push(InterpSegment::Literal(std::mem::take(&mut literal)));
+                }
+
+                let hole_start = i;
+                i += 1;
+                let mut depth = 1;
+                while i < bytes.len() && depth > 0 {
+                    match bytes[i] {
+                        b'{' => depth += 1,
+                        b'}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    i += 1;
+                }
+
+                if depth != 0 {
+                    self.diagnostics.push(Diagnostic::error(
+                        "unterminated interpolation hole",
+                        Some(tok.span),
+                    ));
+                    return None;
+                }
+
+                let hole_end = i;
+                let hole_src = content[hole_start + 1..hole_end].trim();
+                let offset = tok.span.start + 2 + hole_start as u32;
+                if let Some(expr) = self.parse_inline_expr(hole_src, offset) {
+                    segments.push(InterpSegment::Expr(expr));
+                }
+                i += 1; // skip closing brace
+                continue;
+            }
+
+            if bytes[i] == b'}' && i + 1 < bytes.len() && bytes[i + 1] == b'}' {
+                literal.push('}');
+                i += 2;
+                continue;
+            }
+
+            if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                let escaped = match bytes[i + 1] {
+                    b'n' => '\n',
+                    b't' => '\t',
+                    b'r' => '\r',
+                    b'\\' => '\\',
+                    b'"' => '"',
+                    other => other as char,
+                };
+                literal.push(escaped);
+                i += 2;
+                continue;
+            }
+
+            literal.push(bytes[i] as char);
+            i += 1;
+        }
+
+        if !literal.is_empty() {
+            segments.push(InterpSegment::Literal(literal));
+        }
+
+        Some(Expr::InterpString {
+            segments,
+            span: tok.span,
+        })
+    }
+
+    fn parse_inline_expr(&mut self, src: &str, span_offset: u32) -> Option<Expr> {
+        let lex_out = crate::lexer::lex(src);
+        for diag in lex_out.diagnostics {
+            let span = diag
+                .span
+                .map(|s| Span::new(s.start + span_offset, s.end + span_offset));
+            self.diagnostics.push(Diagnostic::error(diag.message, span));
+        }
+
+        let mut parser = Parser {
+            tokens: &lex_out.tokens,
+            source: src,
+            pos: 0,
+            diagnostics: Vec::new(),
+            items: Vec::new(),
+            pending_items: Vec::new(),
+            suppress_struct_literals: false,
+        };
+
+        let expr = parser.parse_expr();
+        for diag in parser.diagnostics {
+            let span = diag
+                .span
+                .map(|s| Span::new(s.start + span_offset, s.end + span_offset));
+            self.diagnostics.push(Diagnostic::error(diag.message, span));
+        }
+        expr
     }
 
     fn parse_path_ident(&mut self, first: &Token) -> Expr {
@@ -1032,6 +1289,7 @@ impl<'a> Parser<'a> {
             TokenKind::Int => Literal::Int(text.parse().unwrap_or(0)),
             TokenKind::Float => Literal::Float(text.parse().unwrap_or(0.0)),
             TokenKind::Str => Literal::Str(parse_string_literal(&text)),
+            TokenKind::Char => Literal::Char(parse_char_literal(&text)),
             TokenKind::Bool => Literal::Bool(matches!(text.as_str(), "true")),
             _ => Literal::Int(0),
         }
@@ -1040,6 +1298,7 @@ impl<'a> Parser<'a> {
     fn expr_start(&self, expr: &Expr) -> u32 {
         match expr {
             Expr::Lit(_, sp) => sp.start,
+            Expr::InterpString { span, .. } => span.start,
             Expr::Ident(_, sp) => sp.start,
             Expr::Binary { span, .. } => span.start,
             Expr::Call { span, .. } => span.start,
@@ -1053,12 +1312,14 @@ impl<'a> Parser<'a> {
             Expr::ArrayLit { span, .. } => span.start,
             Expr::Index { span, .. } => span.start,
             Expr::MethodCall { span, .. } => span.start,
+            Expr::Match { span, .. } => span.start,
         }
     }
 
     fn expr_end(&self, expr: &Expr) -> u32 {
         match expr {
             Expr::Lit(_, sp) => sp.end,
+            Expr::InterpString { span, .. } => span.end,
             Expr::Ident(_, sp) => sp.end,
             Expr::Binary { span, .. } => span.end,
             Expr::Call { span, .. } => span.end,
@@ -1072,6 +1333,7 @@ impl<'a> Parser<'a> {
             Expr::ArrayLit { span, .. } => span.end,
             Expr::Index { span, .. } => span.end,
             Expr::MethodCall { span, .. } => span.end,
+            Expr::Match { span, .. } => span.end,
         }
     }
 
@@ -1223,7 +1485,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn lookahead_for_from(&self) -> bool {
+fn lookahead_for_from(&self) -> bool {
         let mut pos = self.pos;
         while pos < self.tokens.len() {
             match self.tokens[pos].kind {
@@ -1238,6 +1500,24 @@ impl<'a> Parser<'a> {
             }
         }
         false
+    }
+}
+
+fn parse_char_literal(raw: &str) -> char {
+    let trimmed = raw.trim_matches('\'');
+    let mut chars = trimmed.chars();
+    match chars.next() {
+        Some('\\') => match chars.next() {
+            Some('n') => '\n',
+            Some('t') => '\t',
+            Some('r') => '\r',
+            Some('\\') => '\\',
+            Some('\'') => '\'',
+            Some(other) => other,
+            None => '\0',
+        },
+        Some(ch) => ch,
+        None => '\0',
     }
 }
 
@@ -1302,6 +1582,58 @@ mod tests {
                 assert_eq!(f.name.0, "add");
                 assert_eq!(f.params.len(), 2);
             }
+            other => panic!("expected function, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_match_expression() {
+        let source = r#"
+fn main() -> i32 {
+  let x = Some(5);
+  let y = match x {
+    Some(v) => v,
+    None => 0,
+  };
+  ret y
+}
+"#;
+        let lex_out = lex(source);
+        let out = parse(&lex_out.tokens, source);
+        assert!(
+            out.diagnostics.is_empty(),
+            "unexpected diagnostics: {:?}",
+            out.diagnostics
+        );
+        assert_eq!(out.module.items.len(), 1);
+    }
+
+    #[test]
+    fn parses_interpolated_string_with_hole() {
+        let source = r#"
+fn main() {
+  let s = $"hi {x}";
+  ret 0
+}
+"#;
+        let lex_out = lex(source);
+        let out = parse(&lex_out.tokens, source);
+        assert!(
+            out.diagnostics.is_empty(),
+            "unexpected diagnostics: {:?}",
+            out.diagnostics
+        );
+
+        match &out.module.items[0] {
+            Item::Function(f) => match &f.body.stmts[0] {
+                Stmt::Let {
+                    value: Some(Expr::InterpString { segments, .. }),
+                    ..
+                } => {
+                    assert_eq!(segments.len(), 2);
+                }
+                other => panic!("expected interpolated string let, got {:?}", other),
+            },
             other => panic!("expected function, got {:?}", other),
         }
     }
