@@ -1189,7 +1189,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_if(&mut self, start: u32) -> Option<Expr> {
+        let prev = self.suppress_struct_literals;
+        self.suppress_struct_literals = true;
         let cond = self.parse_expr()?;
+        self.suppress_struct_literals = prev;
         let then_block = self.parse_block()?;
         let else_block = if self.at(TokenKind::Else) {
             self.advance();
@@ -1222,7 +1225,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_while(&mut self, start: u32) -> Option<Expr> {
+        let prev = self.suppress_struct_literals;
+        self.suppress_struct_literals = true;
         let cond = self.parse_expr()?;
+        self.suppress_struct_literals = prev;
         let body = self.parse_block()?;
         let end = body.span.end;
         Some(Expr::While {

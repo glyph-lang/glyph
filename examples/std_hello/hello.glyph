@@ -1,0 +1,9 @@
+// hello.glyph
+/*
+this is a block comment
+*/
+from std import println
+fn main() -> i32 {
+    println("hello world")
+    ret 0
+}

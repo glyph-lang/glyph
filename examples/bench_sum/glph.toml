@@ -1,0 +1,10 @@
+[package]
+name = "bench_sum"
+version = "0.1.0"
+
+[dependencies]
+# none yet
+
+[[bin]]
+name = "bench_sum"
+path = "src/main.glyph"
