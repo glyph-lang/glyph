@@ -1,79 +1,59 @@
-#!/bin/bash
-# Demo script for Glyph compiler
+#!/usr/bin/env bash
 
-set -e
+set -euo pipefail
 
-# Set LLVM path
-export LLVM_SYS_201_PREFIX=/opt/homebrew/Cellar/llvm/20.1.8
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT_DIR"
 
-echo "╔════════════════════════════════════════════════════════╗"
-echo "║       Glyph Compiler Demo - Working Prototype!        ║"
-echo "╚════════════════════════════════════════════════════════╝"
-echo
+heading() {
+  printf "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n%s\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n" "$1"
+}
 
-# Build if needed
-if [ ! -f "target/release/glyph-cli" ]; then
-    echo "Building Glyph compiler..."
-    cargo build --release --quiet
-    echo "✓ Build complete"
-    echo
+status() {
+  printf "[%s] %s\n" "$1" "$2"
+}
+
+# Detect LLVM for llvm-sys (override with existing env)
+detect_llvm_prefix() {
+  if [[ -n "${LLVM_SYS_201_PREFIX:-}" ]]; then
+    echo "$LLVM_SYS_201_PREFIX"
+    return 0
+  fi
+  if command -v llvm-config >/dev/null 2>&1; then
+    llvm-config --prefix && return 0
+  fi
+  for prefix in /opt/homebrew/opt/llvm /usr/local/opt/llvm; do
+    if [[ -d "$prefix" ]]; then
+      echo "$prefix"
+      return 0
+    fi
+  done
+  return 1
+}
+
+if prefix=$(detect_llvm_prefix); then
+  export LLVM_SYS_201_PREFIX="$prefix"
+  status "info" "LLVM_SYS_201_PREFIX set to $prefix"
+else
+  status "warn" "Could not auto-detect LLVM; if build fails, set LLVM_SYS_201_PREFIX manually"
 fi
 
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Demo 1: Simple Function Returning a Constant"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo
-echo "Source code (simple_ret.glyph):"
-echo "────────────────────────────────"
-cat tests/fixtures/codegen/simple_ret.glyph
-echo
-echo "Generated LLVM IR:"
-echo "────────────────────────────────"
-./target/release/glyph-cli build tests/fixtures/codegen/simple_ret.glyph
-echo
+heading "Building glyph-cli (release, codegen enabled)"
+cargo build --release --bin glyph-cli --features codegen
 
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Demo 2: Function with Parameters and Arithmetic"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo
-echo "Source code (add_function.glyph):"
-echo "────────────────────────────────"
-cat tests/fixtures/codegen/add_function.glyph
-echo
-echo "Generated LLVM IR:"
-echo "────────────────────────────────"
-./target/release/glyph-cli build tests/fixtures/codegen/add_function.glyph
-echo
+heading "Demo 1: Check + type-resolve a stdlib hello"
+cat examples/std_hello/hello.glyph
+cargo run --quiet --bin glyph-cli -- check examples/std_hello/hello.glyph
 
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Demo 3: Control Flow (If/Else)"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo
-echo "Source code (if_else.glyph):"
-echo "────────────────────────────────"
-cat tests/fixtures/mir/if_else.glyph
-echo
-echo "Generated LLVM IR:"
-echo "────────────────────────────────"
-./target/release/glyph-cli build tests/fixtures/mir/if_else.glyph
-echo
+heading "Demo 2: Build + run stdlib hello"
+cargo run --quiet --bin glyph-cli --features codegen -- run examples/std_hello/hello.glyph
 
-echo "╔════════════════════════════════════════════════════════╗"
-echo "║                    ✓ Demo Complete!                   ║"
-echo "╚════════════════════════════════════════════════════════╝"
-echo
-echo "What's Working:"
-echo "  ✓ Lexing and parsing"
-echo "  ✓ MIR lowering (SSA-like IR)"
-echo "  ✓ LLVM IR code generation"
-echo "  ✓ JIT execution for testing"
-echo "  ✓ Function parameters and return types"
-echo "  ✓ Arithmetic and comparison operations"
-echo "  ✓ Control flow (if/else)"
-echo
-echo "Next Steps:"
-echo "  → Struct definitions and literals"
-echo "  → Field access"
-echo "  → Full type checking"
-echo "  → Native executable generation"
-echo
+heading "Demo 3: Emit LLVM IR for a tiny function"
+cargo run --quiet --bin glyph-cli --features codegen -- build tests/fixtures/codegen/simple_ret.glyph
+
+heading "Demo 4: Native executable (puts-based hello)"
+cargo run --quiet --bin glyph-cli --features codegen -- build examples/puts_hello/hello.glyph --emit exe
+./examples/puts_hello/hello
+
+heading "Done"
+status "info" "Demos completed"

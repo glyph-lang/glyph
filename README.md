@@ -2,6 +2,8 @@
 
 Glyph is an experimental, compiled programming language with a Rust-based toolchain and an LLVM backend.
 
+**Thesis:** a token-efficient language that LLMs can generate easily while remaining readable to humans.
+
 The repo currently contains a working prototype compiler pipeline:
 
 - Lexer + parser
@@ -28,7 +30,7 @@ This is not the final language spec, but these features exist in some form (see 
 
 Glyph is exploring a pragmatic “small language, real binaries” workflow:
 
-- Fast iteration on a clean, explicit syntax (`fn`, `ret`, block expressions)
+- Token efficiency without write-only noise: terse keywords (`fn`, `ret`) and lightweight modules stay easy for both humans and LLMs to read/write.
 - Native executables via LLVM
 - A standard library surface (`std::print`, `std::println`) backed by a minimal runtime
 - Tooling-first layout (compiler crates + formatter + LSP placeholders)
@@ -118,7 +120,7 @@ cargo run --bin glyph --features codegen -- run --bin hello -- arg1 arg2
 
 ## Language snapshots
 
-Hello world using the stdlib:
+Hello world using the stdlib (concise and LLM-friendly without being cryptic):
 
 ```glyph
 from std import println
