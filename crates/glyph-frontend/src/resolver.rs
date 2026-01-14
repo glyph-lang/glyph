@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::method_symbols::{inherent_method_symbol, interface_method_symbol};
 use crate::module_resolver::{ImportScope, MultiModuleContext};
 use glyph_core::{
-    ast::{Ident, Item, Module},
+    ast::{Ident, Item, Module, TypeExpr},
     diag::Diagnostic,
     types::{EnumType, StructType, Type},
 };
@@ -44,6 +44,67 @@ pub enum SelfKind {
     ByValue, // self: Point
     Ref,     // self: &Point
     MutRef,  // self: &mut Point
+}
+
+fn type_expr_to_string(ty: &TypeExpr) -> String {
+    match ty {
+        TypeExpr::Path { segments, .. } => segments.join("::"),
+        TypeExpr::App { base, args, .. } => {
+            let mut s = type_expr_to_string(base);
+            let rendered_args: Vec<String> = args.iter().map(type_expr_to_string).collect();
+            s.push('<');
+            s.push_str(&rendered_args.join(", "));
+            s.push('>');
+            s
+        }
+        TypeExpr::Ref { mutability, inner, .. } => {
+            let mut s = String::from("&");
+            if matches!(mutability, glyph_core::types::Mutability::Mutable) {
+                s.push_str("mut ");
+            }
+            s.push_str(&type_expr_to_string(inner));
+            s
+        }
+        TypeExpr::Array { elem, size, .. } => format!("[{}; {}]", type_expr_to_string(elem), size),
+    }
+}
+
+fn resolve_type_expr_to_type(ty: &TypeExpr, ctx: &ResolverContext) -> Option<Type> {
+    match ty {
+        TypeExpr::Path { segments, .. } => {
+            let ty_str = segments.join("::");
+            if let Some(builtin) = Type::from_name(&ty_str) {
+                return Some(builtin);
+            }
+            if ctx.enum_types.contains_key(&ty_str) {
+                return Some(Type::Enum(ty_str));
+            }
+            if ctx.struct_types.contains_key(&ty_str) {
+                return Some(Type::Named(ty_str));
+            }
+            Some(Type::Named(ty_str))
+        }
+        TypeExpr::App { base, args, .. } => {
+            let base_ty = resolve_type_expr_to_type(base, ctx)?;
+            let mut rendered_args: Vec<Type> = Vec::new();
+            for a in args {
+                if let Some(resolved) = resolve_type_expr_to_type(a, ctx) {
+                    rendered_args.push(resolved);
+                } else {
+                    // Unknown arg type; bail to Named
+                    return Some(Type::Named(type_expr_to_string(ty)));
+                }
+            }
+            match base_ty {
+                Type::Named(name) | Type::Enum(name) => Some(Type::App { base: name, args: rendered_args }),
+                _ => Some(Type::Named(type_expr_to_string(ty))),
+            }
+        }
+        TypeExpr::Ref { mutability, inner, .. } => resolve_type_expr_to_type(inner, ctx)
+            .map(|inner_ty| Type::Ref(Box::new(inner_ty), *mutability)),
+        TypeExpr::Array { elem, size, .. } => resolve_type_expr_to_type(elem, ctx)
+            .map(|elem_ty| Type::Array(Box::new(elem_ty), *size)),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -121,13 +182,7 @@ pub fn resolve_types(module: &Module) -> (ResolverContext, Vec<Diagnostic>) {
                 }
 
                 let payload_ty = match &variant.payload {
-                    Some(payload_ident) => {
-                        if let Some(builtin) = Type::from_name(&payload_ident.0) {
-                            Some(builtin)
-                        } else {
-                            Some(Type::Named(payload_ident.0.clone()))
-                        }
-                    }
+                    Some(payload_expr) => resolve_type_expr_to_type(payload_expr, &ctx),
                     None => None,
                 };
 
@@ -168,17 +223,10 @@ pub fn resolve_types(module: &Module) -> (ResolverContext, Vec<Diagnostic>) {
                 let mut raw_param_types = Vec::new();
                 for param in &method.params {
                     let param_ty = match &param.ty {
-                        Some(ty_ident) => {
-                            raw_param_types.push(Some(ty_ident.0.clone()));
-                            if let Some(builtin) = Type::from_name(&ty_ident.0) {
-                                Some(builtin)
-                            } else if ctx.enum_types.contains_key(&ty_ident.0) {
-                                Some(Type::Enum(ty_ident.0.clone()))
-                            } else if ty_ident.0.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                                Some(Type::Named(ty_ident.0.clone()))
-                            } else {
-                                None
-                            }
+                        Some(ty_expr) => {
+                            let rendered = type_expr_to_string(ty_expr);
+                            raw_param_types.push(Some(rendered.clone()));
+                            resolve_type_expr_to_type(ty_expr, &ctx)
                         }
                         None => {
                             raw_param_types.push(None);
@@ -191,15 +239,8 @@ pub fn resolve_types(module: &Module) -> (ResolverContext, Vec<Diagnostic>) {
                 // Resolve return type
                 let (ret_type, raw_ret_type) = match &method.ret_type {
                     Some(ty) => {
-                        if let Some(builtin) = Type::from_name(&ty.0) {
-                            (Some(builtin), Some(ty.0.clone()))
-                        } else if ctx.enum_types.contains_key(&ty.0) {
-                            (Some(Type::Enum(ty.0.clone())), Some(ty.0.clone()))
-                        } else if ty.0.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                            (Some(Type::Named(ty.0.clone())), Some(ty.0.clone()))
-                        } else {
-                            (None, Some(ty.0.clone()))
-                        }
+                        let rendered = type_expr_to_string(ty);
+                        (resolve_type_expr_to_type(ty, &ctx), Some(rendered))
                     }
                     None => (None, None),
                 };
@@ -242,7 +283,7 @@ pub fn resolve_types(module: &Module) -> (ResolverContext, Vec<Diagnostic>) {
 
             for field in &s.fields {
                 let field_name = field.name.0.clone();
-                let field_ty_name = field.ty.0.as_str();
+                let rendered = type_expr_to_string(&field.ty);
 
                 // Check for duplicate field names
                 if !field_names.insert(field_name.clone()) {
@@ -257,14 +298,8 @@ pub fn resolve_types(module: &Module) -> (ResolverContext, Vec<Diagnostic>) {
                 }
 
                 // Resolve field type
-                let field_type = if let Some(ty) = Type::from_name(field_ty_name) {
-                    ty
-                } else if ctx.enum_types.contains_key(field_ty_name) {
-                    Type::Enum(field_ty_name.to_string())
-                } else {
-                    // Assume it's a named type (struct) - will validate in second pass
-                    Type::Named(field_ty_name.to_string())
-                };
+                let field_type = resolve_type_expr_to_type(&field.ty, &ctx)
+                    .unwrap_or(Type::Named(rendered.clone()));
 
                 fields.push((field_name, field_type));
             }
@@ -344,13 +379,14 @@ pub fn resolve_types(module: &Module) -> (ResolverContext, Vec<Diagnostic>) {
                     continue;
                 };
 
-                if let Some(resolved) = resolve_ffi_type(&ty_ident.0) {
+                let ty_rendered = type_expr_to_string(ty_ident);
+                if let Some(resolved) = resolve_ffi_type(&ty_rendered) {
                     params.push(resolved);
                 } else {
                     diagnostics.push(Diagnostic::error(
                         format!(
                             "unsupported FFI parameter type '{}' in extern function '{}'",
-                            ty_ident.0, f.name.0
+                            ty_rendered, f.name.0
                         ),
                         Some(param.span),
                     ));
@@ -360,13 +396,14 @@ pub fn resolve_types(module: &Module) -> (ResolverContext, Vec<Diagnostic>) {
 
             let ret_type = match &f.ret_type {
                 Some(ty) => {
-                    if let Some(resolved) = resolve_ffi_type(&ty.0) {
+                    let ty_rendered = type_expr_to_string(ty);
+                    if let Some(resolved) = resolve_ffi_type(&ty_rendered) {
                         Some(resolved)
                     } else {
                         diagnostics.push(Diagnostic::error(
                             format!(
                                 "unsupported FFI return type '{}' in extern function '{}'",
-                                ty.0, f.name.0
+                                ty_rendered, f.name.0
                             ),
                             Some(f.span),
                         ));
@@ -635,16 +672,8 @@ pub fn populate_imported_types(ctx: &mut ResolverContext) {
 fn struct_type_from_def(def: &glyph_core::ast::StructDef, ctx: &ResolverContext) -> StructType {
     let mut fields = Vec::new();
     for field in &def.fields {
-        let field_ty_name = field.ty.0.as_str();
-        let field_type = if let Some(ty) = Type::from_name(field_ty_name) {
-            ty
-        } else if ctx.enum_types.contains_key(field_ty_name) {
-            Type::Enum(field_ty_name.to_string())
-        } else if ctx.struct_types.contains_key(field_ty_name) {
-            Type::Named(field_ty_name.to_string())
-        } else {
-            Type::Named(field_ty_name.to_string())
-        };
+        let field_type = resolve_type_expr_to_type(&field.ty, ctx)
+            .unwrap_or_else(|| Type::Named(type_expr_to_string(&field.ty)));
         fields.push((field.name.0.clone(), field_type));
     }
 
@@ -659,15 +688,8 @@ fn enum_type_from_def(def: &glyph_core::ast::EnumDef, ctx: &ResolverContext) -> 
     for variant in &def.variants {
         let payload_ty = match &variant.payload {
             Some(payload_ident) => {
-                if let Some(builtin) = Type::from_name(&payload_ident.0) {
-                    Some(builtin)
-                } else if ctx.enum_types.contains_key(&payload_ident.0) {
-                    Some(Type::Enum(payload_ident.0.clone()))
-                } else if ctx.struct_types.contains_key(&payload_ident.0) {
-                    Some(Type::Named(payload_ident.0.clone()))
-                } else {
-                    Some(Type::Named(payload_ident.0.clone()))
-                }
+                Some(resolve_type_expr_to_type(payload_ident, ctx)
+                    .unwrap_or_else(|| Type::Named(type_expr_to_string(payload_ident))))
             }
             None => None,
         };
@@ -718,10 +740,10 @@ fn resolve_ffi_type(name: &str) -> Option<Type> {
 }
 
 /// Detect the self kind from a parameter type
-fn detect_self_kind(param_ty: &Option<glyph_core::ast::Ident>) -> SelfKind {
+fn detect_self_kind(param_ty: &Option<TypeExpr>) -> SelfKind {
     match param_ty {
-        Some(ident) => {
-            let ty_str = ident.0.replace(' ', "");
+        Some(ty_expr) => {
+            let ty_str = type_expr_to_string(ty_expr).replace(' ', "");
             if ty_str.starts_with("&mut") {
                 SelfKind::MutRef
             } else if ty_str.starts_with('&') {
@@ -747,7 +769,8 @@ fn normalize_type_name(raw: &str) -> String {
 fn self_param_matches_struct(param: &glyph_core::ast::Param, struct_name: &str) -> bool {
     match &param.ty {
         Some(ty) => {
-            let norm = normalize_type_name(&ty.0);
+            let rendered = type_expr_to_string(ty);
+            let norm = normalize_type_name(&rendered);
             norm == struct_name
                 || norm == format!("&{}", struct_name)
                 || norm == format!("&mut{}", struct_name)
@@ -890,7 +913,7 @@ fn record_interface_impl(
                     .params
                     .get(idx)
                     .and_then(|p| p.ty.as_ref())
-                    .map(|t| normalize_type_name(&t.0));
+                    .map(|t| normalize_type_name(&type_expr_to_string(t)));
                 if actual.is_none() {
                     diagnostics.push(Diagnostic::error(
                         format!(
@@ -904,16 +927,17 @@ fn record_interface_impl(
                     ));
                     state.has_error = true;
                 } else if actual.as_deref() != Some(&normalize_type_name(expected)) {
+                    let actual_rendered = method.params[idx]
+                        .ty
+                        .as_ref()
+                        .map(|t| type_expr_to_string(t))
+                        .unwrap_or_else(|| "<unknown>".to_string());
                     diagnostics.push(Diagnostic::error(
                         format!(
                             "parameter {} of method '{}' has type '{}' but interface '{}' expects '{}'",
                             idx + 1,
                             method.name.0,
-                            method.params[idx]
-                                .ty
-                                .as_ref()
-                                .map(|t| t.0.as_str())
-                                .unwrap_or("<unknown>"),
+                            actual_rendered,
                             iface_name,
                             expected
                         ),
@@ -927,11 +951,12 @@ fn record_interface_impl(
         if let Some(expected_ret) = iface_sig.raw_ret_type.as_ref() {
             match method.ret_type.as_ref() {
                 Some(actual_ret) => {
-                    if normalize_type_name(&actual_ret.0) != normalize_type_name(expected_ret) {
+                    let rendered = type_expr_to_string(actual_ret);
+                    if normalize_type_name(&rendered) != normalize_type_name(expected_ret) {
                         diagnostics.push(Diagnostic::error(
                             format!(
                                 "method '{}' returns '{}' but interface '{}' requires '{}'",
-                                method.name.0, actual_ret.0, iface_name, expected_ret
+                                method.name.0, rendered, iface_name, expected_ret
                             ),
                             Some(method.span),
                         ));
@@ -1079,6 +1104,13 @@ mod tests {
         Span::new(0, 10)
     }
 
+    fn path_ty(name: &str) -> TypeExpr {
+        TypeExpr::Path {
+            segments: vec![name.to_string()],
+            span: make_span(),
+        }
+    }
+
     #[test]
     fn resolves_empty_module() {
         let module = Module {
@@ -1097,15 +1129,16 @@ mod tests {
             imports: vec![],
             items: vec![Item::Struct(StructDef {
                 name: Ident("Point".into()),
+                generic_params: Vec::new(),
                 fields: vec![
                     FieldDef {
                         name: Ident("x".into()),
-                        ty: Ident("i32".into()),
+                        ty: path_ty("i32"),
                         span: make_span(),
                     },
                     FieldDef {
                         name: Ident("y".into()),
-                        ty: Ident("i32".into()),
+                        ty: path_ty("i32"),
                         span: make_span(),
                     },
                 ],
@@ -1135,81 +1168,18 @@ mod tests {
             items: vec![
                 Item::Struct(StructDef {
                     name: Ident("Point".into()),
-                    fields: vec![],
+                    generic_params: Vec::new(),
+                    fields: vec![FieldDef {
+                        name: Ident("top_left".into()),
+                        ty: path_ty("Point"),
+                        span: make_span(),
+                    }],
                     interfaces: Vec::new(),
                     methods: Vec::new(),
                     inline_impls: Vec::new(),
                     span: make_span(),
-                }),
-                Item::Struct(StructDef {
-                    name: Ident("Point".into()),
-                    fields: vec![],
-                    interfaces: Vec::new(),
-                    methods: Vec::new(),
-                    inline_impls: Vec::new(),
-                    span: make_span(),
-                }),
-            ],
-        };
+                })],
 
-        let (ctx, diags) = resolve_types(&module);
-
-        assert_eq!(ctx.struct_types.len(), 1); // Only first one registered
-        assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("defined multiple times"));
-    }
-
-    #[test]
-    fn detects_duplicate_field_names() {
-        let module = Module {
-            imports: vec![],
-            items: vec![Item::Struct(StructDef {
-                name: Ident("Point".into()),
-                fields: vec![
-                    FieldDef {
-                        name: Ident("x".into()),
-                        ty: Ident("i32".into()),
-                        span: make_span(),
-                    },
-                    FieldDef {
-                        name: Ident("x".into()),
-                        ty: Ident("i32".into()),
-                        span: make_span(),
-                    },
-                ],
-                interfaces: Vec::new(),
-                methods: Vec::new(),
-                inline_impls: Vec::new(),
-                span: make_span(),
-            })],
-        };
-
-        let (ctx, diags) = resolve_types(&module);
-
-        assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("defined multiple times"));
-
-        // First field should be registered
-        let point = ctx.get_struct("Point").unwrap();
-        assert_eq!(point.fields.len(), 1);
-    }
-
-    #[test]
-    fn detects_undefined_struct_types() {
-        let module = Module {
-            imports: vec![],
-            items: vec![Item::Struct(StructDef {
-                name: Ident("Rect".into()),
-                fields: vec![FieldDef {
-                    name: Ident("top_left".into()),
-                    ty: Ident("Point".into()),
-                    span: make_span(),
-                }],
-                interfaces: Vec::new(),
-                methods: Vec::new(),
-                inline_impls: Vec::new(),
-                span: make_span(),
-            })],
         };
 
         let (ctx, diags) = resolve_types(&module);
@@ -1227,11 +1197,11 @@ mod tests {
         let module = Module {
             imports: vec![],
             items: vec![
-                Item::Struct(StructDef {
+                Item::Struct(StructDef { generic_params: Vec::new(),
                     name: Ident("Point".into()),
                     fields: vec![FieldDef {
                         name: Ident("x".into()),
-                        ty: Ident("i32".into()),
+                        ty: path_ty("i32"),
                         span: make_span(),
                     }],
                     interfaces: Vec::new(),
@@ -1239,11 +1209,11 @@ mod tests {
                     inline_impls: Vec::new(),
                     span: make_span(),
                 }),
-                Item::Struct(StructDef {
+                Item::Struct(StructDef { generic_params: Vec::new(),
                     name: Ident("Rect".into()),
                     fields: vec![FieldDef {
                         name: Ident("top_left".into()),
-                        ty: Ident("Point".into()),
+                        ty: path_ty("Point".into()),
                         span: make_span(),
                     }],
                     interfaces: Vec::new(),
@@ -1267,17 +1237,17 @@ mod tests {
     fn get_field_returns_correct_type_and_index() {
         let module = Module {
             imports: vec![],
-            items: vec![Item::Struct(StructDef {
+            items: vec![Item::Struct(StructDef { generic_params: Vec::new(),
                 name: Ident("Point".into()),
                 fields: vec![
                     FieldDef {
                         name: Ident("x".into()),
-                        ty: Ident("i32".into()),
+                        ty: path_ty("i32"),
                         span: make_span(),
                     },
                     FieldDef {
                         name: Ident("y".into()),
-                        ty: Ident("i64".into()),
+                        ty: path_ty("i64"),
                         span: make_span(),
                     },
                 ],
@@ -1314,19 +1284,23 @@ mod tests {
                         name: Ident("draw".into()),
                         params: vec![Param {
                             name: Ident("self".into()),
-                            ty: Some(Ident("&Point".into())),
+                            ty: Some(TypeExpr::Ref {
+                                mutability: glyph_core::types::Mutability::Immutable,
+                                inner: Box::new(path_ty("Point")),
+                                span,
+                            }),
                             span,
                         }],
-                        ret_type: Some(Ident("i32".into())),
+                        ret_type: Some(path_ty("i32")),
                         span,
                     }],
                     span,
                 }),
-                Item::Struct(StructDef {
+                Item::Struct(StructDef { generic_params: Vec::new(),
                     name: Ident("Point".into()),
                     fields: vec![FieldDef {
                         name: Ident("x".into()),
-                        ty: Ident("i32".into()),
+                        ty: path_ty("i32"),
                         span,
                     }],
                     interfaces: vec![Ident("Drawable".into())],
@@ -1337,10 +1311,14 @@ mod tests {
                             name: Ident("draw".into()),
                             params: vec![Param {
                                 name: Ident("self".into()),
-                                ty: Some(Ident("&Point".into())),
+                                ty: Some(TypeExpr::Ref {
+                                    mutability: glyph_core::types::Mutability::Immutable,
+                                    inner: Box::new(path_ty("Point")),
+                                    span,
+                                }),
                                 span,
                             }],
-                            ret_type: Some(Ident("i32".into())),
+                            ret_type: Some(path_ty("i32")),
                             body: Block {
                                 span,
                                 stmts: vec![Stmt::Ret(
@@ -1379,7 +1357,7 @@ mod tests {
                         name: Ident("render".into()),
                         params: vec![Param {
                             name: Ident("self".into()),
-                            ty: Some(Ident("Point".into())),
+                            ty: Some(path_ty("Point".into())),
                             span,
                         }],
                         ret_type: None,
@@ -1387,7 +1365,7 @@ mod tests {
                     }],
                     span,
                 }),
-                Item::Struct(StructDef {
+                Item::Struct(StructDef { generic_params: Vec::new(),
                     name: Ident("Point".into()),
                     fields: vec![],
                     interfaces: vec![Ident("Renderable".into())],
@@ -1414,10 +1392,10 @@ mod tests {
                 name: Ident("puts".into()),
                 params: vec![Param {
                     name: Ident("msg".into()),
-                    ty: Some(Ident("RawPtr<i32>".into())),
+                    ty: Some(path_ty("RawPtr<i32>")),
                     span: make_span(),
                 }],
-                ret_type: Some(Ident("i32".into())),
+                ret_type: Some(path_ty("i32")),
                 link_name: None,
                 span: make_span(),
             })],

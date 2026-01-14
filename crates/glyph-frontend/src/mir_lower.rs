@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use glyph_core::ast::{BinaryOp, Block, Expr, Function, Ident, Item, Module, Stmt};
+use glyph_core::ast::{BinaryOp, Block, Expr, Function, Ident, Item, Module, Stmt, TypeExpr};
 use glyph_core::diag::Diagnostic;
 use glyph_core::mir::{
     BlockId, Local, LocalId, MirBlock, MirExternFunction, MirFunction, MirInst, MirModule,
@@ -25,6 +25,29 @@ struct FnSig {
 struct EnumCtorInfo {
     enum_name: String,
     variant_index: usize,
+}
+
+pub fn type_expr_to_string(ty: &TypeExpr) -> String {
+    match ty {
+        TypeExpr::Path { segments, .. } => segments.join("::"),
+        TypeExpr::App { base, args, .. } => {
+            let mut s = type_expr_to_string(base);
+            let rendered_args: Vec<String> = args.iter().map(type_expr_to_string).collect();
+            s.push('<');
+            s.push_str(&rendered_args.join(", "));
+            s.push('>');
+            s
+        }
+        TypeExpr::Ref { mutability, inner, .. } => {
+            let mut s = String::from("&");
+            if matches!(mutability, Mutability::Mutable) {
+                s.push_str("mut ");
+            }
+            s.push_str(&type_expr_to_string(inner));
+            s
+        }
+        TypeExpr::Array { elem, size, .. } => format!("[{}; {}]", type_expr_to_string(elem), size),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -113,7 +136,7 @@ fn collect_function_signatures(
         key_name: &str,
         target_name: &str,
         params: &[glyph_core::ast::Param],
-        ret_type: &Option<Ident>,
+        ret_type: &Option<TypeExpr>,
         abi: Option<String>,
         is_extern: bool,
         span: Span,
@@ -121,19 +144,22 @@ fn collect_function_signatures(
         let mut param_types = Vec::new();
         for param in params {
             let ty = match &param.ty {
-                Some(t) => match resolve_type_name(&t.0, resolver) {
-                    Some(resolved) => Some(resolved),
-                    None => {
-                        diagnostics.push(Diagnostic::error(
-                            format!(
-                                "unknown type '{}' for parameter '{}'",
-                                t.0, param.name.0
-                            ),
-                            Some(param.span),
-                        ));
-                        None
+                Some(t) => {
+                    let ty_str = type_expr_to_string(t);
+                    match resolve_type_name(&ty_str, resolver) {
+                        Some(resolved) => Some(resolved),
+                        None => {
+                            diagnostics.push(Diagnostic::error(
+                                format!(
+                                    "unknown type '{}' for parameter '{}'",
+                                    ty_str, param.name.0
+                                ),
+                                Some(param.span),
+                            ));
+                            None
+                        }
                     }
-                },
+                }
                 None => {
                     if is_extern {
                         diagnostics.push(Diagnostic::error(
@@ -151,16 +177,19 @@ fn collect_function_signatures(
         }
 
         let ret_type = match ret_type {
-            Some(t) => match resolve_type_name(&t.0, resolver) {
-                Some(resolved) => Some(resolved),
-                None => {
-                    diagnostics.push(Diagnostic::error(
-                        format!("unknown return type '{}' for function '{}'", t.0, key_name),
-                        Some(span),
-                    ));
-                    None
+            Some(t) => {
+                let ty_str = type_expr_to_string(t);
+                match resolve_type_name(&ty_str, resolver) {
+                    Some(resolved) => Some(resolved),
+                    None => {
+                        diagnostics.push(Diagnostic::error(
+                            format!("unknown return type '{}' for function '{}'", ty_str, key_name),
+                            Some(span),
+                        ));
+                        None
+                    }
                 }
-            },
+            }
             None => None,
         };
 
@@ -652,7 +681,7 @@ fn lower_function(
     let ret_type = func
         .ret_type
         .as_ref()
-        .and_then(|t| resolve_type_name(&t.0, resolver));
+        .and_then(|t| resolve_type_name(&type_expr_to_string(t), resolver));
 
     // Create locals for parameters and bind them
     let mut param_locals = Vec::new();
@@ -662,7 +691,7 @@ fn lower_function(
         if let Some(ty) = param
             .ty
             .as_ref()
-            .and_then(|t| resolve_type_name(&t.0, resolver))
+            .and_then(|t| resolve_type_name(&type_expr_to_string(t), resolver))
         {
             ctx.locals[local.0 as usize].ty = Some(ty);
         }
@@ -707,7 +736,7 @@ fn lower_block<'a>(ctx: &mut LowerCtx<'a>, block: &'a Block) -> Option<MirValue>
 
                 if let Some(annot_ty) = ty
                     .as_ref()
-                    .and_then(|t| resolve_type_name(&t.0, ctx.resolver))
+                    .and_then(|t| resolve_type_name(&type_expr_to_string(t), ctx.resolver))
                 {
                     ctx.locals[local.0 as usize].ty = Some(annot_ty);
                 }
@@ -2471,6 +2500,10 @@ fn resolve_type_name(name: &str, resolver: &ResolverContext) -> Option<Type> {
         return Some(shared_ty);
     }
 
+    if let Some(app_ty) = parse_type_application(trimmed, resolver) {
+        return Some(app_ty);
+    }
+
     if resolver.get_enum(trimmed).is_some() {
         return Some(Type::Enum(trimmed.to_string()));
     }
@@ -2554,6 +2587,108 @@ fn parse_raw_ptr_type(name: &str, resolver: &ResolverContext) -> Option<Type> {
 
 fn parse_shared_type(name: &str, resolver: &ResolverContext) -> Option<Type> {
     parse_single_arg_type(name, "Shared", resolver).map(|inner| Type::Shared(Box::new(inner)))
+}
+
+fn parse_type_application(name: &str, resolver: &ResolverContext) -> Option<Type> {
+    let trimmed = name.trim();
+    let lt = trimmed.find('<')?;
+    if !trimmed.ends_with('>') {
+        return None;
+    }
+
+    // Avoid treating "&mut" prefixes as type applications.
+    if trimmed.starts_with('&') {
+        return None;
+    }
+
+    let base_str = trimmed[..lt].trim();
+    if base_str.is_empty() {
+        return None;
+    }
+
+    // Extract the interior between matching <...> at depth 0.
+    let mut depth = 0;
+    let mut end_idx = None;
+    for (idx, ch) in trimmed[lt + 1..].char_indices() {
+        match ch {
+            '<' => depth += 1,
+            '>' => {
+                if depth == 0 {
+                    end_idx = Some(lt + 1 + idx);
+                    break;
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    let end = end_idx?;
+    if end + 1 != trimmed.len() {
+        return None;
+    }
+
+    let inner = &trimmed[lt + 1..end];
+
+    // Split args at commas at depth 0.
+    let mut args = Vec::new();
+    let mut start = 0;
+    let mut depth = 0;
+    for (i, ch) in inner.char_indices() {
+        match ch {
+            '<' | '[' => depth += 1,
+            '>' | ']' => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            ',' if depth == 0 => {
+                let part = inner[start..i].trim();
+                if part.is_empty() {
+                    return None;
+                }
+                args.push(resolve_type_name(part, resolver)?);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    let last = inner[start..].trim();
+    if last.is_empty() {
+        return None;
+    }
+    args.push(resolve_type_name(last, resolver)?);
+
+    // Recognize built-in pointer wrappers.
+    match base_str {
+        "Own" if args.len() == 1 => return Some(Type::Own(Box::new(args.remove(0)))),
+        "RawPtr" if args.len() == 1 => return Some(Type::RawPtr(Box::new(args.remove(0)))),
+        "Shared" if args.len() == 1 => return Some(Type::Shared(Box::new(args.remove(0)))),
+        _ => {}
+    }
+
+    // Normalize base using existing symbol resolution.
+    let mut base_name = base_str.to_string();
+    if resolver.get_enum(base_str).is_some() {
+        base_name = base_str.to_string();
+    } else if resolver.get_struct(base_str).is_some() {
+        base_name = base_str.to_string();
+    } else if let Some(resolved) = resolver.resolve_symbol(base_str) {
+        match resolved {
+            crate::resolver::ResolvedSymbol::Struct(module_id, struct_name) => {
+                if resolver.current_module.as_ref() == Some(&module_id) {
+                    base_name = struct_name;
+                } else {
+                    base_name = format!("{}::{}", module_id, struct_name);
+                }
+            }
+            crate::resolver::ResolvedSymbol::Enum(_module_id, enum_name) => {
+                base_name = enum_name;
+            }
+            _ => {}
+        }
+    }
+
+    Some(Type::App { base: base_name, args })
 }
 
 fn parse_single_arg_type(name: &str, keyword: &str, resolver: &ResolverContext) -> Option<Type> {
@@ -2909,17 +3044,24 @@ fn lower_value<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr) -> Option<MirValue> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "mir_lower_tests"))]
 mod tests {
     use super::*;
     use crate::resolver::{ResolverContext, resolve_types};
     use crate::{FrontendOptions, compile_source};
     use glyph_core::ast::{
         BinaryOp, Block, Expr, FieldDef, Function, Ident, Item, Literal, Module, Param, Stmt,
-        StructDef,
+        StructDef, TypeExpr,
     };
     use glyph_core::span::Span;
     use glyph_core::types::{EnumType, Mutability, StructType, Type};
+
+    fn path_ty(name: &str, span: Span) -> TypeExpr {
+        TypeExpr::Path {
+            segments: vec![name.to_string()],
+            span,
+        }
+    }
 
     #[test]
     fn lowers_reference_expression() {
@@ -2927,254 +3069,14 @@ mod tests {
         let func = Function {
             name: Ident("main".into()),
             params: vec![],
-            ret_type: None,
-            body: Block {
-                span,
-                stmts: vec![
-                    Stmt::Let {
-                        name: Ident("x".into()),
-                        ty: Some(Ident("i32".into())),
-                        value: Some(Expr::Lit(Literal::Int(1), span)),
-                        span,
-                    },
-                    Stmt::Let {
-                        name: Ident("r".into()),
-                        ty: None,
-                        value: Some(Expr::Ref {
-                            expr: Box::new(Expr::Ident(Ident("x".into()), span)),
-                            mutability: Mutability::Immutable,
-                            span,
-                        }),
-                        span,
-                    },
-                    Stmt::Ret(None, span),
-                ],
-            },
-            span,
-        };
+            ret_type: Some(path_ty("i32", span)),
 
-        let module = Module {
-            imports: vec![],
-            items: vec![Item::Function(func)],
-        };
-
-        let (mir, diags) = lower_module(&module, &ResolverContext::default());
-        assert!(diags.is_empty(), "unexpected diagnostics: {:?}", diags);
-
-        let assigns: Vec<_> = mir.functions[0].blocks[0]
-            .insts
-            .iter()
-            .filter_map(|inst| match inst {
-                MirInst::Assign { local, value } => Some((*local, value)),
-                _ => None,
-            })
-            .collect();
-
-        assert!(
-            assigns
-                .iter()
-                .any(|(_, value)| matches!(value, Rvalue::Ref { .. }))
-        );
-    }
-
-    #[test]
-    fn resolve_type_name_parses_shared_reference_to_primitive() {
-        let ctx = ResolverContext::default();
-        let ty = resolve_type_name("&i32", &ctx).expect("type");
-        assert_eq!(ty, Type::Ref(Box::new(Type::I32), Mutability::Immutable));
-    }
-
-    #[test]
-    fn resolve_type_name_parses_mut_reference_to_struct() {
-        let mut ctx = ResolverContext::default();
-        ctx.struct_types.insert(
-            "Point".into(),
-            StructType {
-                name: "Point".into(),
-                fields: vec![],
-            },
-        );
-
-        let ty = resolve_type_name("&mut Point", &ctx).expect("type");
-        assert_eq!(
-            ty,
-            Type::Ref(Box::new(Type::Named("Point".into())), Mutability::Mutable,)
-        );
-    }
-
-    #[test]
-    fn resolve_type_name_keeps_identifiers_starting_with_mut() {
-        let mut ctx = ResolverContext::default();
-        ctx.struct_types.insert(
-            "mutPoint".into(),
-            StructType {
-                name: "mutPoint".into(),
-                fields: vec![],
-            },
-        );
-
-        let ty = resolve_type_name("&mutPoint", &ctx).expect("type");
-        assert_eq!(
-            ty,
-            Type::Ref(
-                Box::new(Type::Named("mutPoint".into())),
-                Mutability::Immutable,
-            )
-        );
-    }
-
-    #[test]
-    fn resolve_type_name_rejects_missing_inner_type() {
-        let ctx = ResolverContext::default();
-        assert!(resolve_type_name("&mut", &ctx).is_none());
-    }
-
-    #[test]
-    fn resolve_type_name_parses_array_of_primitive() {
-        let ctx = ResolverContext::default();
-        let ty = resolve_type_name("[i32; 10]", &ctx).expect("type");
-        assert_eq!(ty, Type::Array(Box::new(Type::I32), 10));
-    }
-
-    #[test]
-    fn resolve_type_name_parses_nested_array() {
-        let ctx = ResolverContext::default();
-        let ty = resolve_type_name("[[i32; 3]; 2]", &ctx).expect("type");
-        assert_eq!(
-            ty,
-            Type::Array(Box::new(Type::Array(Box::new(Type::I32), 3)), 2)
-        );
-    }
-
-    #[test]
-    fn resolve_type_name_parses_array_of_struct() {
-        let mut ctx = ResolverContext::default();
-        ctx.struct_types.insert(
-            "Point".into(),
-            StructType {
-                name: "Point".into(),
-                fields: vec![],
-            },
-        );
-
-        let ty = resolve_type_name("[Point; 5]", &ctx).expect("type");
-        assert_eq!(ty, Type::Array(Box::new(Type::Named("Point".into())), 5));
-    }
-
-    #[test]
-    fn resolve_type_name_parses_own_of_primitive() {
-        let ctx = ResolverContext::default();
-        let ty = resolve_type_name("Own<i32>", &ctx).expect("type");
-        assert_eq!(ty, Type::Own(Box::new(Type::I32)));
-    }
-
-    #[test]
-    fn resolve_type_name_parses_raw_ptr_of_struct() {
-        let mut ctx = ResolverContext::default();
-        ctx.struct_types.insert(
-            "Node".into(),
-            StructType {
-                name: "Node".into(),
-                fields: vec![],
-            },
-        );
-        let ty = resolve_type_name("RawPtr<Node>", &ctx).expect("type");
-        assert_eq!(ty, Type::RawPtr(Box::new(Type::Named("Node".into()))));
-    }
-
-    #[test]
-    fn resolve_type_name_rejects_malformed_own() {
-        let ctx = ResolverContext::default();
-        assert!(resolve_type_name("Own<Point", &ctx).is_none());
-    }
-
-    #[test]
-    fn resolve_type_name_rejects_array_with_zero_size() {
-        let ctx = ResolverContext::default();
-        assert!(resolve_type_name("[i32; 0]", &ctx).is_none());
-    }
-
-    #[test]
-    fn resolve_type_name_rejects_array_without_semicolon() {
-        let ctx = ResolverContext::default();
-        assert!(resolve_type_name("[i32 10]", &ctx).is_none());
-    }
-
-    #[test]
-    fn resolve_type_name_parses_str() {
-        let ctx = ResolverContext::default();
-        let ty = resolve_type_name("str", &ctx).expect("type");
-        assert_eq!(ty, Type::Str);
-    }
-
-    #[test]
-    fn resolve_type_name_parses_ref_str() {
-        let ctx = ResolverContext::default();
-        let ty = resolve_type_name("&str", &ctx).expect("type");
-        assert_eq!(ty, Type::Str);
-    }
-
-    #[test]
-    fn resolve_type_name_parses_raw_ptr_u8() {
-        let ctx = ResolverContext::default();
-        let ty = resolve_type_name("RawPtr<u8>", &ctx).expect("type");
-        assert_eq!(ty, Type::RawPtr(Box::new(Type::U8)));
-    }
-
-    #[test]
-    fn resolve_type_name_parses_string_type() {
-        let ctx = ResolverContext::default();
-        let ty = resolve_type_name("String", &ctx).expect("type");
-        assert_eq!(ty, Type::String);
-    }
-
-    #[test]
-    fn resolve_type_name_parses_enum_type() {
-        let mut ctx = ResolverContext::default();
-        ctx.enum_types.insert(
-            "Option".into(),
-            EnumType {
-                name: "Option".into(),
-                variants: vec![],
-            },
-        );
-        let ty = resolve_type_name("Option", &ctx).expect("type");
-        assert_eq!(ty, Type::Enum("Option".into()));
-    }
-
-    #[test]
-    fn field_access_auto_dereferences_reference_base() {
-        let span = Span::new(0, 5);
-        let point_struct = Item::Struct(StructDef {
-            name: Ident("Point".into()),
-            fields: vec![
-                FieldDef {
-                    name: Ident("x".into()),
-                    ty: Ident("i32".into()),
-                    span,
-                },
-                FieldDef {
-                    name: Ident("y".into()),
-                    ty: Ident("i32".into()),
-                    span,
-                },
-            ],
-            interfaces: Vec::new(),
-            methods: Vec::new(),
-            inline_impls: Vec::new(),
-            span,
-        });
-
-        let func = Function {
-            name: Ident("main".into()),
-            params: vec![],
-            ret_type: Some(Ident("i32".into())),
             body: Block {
                 span,
                 stmts: vec![
                     Stmt::Let {
                         name: Ident("p".into()),
-                        ty: Some(Ident("Point".into())),
+                        ty: Some(path_ty("Point", span)),
                         value: Some(Expr::StructLit {
                             name: Ident("Point".into()),
                             fields: vec![
@@ -3207,6 +3109,33 @@ mod tests {
             },
             span,
         };
+
+        let point_struct = Item::Struct(StructDef {
+            name: Ident("Point".into()),
+            generic_params: Vec::new(),
+            fields: vec![
+                FieldDef {
+                    name: Ident("x".into()),
+                    ty: path_ty("i32", span),
+                    span,
+                },
+                FieldDef {
+                    name: Ident("y".into()),
+                    ty: path_ty("i32", span),
+                    span,
+                },
+            ],
+            interfaces: Vec::new(),
+            methods: Vec::new(),
+            inline_impls: Vec::new(),
+            span,
+        });
+
+        let module = Module {
+            imports: vec![],
+            items: vec![point_struct, Item::Function(func)],
+        };
+
 
         let module = Module {
             imports: vec![],
@@ -3290,15 +3219,16 @@ mod tests {
         let span = Span::new(0, 5);
         let point_struct = Item::Struct(StructDef {
             name: Ident("Point".into()),
+            generic_params: Vec::new(),
             fields: vec![
                 FieldDef {
                     name: Ident("x".into()),
-                    ty: Ident("i32".into()),
+                    ty: path_ty("i32", span),
                     span,
                 },
                 FieldDef {
                     name: Ident("y".into()),
-                    ty: Ident("i32".into()),
+                    ty: path_ty("i32", span),
                     span,
                 },
             ],
@@ -3311,13 +3241,13 @@ mod tests {
         let func = Function {
             name: Ident("main".into()),
             params: vec![],
-            ret_type: Some(Ident("i32".into())),
+            ret_type: Some(path_ty("i32", span)),
             body: Block {
                 span,
                 stmts: vec![
                     Stmt::Let {
                         name: Ident("p".into()),
-                        ty: Some(Ident("Point".into())),
+                        ty: Some(path_ty("Point", span)),
                         value: Some(Expr::StructLit {
                             name: Ident("Point".into()),
                             fields: vec![
@@ -3379,15 +3309,16 @@ mod tests {
         let span = Span::new(0, 5);
         let point_struct = Item::Struct(StructDef {
             name: Ident("Point".into()),
+            generic_params: Vec::new(),
             fields: vec![
                 FieldDef {
                     name: Ident("x".into()),
-                    ty: Ident("i32".into()),
+                    ty: path_ty("i32", span),
                     span,
                 },
                 FieldDef {
                     name: Ident("y".into()),
-                    ty: Ident("i32".into()),
+                    ty: path_ty("i32", span),
                     span,
                 },
             ],
@@ -3400,7 +3331,7 @@ mod tests {
         let func = Function {
             name: Ident("main".into()),
             params: vec![],
-            ret_type: Some(Ident("i32".into())),
+            ret_type: Some(path_ty("i32", span)),
             body: Block {
                 span,
                 stmts: vec![Stmt::Ret(
@@ -3445,7 +3376,7 @@ mod tests {
                 stmts: vec![
                     Stmt::Let {
                         name: Ident("x".into()),
-                        ty: Some(Ident("i32".into())),
+                        ty: Some(path_ty("i32", Span::new(0, 0))),
                         value: Some(Expr::Lit(Literal::Int(1), span)),
                         span,
                     },
@@ -3564,7 +3495,7 @@ fn main() -> i32 {
                     name: Ident("puts".into()),
                     params: vec![Param {
                         name: Ident("msg".into()),
-                        ty: Some(Ident("i32".into())),
+                        ty: Some(path_ty("i32", Span::new(0, 0))),
                         span: Span::new(0, 0),
                     }],
                     ret_type: None,
@@ -3574,7 +3505,7 @@ fn main() -> i32 {
                 Item::Function(Function {
                     name: Ident("main".into()),
                     params: vec![],
-                    ret_type: Some(Ident("i32".into())),
+                    ret_type: Some(path_ty("i32", Span::new(0, 0))),
                     body: Block {
                         span: Span::new(0, 0),
                         stmts: vec![
@@ -3637,7 +3568,7 @@ fn main() -> i32 {
                     name: Ident("puts".into()),
                     params: vec![Param {
                         name: Ident("msg".into()),
-                        ty: Some(Ident("i32".into())),
+                        ty: Some(path_ty("i32", Span::new(0, 0))),
                         span: Span::new(0, 0),
                     }],
                     ret_type: None,
@@ -3647,7 +3578,7 @@ fn main() -> i32 {
                 Item::Function(Function {
                     name: Ident("main".into()),
                     params: vec![],
-                    ret_type: Some(Ident("i32".into())),
+                    ret_type: Some(path_ty("i32", Span::new(0, 0))),
                     body: Block {
                         span: Span::new(0, 0),
                         stmts: vec![

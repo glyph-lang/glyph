@@ -72,6 +72,14 @@ pub mod ast {
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     pub struct Ident(pub String);
 
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub enum TypeExpr {
+        Path { segments: Vec<String>, span: Span },
+        App { base: Box<TypeExpr>, args: Vec<TypeExpr>, span: Span },
+        Ref { mutability: crate::types::Mutability, inner: Box<TypeExpr>, span: Span },
+        Array { elem: Box<TypeExpr>, size: usize, span: Span },
+    }
+
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     pub enum Literal {
         Int(i64),
@@ -197,7 +205,7 @@ pub mod ast {
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     pub struct Param {
         pub name: Ident,
-        pub ty: Option<Ident>,
+        pub ty: Option<TypeExpr>,
         pub span: Span,
     }
 
@@ -213,7 +221,7 @@ pub mod ast {
         Ret(Option<Expr>, Span),
         Let {
             name: Ident,
-            ty: Option<Ident>,
+            ty: Option<TypeExpr>,
             value: Option<Expr>,
             span: Span,
         },
@@ -230,7 +238,7 @@ pub mod ast {
     pub struct Function {
         pub name: Ident,
         pub params: Vec<Param>,
-        pub ret_type: Option<Ident>,
+        pub ret_type: Option<TypeExpr>,
         pub body: Block,
         pub span: Span,
     }
@@ -238,13 +246,14 @@ pub mod ast {
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     pub struct FieldDef {
         pub name: Ident,
-        pub ty: Ident,
+        pub ty: TypeExpr,
         pub span: Span,
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     pub struct StructDef {
         pub name: Ident,
+        pub generic_params: Vec<Ident>,
         pub fields: Vec<FieldDef>,
         pub interfaces: Vec<Ident>,
         pub methods: Vec<Function>,
@@ -255,13 +264,14 @@ pub mod ast {
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     pub struct EnumVariantDef {
         pub name: Ident,
-        pub payload: Option<Ident>,
+        pub payload: Option<TypeExpr>,
         pub span: Span,
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     pub struct EnumDef {
         pub name: Ident,
+        pub generic_params: Vec<Ident>,
         pub variants: Vec<EnumVariantDef>,
         pub span: Span,
     }
@@ -284,7 +294,7 @@ pub mod ast {
     pub struct InterfaceMethod {
         pub name: Ident,
         pub params: Vec<Param>,
-        pub ret_type: Option<Ident>,
+        pub ret_type: Option<TypeExpr>,
         pub span: Span,
     }
 
@@ -327,7 +337,7 @@ pub mod ast {
         pub abi: Option<String>,
         pub name: Ident,
         pub params: Vec<Param>,
-        pub ret_type: Option<Ident>,
+        pub ret_type: Option<TypeExpr>,
         pub link_name: Option<String>,
         pub span: Span,
     }
@@ -463,6 +473,8 @@ pub mod types {
         Void,
         Named(String),
         Enum(String),
+        Param(String),
+        App { base: String, args: Vec<Type> },
         Ref(Box<Type>, Mutability),
         Array(Box<Type>, usize),
         Own(Box<Type>),
@@ -506,6 +518,10 @@ pub mod types {
 
         pub fn is_ref(&self) -> bool {
             matches!(self, Type::Ref(..))
+        }
+
+        pub fn is_param(&self) -> bool {
+            matches!(self, Type::Param(_))
         }
 
         pub fn inner_type(&self) -> Option<&Type> {
@@ -786,21 +802,28 @@ mod tests {
 
     #[test]
     fn struct_def_construction() {
-        use super::ast::{FieldDef, Ident, StructDef};
+        use super::ast::{FieldDef, Ident, StructDef, TypeExpr};
 
         let field1 = FieldDef {
             name: Ident("x".into()),
-            ty: Ident("i32".into()),
+            ty: TypeExpr::Path {
+                segments: vec!["i32".into()],
+                span: Span::new(0, 5),
+            },
             span: Span::new(0, 5),
         };
         let field2 = FieldDef {
             name: Ident("y".into()),
-            ty: Ident("i32".into()),
+            ty: TypeExpr::Path {
+                segments: vec!["i32".into()],
+                span: Span::new(6, 11),
+            },
             span: Span::new(6, 11),
         };
 
         let struct_def = StructDef {
             name: Ident("Point".into()),
+            generic_params: Vec::new(),
             fields: vec![field1, field2],
             interfaces: Vec::new(),
             methods: Vec::new(),
@@ -811,7 +834,10 @@ mod tests {
         assert_eq!(struct_def.name.0, "Point");
         assert_eq!(struct_def.fields.len(), 2);
         assert_eq!(struct_def.fields[0].name.0, "x");
-        assert_eq!(struct_def.fields[1].ty.0, "i32");
+        match &struct_def.fields[1].ty {
+            TypeExpr::Path { segments, .. } => assert_eq!(segments[0], "i32"),
+            _ => panic!("expected path type"),
+        }
     }
 
     #[test]

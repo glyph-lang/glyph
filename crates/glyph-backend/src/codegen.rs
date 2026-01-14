@@ -144,6 +144,7 @@ impl CodegenContext {
     }
 
     fn get_llvm_type(&self, ty: &Type) -> Result<LLVMTypeRef> {
+        let ty = ty.clone();
         unsafe {
             Ok(match ty {
                 Type::I8 => LLVMInt8TypeInContext(self.context),
@@ -159,22 +160,22 @@ impl CodegenContext {
                 Type::Str => LLVMPointerType(LLVMInt8TypeInContext(self.context), 0),
                 Type::String => LLVMPointerType(LLVMInt8TypeInContext(self.context), 0),
                 Type::Void => LLVMVoidTypeInContext(self.context),
-                Type::Named(name) => self.get_struct_type(name)?,
-                Type::Enum(name) => self.get_enum_type(name)?,
+                Type::Named(name) => self.get_struct_type(&name)?,
+                Type::Enum(name) => self.get_enum_type(&name)?,
                 Type::Ref(inner, _) => {
-                    // TODO(Phase 6): Implement proper reference type support
-                    // References should lower to LLVM pointer types
-                    let inner_ty = self.get_llvm_type(inner)?;
+                    let inner_ty = self.get_llvm_type(&inner)?;
                     LLVMPointerType(inner_ty, 0)
                 }
                 Type::Array(elem_ty, size) => {
-                    // Array type: [T; N] maps to LLVM array type
-                    let elem_llvm = self.get_llvm_type(elem_ty)?;
-                    LLVMArrayType(elem_llvm, *size as u32)
+                    let elem_llvm = self.get_llvm_type(&elem_ty)?;
+                    LLVMArrayType(elem_llvm, size as u32)
                 }
                 Type::Own(inner) | Type::RawPtr(inner) | Type::Shared(inner) => {
-                    let elem_ty = self.get_llvm_type(inner)?;
+                    let elem_ty = self.get_llvm_type(&inner)?;
                     LLVMPointerType(elem_ty, 0)
+                }
+                Type::Param(_) | Type::App { .. } => {
+                    anyhow::bail!("generic types must be monomorphized before codegen")
                 }
             })
         }

@@ -9,6 +9,7 @@ mod lexer;
 mod method_symbols;
 mod mir_lower;
 mod module_resolver;
+mod monomorphize;
 mod parser;
 mod resolver;
 mod stdlib;
@@ -85,26 +86,33 @@ pub fn compile_source(source: &str, opts: FrontendOptions) -> FrontendOutput {
                             ctx.all_modules = Some(multi_ctx.clone());
                             resolver::populate_imported_types(&mut ctx);
 
-                            let (lowered, lower_diags) = mir_lower::lower_module(module, &ctx);
-                            diagnostics.extend(lower_diags);
-                            if !diagnostics.is_empty() {
-                                break;
-                            }
+                             let (lowered, lower_diags) = mir_lower::lower_module(module, &ctx);
+                             diagnostics.extend(lower_diags);
+                             if !diagnostics.is_empty() {
+                                 break;
+                             }
 
-                            merged.struct_types.extend(lowered.struct_types.into_iter());
-                            merged.enum_types.extend(lowered.enum_types.into_iter());
-                            merged.functions.extend(lowered.functions);
+                             merged.struct_types.extend(lowered.struct_types.into_iter());
+                             merged.enum_types.extend(lowered.enum_types.into_iter());
+                             merged.functions.extend(lowered.functions);
 
-                            for ex in lowered.extern_functions {
+                             for ex in lowered.extern_functions {
+
                                 if seen_externs.insert(ex.name.clone()) {
                                     merged.extern_functions.push(ex);
                                 }
                             }
                         }
 
-                        if diagnostics.is_empty() {
-                            mir = merged;
-                        }
+                         if diagnostics.is_empty() {
+                             let mut merged = merged;
+                             let mono_diags = monomorphize::monomorphize_mir(&mut merged, &multi_ctx.modules);
+                             diagnostics.extend(mono_diags);
+                             if diagnostics.is_empty() {
+                                 mir = merged;
+                             }
+                         }
+
                     }
                     Err(diags) => diagnostics.extend(diags),
                 }
@@ -112,11 +120,16 @@ pub fn compile_source(source: &str, opts: FrontendOptions) -> FrontendOutput {
                 let (ctx, resolve_diags) = resolver::resolve_types(m);
                 diagnostics.extend(resolve_diags);
                 if diagnostics.is_empty() {
-                    let (lowered, lower_diags) = mir_lower::lower_module(m, &ctx);
-                    diagnostics.extend(lower_diags);
-                    if diagnostics.is_empty() {
-                        mir = lowered;
-                    }
+                     let (mut lowered, lower_diags) = mir_lower::lower_module(m, &ctx);
+                     diagnostics.extend(lower_diags);
+                     if diagnostics.is_empty() {
+                         let modules = std::collections::HashMap::from([("main".to_string(), m.clone())]);
+                         diagnostics.extend(monomorphize::monomorphize_mir(&mut lowered, &modules));
+                         if diagnostics.is_empty() {
+                             mir = lowered;
+                         }
+                     }
+
                 }
             }
         }

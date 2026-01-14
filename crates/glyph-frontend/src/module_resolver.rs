@@ -593,6 +593,7 @@ mod tests {
                 items: vec![
                     Item::Struct(StructDef {
                         name: Ident("Point".into()),
+                        generic_params: Vec::new(),
                         fields: vec![],
                         interfaces: vec![],
                         methods: vec![],
@@ -634,6 +635,7 @@ mod tests {
                 imports: vec![],
                 items: vec![Item::Struct(StructDef {
                     name: Ident("Point".into()),
+                    generic_params: Vec::new(),
                     fields: vec![],
                     interfaces: vec![],
                     methods: vec![],
@@ -649,6 +651,7 @@ mod tests {
                 imports: vec![],
                 items: vec![Item::Struct(StructDef {
                     name: Ident("Point".into()),
+                    generic_params: Vec::new(),
                     fields: vec![],
                     interfaces: vec![],
                     methods: vec![],
@@ -717,13 +720,15 @@ mod tests {
             Module {
                 imports: vec![],
                 items: vec![Item::Struct(StructDef {
-                    name: Ident("Helper".into()),
+                    name: Ident("Point".into()),
+                    generic_params: Vec::new(),
                     fields: vec![],
                     interfaces: vec![],
                     methods: vec![],
                     inline_impls: vec![],
                     span: Span::new(0, 0),
                 })],
+
             },
         );
 

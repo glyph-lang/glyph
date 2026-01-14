@@ -1,0 +1,34 @@
+enum OptionI32 {
+  None
+  Some(i32)
+}
+
+enum ErrorStrI32 {
+  Ok(str)
+  Err(i32)
+}
+
+fn make_option(n: i32) -> OptionI32 {
+  if n > 0 {
+    let v: OptionI32 = OptionI32::Some(n)
+    ret v
+  } else {
+     OptionI32::None
+  }
+}
+
+fn make_error(code: i32) -> ErrorStrI32 {
+  if code == 0 {
+    let okv: ErrorStrI32 = ErrorStrI32::Ok("ok")
+    ret okv
+  } else {
+    let errv: ErrorStrI32 = ErrorStrI32::Err(code)
+    ret errv
+  }
+}
+
+fn main() -> i32 {
+  let o: OptionI32 = make_option(3)
+  let e: ErrorStrI32 = make_error(2)
+  ret 0
+}

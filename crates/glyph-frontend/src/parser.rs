@@ -4,12 +4,14 @@ use glyph_core::{
         BinaryOp, Block, EnumDef, EnumVariantDef, Expr, ExternFunctionDecl, FieldDef, Function,
         Ident, ImplBlock, Import, ImportItem, ImportKind, ImportPath, InlineImpl, InterfaceDef,
         InterfaceMethod, InterpSegment, Item, Literal, MatchArm, MatchPattern, Module, Param,
-        Stmt, StructDef,
+        Stmt, StructDef, TypeExpr,
     },
     diag::Diagnostic,
     span::Span,
     token::{Token, TokenKind},
+    types::Mutability,
 };
+
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ParseOutput {
@@ -153,7 +155,7 @@ impl<'a> Parser<'a> {
         let mut ret_type = None;
         if self.at(TokenKind::Arrow) {
             self.advance();
-            ret_type = self.parse_type_annotation();
+            ret_type = self.parse_type_expr();
         }
 
         let body = self.parse_block()?;
@@ -188,7 +190,7 @@ impl<'a> Parser<'a> {
         let mut ret_type = None;
         if self.at(TokenKind::Arrow) {
             self.advance();
-            ret_type = self.parse_type_annotation();
+            ret_type = self.parse_type_expr();
         }
 
         // Validate ABI (v0: only "C" allowed if provided)
@@ -268,8 +270,12 @@ impl<'a> Parser<'a> {
         let mut ret_type = None;
         if self.at(TokenKind::Arrow) {
             self.advance();
-            ret_type = self.parse_type_annotation();
+            ret_type = self.parse_type_expr();
         }
+
+
+
+
         self.consume(
             TokenKind::Semicolon,
             "expected `;` after interface method signature",
@@ -286,6 +292,8 @@ impl<'a> Parser<'a> {
         let struct_tok = self.consume(TokenKind::Struct, "expected `struct`")?;
         let name_tok = self.consume(TokenKind::Ident, "expected struct name")?;
         let name = Ident(self.slice(name_tok));
+
+        let generic_params = self.parse_generic_params();
 
         let mut interfaces = Vec::new();
         if self.at(TokenKind::Colon) {
@@ -330,12 +338,22 @@ impl<'a> Parser<'a> {
                 None => break,
             };
             self.consume(TokenKind::Colon, "expected `:` after field name")?;
-            let field_type_tok = self.consume(TokenKind::Ident, "expected field type")?;
+            let ty = match self.parse_type_expr() {
+                Some(t) => t,
+                None => break,
+            };
+
+            let end_span = match &ty {
+                TypeExpr::Path { span, .. }
+                | TypeExpr::App { span, .. }
+                | TypeExpr::Ref { span, .. }
+                | TypeExpr::Array { span, .. } => span.end,
+            };
 
             let field = FieldDef {
                 name: Ident(self.slice(field_name_tok)),
-                ty: Ident(self.slice(field_type_tok)),
-                span: Span::new(field_name_tok.span.start, field_type_tok.span.end),
+                ty,
+                span: Span::new(field_name_tok.span.start, end_span),
             };
             fields.push(field);
 
@@ -353,6 +371,7 @@ impl<'a> Parser<'a> {
 
         Some(StructDef {
             name,
+            generic_params,
             fields,
             interfaces,
             methods,
@@ -365,6 +384,8 @@ impl<'a> Parser<'a> {
         let enum_tok = self.consume(TokenKind::Enum, "expected `enum`")?;
         let name_tok = self.consume(TokenKind::Ident, "expected enum name")?;
         let name = Ident(self.slice(name_tok));
+
+        let generic_params = self.parse_generic_params();
 
         self.consume(TokenKind::LBrace, "expected `{` after enum name")?;
 
@@ -380,7 +401,7 @@ impl<'a> Parser<'a> {
 
             if self.at(TokenKind::LParen) {
                 self.advance();
-                payload = self.parse_type_annotation();
+                payload = self.parse_type_expr();
                 let close = self.consume(TokenKind::RParen, "expected `)` after variant payload")?;
                 end = close.span.end;
             }
@@ -401,6 +422,7 @@ impl<'a> Parser<'a> {
 
         Some(EnumDef {
             name,
+            generic_params,
             variants,
             span: Span::new(enum_tok.span.start, end_tok.span.end),
         })
@@ -518,19 +540,37 @@ impl<'a> Parser<'a> {
 
         // Canonicalize the self parameter type to match the struct and preserve
         // reference variants for downstream resolution/codegen.
+
         let canonical_self_ty = match first.ty.as_ref() {
             Some(ty) => {
-                let normalized = ty.0.replace(' ', "");
+                let normalized = render_type_expr(ty).replace(' ', "");
                 let value_ty = struct_name.0.as_str();
                 let ref_ty = format!("&{}", value_ty);
-                let mutref_ty = format!("&mut{}", value_ty);
+                let mutref_ty = format!("&mut {}", value_ty);
 
                 if normalized == value_ty {
-                    Ident(struct_name.0.clone())
+                    TypeExpr::Path {
+                        segments: vec![struct_name.0.clone()],
+                        span: first.span,
+                    }
                 } else if normalized == ref_ty {
-                    Ident(format!("&{}", struct_name.0))
+                    TypeExpr::Ref {
+                        mutability: Mutability::Immutable,
+                        inner: Box::new(TypeExpr::Path {
+                            segments: vec![struct_name.0.clone()],
+                            span: first.span,
+                        }),
+                        span: first.span,
+                    }
                 } else if normalized == mutref_ty {
-                    Ident(format!("&mut {}", struct_name.0))
+                    TypeExpr::Ref {
+                        mutability: Mutability::Mutable,
+                        inner: Box::new(TypeExpr::Path {
+                            segments: vec![struct_name.0.clone()],
+                            span: first.span,
+                        }),
+                        span: first.span,
+                    }
                 } else {
                     self.diagnostics.push(Diagnostic::error(
                         format!(
@@ -542,7 +582,10 @@ impl<'a> Parser<'a> {
                     return None;
                 }
             }
-            None => Ident(struct_name.0.clone()),
+            None => TypeExpr::Path {
+                segments: vec![struct_name.0.clone()],
+                span: first.span,
+            },
         };
 
         first.ty = Some(canonical_self_ty);
@@ -555,65 +598,108 @@ impl<'a> Parser<'a> {
         Some(func)
     }
 
-    fn parse_type_annotation(&mut self) -> Option<Ident> {
-        // Check for array type [T; N]
-        if self.at(TokenKind::LBracket) {
-            self.advance();
-
-            let elem_ty_tok = self.consume(TokenKind::Ident, "expected element type")?;
-            let elem_ty = self.slice(elem_ty_tok);
-
-            self.consume(TokenKind::Semicolon, "expected `;` in array type")?;
-
-            let size_tok = self.consume(TokenKind::Int, "expected array size")?;
-            let size = self.slice(size_tok);
-
-            self.consume(TokenKind::RBracket, "expected `]`")?;
-
-            return Some(Ident(format!("[{}; {}]", elem_ty, size)));
+    fn parse_generic_params(&mut self) -> Vec<Ident> {
+        if !self.at(TokenKind::Lt) {
+            return Vec::new();
         }
-
-        // Check for reference type (&T or &mut T)
-        if self.at(TokenKind::Amp) {
-            self.advance();
-
-            // Check for mut keyword
-            let is_mut = if self.at(TokenKind::Mut) {
+        let mut params = Vec::new();
+        self.advance();
+        while !self.at(TokenKind::Gt) && !self.at(TokenKind::Eof) {
+            if let Some(tok) = self.consume(TokenKind::Ident, "expected generic parameter") {
+                params.push(Ident(self.slice(tok)));
+            } else {
+                break;
+            }
+            if self.at(TokenKind::Comma) {
                 self.advance();
-                true
             } else {
-                false
-            };
-
-            // Parse inner type
-            let inner_ty_tok = self.consume(TokenKind::Ident, "expected type after &")?;
-            let inner_ty = self.slice(inner_ty_tok);
-
-            // Create type string like "&i32" or "&mut Point"
-            let type_str = if is_mut {
-                format!("&mut {}", inner_ty)
-            } else {
-                format!("&{}", inner_ty)
-            };
-
-            Some(Ident(type_str))
-        } else {
-            // Simple type (i32, Point, etc.) + minimal single-arg generics (Own<T>, RawPtr<T>)
-            let ty_tok = self.consume(TokenKind::Ident, "expected type")?;
-            let base = self.slice(ty_tok);
-
-            if (base == "Own" || base == "RawPtr" || base == "Shared") && self.at(TokenKind::Lt) {
-                self.advance();
-                let inner = match self.parse_type_annotation() {
-                    Some(ident) => ident.0,
-                    None => return None,
-                };
-                self.consume(TokenKind::Gt, "expected `>` after type argument")?;
-                Some(Ident(format!("{}<{}>", base, inner)))
-            } else {
-                Some(Ident(base))
+                break;
             }
         }
+        if let Some(gt) = self.consume(TokenKind::Gt, "expected `>` to close generic parameters") {
+            let _ = gt;
+        }
+        params
+    }
+
+    fn parse_type_expr(&mut self) -> Option<TypeExpr> {
+        // Array type: [T; N]
+        if self.at(TokenKind::LBracket) {
+            let lb = self.advance().unwrap();
+            let elem = self.parse_type_expr()?;
+            self.consume(TokenKind::Semicolon, "expected `;` in array type")?;
+            let size_tok = self.consume(TokenKind::Int, "expected array size")?;
+            let size: usize = self.slice(size_tok).parse().ok()?;
+            let rb = self.consume(TokenKind::RBracket, "expected `]")?;
+            return Some(TypeExpr::Array {
+                elem: Box::new(elem),
+                size,
+                span: Span::new(lb.span.start, rb.span.end),
+            });
+        }
+
+        // Reference type: &T or &mut T
+        if self.at(TokenKind::Amp) {
+            let amp = self.advance().unwrap();
+            let mutability = if self.at(TokenKind::Mut) {
+                self.advance();
+                Mutability::Mutable
+            } else {
+                Mutability::Immutable
+            };
+            let inner = self.parse_type_expr()?;
+            let span_end = match &inner {
+                TypeExpr::Path { span, .. }
+                | TypeExpr::App { span, .. }
+                | TypeExpr::Ref { span, .. }
+                | TypeExpr::Array { span, .. } => span.end,
+            };
+            return Some(TypeExpr::Ref {
+                mutability,
+                inner: Box::new(inner),
+                span: Span::new(amp.span.start, span_end),
+            });
+        }
+
+        // Base path (with optional qualifiers)
+        let first = self.consume(TokenKind::Ident, "expected type")?;
+        let mut segments = vec![self.slice(first)];
+        let mut end_span = first.span.end;
+        while self.at(TokenKind::ColonColon) {
+            self.advance();
+            if let Some(seg) = self.consume(TokenKind::Ident, "expected identifier after `::`") {
+                segments.push(self.slice(seg));
+                end_span = seg.span.end;
+            } else {
+                break;
+            }
+        }
+        let mut base = TypeExpr::Path {
+            segments,
+            span: Span::new(first.span.start, end_span),
+        };
+
+        // Generic application
+        if self.at(TokenKind::Lt) {
+            let lt = self.advance().unwrap();
+            let mut args = Vec::new();
+            while !self.at(TokenKind::Gt) && !self.at(TokenKind::Eof) {
+                let arg = self.parse_type_expr()?;
+                args.push(arg);
+                if self.at(TokenKind::Comma) {
+                    self.advance();
+                    continue;
+                }
+            }
+            let gt = self.consume(TokenKind::Gt, "expected `>` after type arguments")?;
+            base = TypeExpr::App {
+                base: Box::new(base),
+                args,
+                span: Span::new(lt.span.start.min(first.span.start), gt.span.end),
+            };
+        }
+
+        Some(base)
     }
 
     fn parse_params(&mut self) -> Vec<Param> {
@@ -627,8 +713,7 @@ impl<'a> Parser<'a> {
             let mut end_span = start_tok.span;
             if self.at(TokenKind::Colon) {
                 self.advance();
-                if let Some(parsed_ty) = self.parse_type_annotation() {
-                    // Use the current position after parsing the type
+                if let Some(parsed_ty) = self.parse_type_expr() {
                     let current_pos = if let Some(tok) = self.peek() {
                         tok.span.start
                     } else {
@@ -685,7 +770,7 @@ impl<'a> Parser<'a> {
             let mut ty = None;
             if self.at(TokenKind::Colon) {
                 self.advance();
-                ty = self.parse_type_annotation();
+                ty = self.parse_type_expr();
             }
             let mut value = None;
             if self.at(TokenKind::Eq) {
@@ -1545,7 +1630,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-fn lookahead_for_from(&self) -> bool {
+    fn lookahead_for_from(&self) -> bool {
         let mut pos = self.pos;
         while pos < self.tokens.len() {
             match self.tokens[pos].kind {
@@ -1560,6 +1645,29 @@ fn lookahead_for_from(&self) -> bool {
             }
         }
         false
+    }
+}
+
+fn render_type_expr(ty: &TypeExpr) -> String {
+    match ty {
+        TypeExpr::Path { segments, .. } => segments.join("::"),
+        TypeExpr::App { base, args, .. } => {
+            let mut s = render_type_expr(base);
+            let rendered_args: Vec<String> = args.iter().map(render_type_expr).collect();
+            s.push('<');
+            s.push_str(&rendered_args.join(", "));
+            s.push('>');
+            s
+        }
+        TypeExpr::Ref { mutability, inner, .. } => {
+            let mut s = String::from("&");
+            if matches!(mutability, Mutability::Mutable) {
+                s.push_str("mut ");
+            }
+            s.push_str(&render_type_expr(inner));
+            s
+        }
+        TypeExpr::Array { elem, size, .. } => format!("[{}; {}]", render_type_expr(elem), size),
     }
 }
 
