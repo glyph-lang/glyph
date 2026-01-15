@@ -37,19 +37,24 @@ pub fn lex(source: &str) -> LexOutput {
                 toks.push(Token::new(kind, Span::new(start, end as u32)));
                 i = end;
             }
-            b'$' if i + 1 < bytes.len() && bytes[i + 1] == b'"' => match consume_interpolated_string(bytes, i) {
-                Ok(end) => {
-                    toks.push(Token::new(TokenKind::InterpStr, Span::new(start, end as u32)));
-                    i = end;
+            b'$' if i + 1 < bytes.len() && bytes[i + 1] == b'"' => {
+                match consume_interpolated_string(bytes, i) {
+                    Ok(end) => {
+                        toks.push(Token::new(
+                            TokenKind::InterpStr,
+                            Span::new(start, end as u32),
+                        ));
+                        i = end;
+                    }
+                    Err(pos) => {
+                        diags.push(Diagnostic::error(
+                            "unterminated interpolated string literal",
+                            Some(Span::new(start, pos as u32)),
+                        ));
+                        break;
+                    }
                 }
-                Err(pos) => {
-                    diags.push(Diagnostic::error(
-                        "unterminated interpolated string literal",
-                        Some(Span::new(start, pos as u32)),
-                    ));
-                    break;
-                }
-            },
+            }
             b'"' => match consume_string(bytes, i) {
                 Ok(end) => {
                     toks.push(Token::new(TokenKind::Str, Span::new(start, end as u32)));
@@ -100,7 +105,10 @@ pub fn lex(source: &str) -> LexOutput {
                     }
                 }
 
-                toks.push(Token::new(TokenKind::Slash, Span::new(start, (i + 1) as u32)));
+                toks.push(Token::new(
+                    TokenKind::Slash,
+                    Span::new(start, (i + 1) as u32),
+                ));
                 i += 1;
             }
             _ => {

@@ -38,7 +38,9 @@ pub fn type_expr_to_string(ty: &TypeExpr) -> String {
             s.push('>');
             s
         }
-        TypeExpr::Ref { mutability, inner, .. } => {
+        TypeExpr::Ref {
+            mutability, inner, ..
+        } => {
             let mut s = String::from("&");
             if matches!(mutability, Mutability::Mutable) {
                 s.push_str("mut ");
@@ -183,7 +185,10 @@ fn collect_function_signatures(
                     Some(resolved) => Some(resolved),
                     None => {
                         diagnostics.push(Diagnostic::error(
-                            format!("unknown return type '{}' for function '{}'", ty_str, key_name),
+                            format!(
+                                "unknown return type '{}' for function '{}'",
+                                ty_str, key_name
+                            ),
                             Some(span),
                         ));
                         None
@@ -359,9 +364,11 @@ fn collect_function_signatures(
 
         // Wildcard imports: make qualified names available (e.g., std::io::fopen).
         for wildcard in &import_scope.wildcard_modules {
-            for (module_id, module) in all_modules.modules.iter().filter(|(id, _)| {
-                *id == wildcard || id.starts_with(&format!("{}/", wildcard))
-            }) {
+            for (module_id, module) in all_modules
+                .modules
+                .iter()
+                .filter(|(id, _)| *id == wildcard || id.starts_with(&format!("{}/", wildcard)))
+            {
                 let module_prefix = module_id.replace('/', "::");
                 for item in &module.items {
                     match item {
@@ -409,25 +416,22 @@ fn collect_function_signatures(
 
         // Built-in std helpers needed for print/println even without explicit imports.
         if all_modules.module_symbols.contains_key("std/io") {
-            let mut insert_builtin = |key: &str, params: Vec<Option<Type>>, ret: Option<Type>, abi: Option<String>| {
-                if signatures.contains_key(key) {
-                    return;
-                }
-                signatures.insert(
-                    key.to_string(),
-                    FnSig {
-                        params,
-                        ret,
-                        abi,
-                        target_name: key
-                            .split("::")
-                            .last()
-                            .unwrap_or(key)
-                            .to_string(),
-                        enum_ctor: None,
-                    },
-                );
-            };
+            let mut insert_builtin =
+                |key: &str, params: Vec<Option<Type>>, ret: Option<Type>, abi: Option<String>| {
+                    if signatures.contains_key(key) {
+                        return;
+                    }
+                    signatures.insert(
+                        key.to_string(),
+                        FnSig {
+                            params,
+                            ret,
+                            abi,
+                            target_name: key.split("::").last().unwrap_or(key).to_string(),
+                            enum_ctor: None,
+                        },
+                    );
+                };
 
             insert_builtin(
                 "std::io::raw_write",
@@ -872,7 +876,10 @@ fn lower_match<'a>(
             let tmp = ctx.fresh_local(None);
             let rv = rvalue_from_value(scrut_val)?;
             ctx.locals[tmp.0 as usize].ty = None;
-            ctx.push_inst(MirInst::Assign { local: tmp, value: rv });
+            ctx.push_inst(MirInst::Assign {
+                local: tmp,
+                value: rv,
+            });
             tmp
         }
     };
@@ -888,10 +895,7 @@ fn lower_match<'a>(
     let enum_def = match ctx.resolver.get_enum(&enum_name) {
         Some(e) => e.clone(),
         None => {
-            ctx.error(
-                format!("unknown enum type '{}'", enum_name),
-                Some(span),
-            );
+            ctx.error(format!("unknown enum type '{}'", enum_name), Some(span));
             return None;
         }
     };
@@ -937,7 +941,9 @@ fn lower_match<'a>(
         let arm_block = arm_blocks[idx];
         match &arm.pattern {
             glyph_core::ast::MatchPattern::Wildcard => {
-                ctx.blocks[current.0 as usize].insts.push(MirInst::Goto(arm_block));
+                ctx.blocks[current.0 as usize]
+                    .insts
+                    .push(MirInst::Goto(arm_block));
                 break;
             }
             glyph_core::ast::MatchPattern::Variant { name, .. } => {
@@ -965,7 +971,9 @@ fn lower_match<'a>(
 
                 let else_block = if idx == arms.len() - 1 {
                     let sink = ctx.new_block();
-                    ctx.blocks[sink.0 as usize].insts.push(MirInst::Goto(join_block));
+                    ctx.blocks[sink.0 as usize]
+                        .insts
+                        .push(MirInst::Goto(join_block));
                     sink
                 } else {
                     ctx.new_block()
@@ -1028,7 +1036,10 @@ fn lower_match<'a>(
                 });
 
                 if let Some(rv) = rvalue_from_value(val) {
-                    ctx.push_inst(MirInst::Assign { local: res_local, value: rv });
+                    ctx.push_inst(MirInst::Assign {
+                        local: res_local,
+                        value: rv,
+                    });
                 }
             }
         }
@@ -1335,10 +1346,7 @@ fn lower_print_builtin<'a>(
     is_err: bool,
 ) -> Option<Rvalue> {
     if args.len() != 1 {
-        ctx.error(
-            "print/println expects exactly one argument",
-            Some(span),
-        );
+        ctx.error("print/println expects exactly one argument", Some(span));
         return None;
     }
 
@@ -1350,7 +1358,10 @@ fn lower_print_builtin<'a>(
         Expr::Lit(glyph_core::ast::Literal::Str(s), _) => {
             segments.push(PrintSegment::Literal(s.clone()));
         }
-        Expr::InterpString { segments: segs, span: interp_span } => {
+        Expr::InterpString {
+            segments: segs,
+            span: interp_span,
+        } => {
             for seg in segs {
                 match seg {
                     glyph_core::ast::InterpSegment::Literal(s) => {
@@ -1676,11 +1687,28 @@ fn lower_call<'a>(
     }
 
     let tmp = ctx.fresh_local(None);
-    if let Some(ret) = sig.ret.as_ref() {
-        ctx.locals[tmp.0 as usize].ty = Some(ret.clone());
-    }
+    let mut ret_ty = sig.ret.clone();
 
     if let Some(enum_ctor) = &sig.enum_ctor {
+        if !lowered_args.is_empty() {
+            let mut arg_tys = Vec::new();
+            for arg in &lowered_args {
+                if let Some(arg_ty) = infer_value_type(arg, ctx) {
+                    arg_tys.push(arg_ty);
+                }
+            }
+            if !arg_tys.is_empty() {
+                ret_ty = Some(Type::App {
+                    base: enum_ctor.enum_name.clone(),
+                    args: arg_tys,
+                });
+            }
+        }
+
+        if let Some(ret) = ret_ty.as_ref() {
+            ctx.locals[tmp.0 as usize].ty = Some(ret.clone());
+        }
+
         let payload = lowered_args.get(0).cloned();
         ctx.push_inst(MirInst::Assign {
             local: tmp,
@@ -1691,6 +1719,10 @@ fn lower_call<'a>(
             },
         });
     } else {
+        if let Some(ret) = ret_ty.as_ref() {
+            ctx.locals[tmp.0 as usize].ty = Some(ret.clone());
+        }
+
         let call_target = sig.target_name.clone();
 
         ctx.push_inst(MirInst::Assign {
@@ -1773,7 +1805,20 @@ fn lower_method_call<'a>(
                 ctx.error(".len() does not take arguments", Some(span));
                 return None;
             }
+            if let Some(rv) = lower_vec_len(ctx, receiver, span) {
+                return Some(rv);
+            }
             return lower_array_len(ctx, receiver, span);
+        }
+        "push" => {
+            if let Some(rv) = lower_vec_push(ctx, receiver, args, span) {
+                return Some(rv);
+            }
+        }
+        "pop" => {
+            if let Some(rv) = lower_vec_pop(ctx, receiver, args, span) {
+                return Some(rv);
+            }
         }
         "into_raw" => {
             if !args.is_empty() {
@@ -2012,6 +2057,8 @@ fn lower_static_builtin<'a>(
         "Own::new" => lower_own_new(ctx, args, span),
         "Own::from_raw" => lower_own_from_raw(ctx, args, span),
         "Shared::new" => lower_shared_new(ctx, args, span),
+        "Vec::new" => lower_vec_static_new(ctx, args, span),
+        "Vec::with_capacity" => lower_vec_static_with_capacity(ctx, args, span),
         "String::from_str" => lower_string_from(ctx, args, span),
         "print" | "std::print" => lower_print_builtin(ctx, args, span, false, false),
         "println" | "std::println" => lower_print_builtin(ctx, args, span, true, false),
@@ -2348,8 +2395,9 @@ fn lower_array_index<'a>(
         .get(base_local.0 as usize)
         .and_then(|local| local.ty.as_ref())?;
 
-    let elem_type = match base_type {
-        Type::Array(elem_ty, _) => elem_ty.as_ref().clone(),
+    let (elem_type, is_vec) = match base_type {
+        Type::Array(elem_ty, _) => (elem_ty.as_ref().clone(), false),
+        ty if vec_elem_type_from_type(ty).is_some() => (vec_elem_type_from_type(ty).unwrap(), true),
         _ => {
             ctx.error(
                 format!("cannot index into non-array type {:?}", base_type),
@@ -2364,16 +2412,24 @@ fn lower_array_index<'a>(
 
     // Create temp with element type
     let tmp = ctx.fresh_local(None);
-    ctx.locals[tmp.0 as usize].ty = Some(elem_type);
+    ctx.locals[tmp.0 as usize].ty = Some(elem_type.clone());
 
-    ctx.push_inst(MirInst::Assign {
-        local: tmp,
-        value: Rvalue::ArrayIndex {
+    let value = if is_vec {
+        Rvalue::VecIndex {
+            vec: base_local,
+            elem_type,
+            index: index_val,
+            bounds_check: true,
+        }
+    } else {
+        Rvalue::ArrayIndex {
             base: base_local,
             index: index_val,
             bounds_check: true, // Always check bounds
-        },
-    });
+        }
+    };
+
+    ctx.push_inst(MirInst::Assign { local: tmp, value });
 
     Some(Rvalue::Move(tmp))
 }
@@ -2415,9 +2471,191 @@ fn lower_array_len<'a>(ctx: &mut LowerCtx<'a>, base: &'a Expr, span: Span) -> Op
     Some(Rvalue::Move(tmp))
 }
 
+fn vec_elem_type_from_type(ty: &Type) -> Option<Type> {
+    match ty {
+        Type::App { base, args } if base == "Vec" => args.get(0).cloned(),
+        Type::Ref(inner, _) | Type::Own(inner) | Type::RawPtr(inner) | Type::Shared(inner) => {
+            vec_elem_type_from_type(inner)
+        }
+        _ => None,
+    }
+}
+
+fn lower_vec_len<'a>(ctx: &mut LowerCtx<'a>, base: &'a Expr, _span: Span) -> Option<Rvalue> {
+    let base_local = match base {
+        Expr::Ident(ident, _) => ctx.bindings.get(ident.0.as_str()).copied(),
+        _ => None,
+    }?;
+
+    let Some(base_ty) = ctx
+        .locals
+        .get(base_local.0 as usize)
+        .and_then(|local| local.ty.as_ref())
+    else {
+        return None;
+    };
+
+    if vec_elem_type_from_type(base_ty).is_none() {
+        return None;
+    }
+
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::Usize);
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::VecLen { vec: base_local },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_vec_push<'a>(
+    ctx: &mut LowerCtx<'a>,
+    receiver: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if args.len() != 1 {
+        ctx.error("Vec::push expects exactly one argument", Some(span));
+        return None;
+    }
+
+    let receiver_val = lower_value(ctx, receiver)?;
+    let receiver_local = match receiver_val {
+        MirValue::Local(id) => id,
+        _ => {
+            ctx.error("Vec::push receiver must be a local", Some(span));
+            return None;
+        }
+    };
+
+    let elem_type = ctx
+        .locals
+        .get(receiver_local.0 as usize)
+        .and_then(|l| l.ty.as_ref())
+        .and_then(vec_elem_type_from_type)
+        .unwrap_or_else(|| {
+            ctx.error("could not infer Vec element type", Some(span));
+            Type::I32
+        });
+
+    let value = lower_value(ctx, &args[0])?;
+
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::App {
+        base: "Vec".into(),
+        args: vec![elem_type.clone()],
+    });
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::VecPush {
+            vec: receiver_local,
+            elem_type,
+            value,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_vec_pop<'a>(
+    ctx: &mut LowerCtx<'a>,
+    receiver: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if !args.is_empty() {
+        ctx.error("Vec::pop does not take arguments", Some(span));
+        return None;
+    }
+
+    let receiver_val = lower_value(ctx, receiver)?;
+    let receiver_local = match receiver_val {
+        MirValue::Local(id) => id,
+        _ => {
+            ctx.error("Vec::pop receiver must be a local", Some(span));
+            return None;
+        }
+    };
+
+    let elem_type = ctx
+        .locals
+        .get(receiver_local.0 as usize)
+        .and_then(|l| l.ty.as_ref())
+        .and_then(vec_elem_type_from_type)
+        .unwrap_or_else(|| {
+            ctx.error("could not infer Vec element type", Some(span));
+            Type::I32
+        });
+
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::App {
+        base: "Option".into(),
+        args: vec![elem_type.clone()],
+    });
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::VecPop {
+            vec: receiver_local,
+            elem_type,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_vec_static_new<'a>(
+    ctx: &mut LowerCtx<'a>,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if !args.is_empty() {
+        ctx.error("Vec::new does not take arguments", Some(span));
+        return None;
+    }
+
+    // TODO: wire contextual element-type inference; default to i32 for now
+    let elem_type = Type::I32;
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::App {
+        base: "Vec".into(),
+        args: vec![elem_type.clone()],
+    });
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::VecNew { elem_type },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_vec_static_with_capacity<'a>(
+    ctx: &mut LowerCtx<'a>,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if args.len() != 1 {
+        ctx.error("Vec::with_capacity expects one argument", Some(span));
+        return None;
+    }
+
+    let capacity = lower_value(ctx, &args[0])?;
+    // TODO: wire contextual element-type inference; default to i32 for now
+    let elem_type = Type::I32;
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::App {
+        base: "Vec".into(),
+        args: vec![elem_type.clone()],
+    });
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::VecWithCapacity {
+            elem_type,
+            capacity,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
 fn infer_value_type(value: &MirValue, ctx: &LowerCtx) -> Option<Type> {
     match value {
-        MirValue::Int(_) => Some(Type::I32),
+        MirValue::Int(_) => Some(Type::Usize),
         MirValue::Bool(_) => Some(Type::Bool),
         MirValue::Unit => Some(Type::Void),
         MirValue::Local(local_id) => ctx
@@ -2688,7 +2926,10 @@ fn parse_type_application(name: &str, resolver: &ResolverContext) -> Option<Type
         }
     }
 
-    Some(Type::App { base: base_name, args })
+    Some(Type::App {
+        base: base_name,
+        args,
+    })
 }
 
 fn parse_single_arg_type(name: &str, keyword: &str, resolver: &ResolverContext) -> Option<Type> {
@@ -2872,6 +3113,18 @@ fn infer_rvalue_type(rv: &Rvalue, ctx: &LowerCtx) -> Option<Type> {
         Rvalue::EnumConstruct { enum_name, .. } => Some(Type::Enum(enum_name.clone())),
         Rvalue::EnumTag { .. } => Some(Type::I32),
         Rvalue::EnumPayload { payload_type, .. } => Some(payload_type.clone()),
+        Rvalue::VecNew { elem_type }
+        | Rvalue::VecWithCapacity { elem_type, .. }
+        | Rvalue::VecPush { elem_type, .. } => Some(Type::App {
+            base: "Vec".into(),
+            args: vec![elem_type.clone()],
+        }),
+        Rvalue::VecPop { elem_type, .. } => Some(Type::App {
+            base: "Option".into(),
+            args: vec![elem_type.clone()],
+        }),
+        Rvalue::VecIndex { elem_type, .. } => Some(elem_type.clone()),
+        Rvalue::VecLen { .. } => Some(Type::Usize),
         _ => None,
     }
 }
@@ -2971,7 +3224,10 @@ fn lower_value<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr) -> Option<MirValue> {
             let rv = lower_interp_string(ctx, segments, *span)?;
             let tmp = ctx.fresh_local(None);
             ctx.locals[tmp.0 as usize].ty = Some(Type::Str);
-            ctx.push_inst(MirInst::Assign { local: tmp, value: rv });
+            ctx.push_inst(MirInst::Assign {
+                local: tmp,
+                value: rv,
+            });
             Some(MirValue::Local(tmp))
         }
         Expr::Ident(ident, span) => ctx
@@ -3135,7 +3391,6 @@ mod tests {
             imports: vec![],
             items: vec![point_struct, Item::Function(func)],
         };
-
 
         let module = Module {
             imports: vec![],

@@ -1,0 +1,6 @@
+extern "C" fn make_vec_own() -> Vec<Own<i32>>;
+
+fn main() -> i32 {
+  let v = make_vec_own()
+  ret 0
+}

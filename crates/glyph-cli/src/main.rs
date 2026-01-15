@@ -18,7 +18,10 @@ use glyph_backend::NullBackend;
 #[cfg(feature = "codegen")]
 use glyph_backend::llvm::LlvmBackend;
 #[cfg(feature = "codegen")]
-use glyph_backend::{codegen::CodegenContext, linker::{Linker, LinkerOptions}};
+use glyph_backend::{
+    codegen::CodegenContext,
+    linker::{Linker, LinkerOptions},
+};
 
 #[derive(Parser, Debug)]
 #[command(name = "glyph", version, about = "Glyph language toolchain")]

@@ -105,11 +105,7 @@ fn main() -> i32 {
             )
             .unwrap();
         let ir = artifact.llvm_ir.unwrap();
-        assert!(
-            ir.contains("enum.tag"),
-            "expected tag access in IR\n{}",
-            ir
-        );
+        assert!(ir.contains("enum.tag"), "expected tag access in IR\n{}", ir);
         assert!(
             ir.contains("br i1"),
             "expected conditional branch in match lowering\n{}",

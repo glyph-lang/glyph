@@ -74,10 +74,25 @@ pub mod ast {
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     pub enum TypeExpr {
-        Path { segments: Vec<String>, span: Span },
-        App { base: Box<TypeExpr>, args: Vec<TypeExpr>, span: Span },
-        Ref { mutability: crate::types::Mutability, inner: Box<TypeExpr>, span: Span },
-        Array { elem: Box<TypeExpr>, size: usize, span: Span },
+        Path {
+            segments: Vec<String>,
+            span: Span,
+        },
+        App {
+            base: Box<TypeExpr>,
+            args: Vec<TypeExpr>,
+            span: Span,
+        },
+        Ref {
+            mutability: crate::types::Mutability,
+            inner: Box<TypeExpr>,
+            span: Span,
+        },
+        Array {
+            elem: Box<TypeExpr>,
+            size: usize,
+            span: Span,
+        },
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -173,10 +188,7 @@ pub mod ast {
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     pub enum MatchPattern {
         Wildcard,
-        Variant {
-            name: Ident,
-            binding: Option<Ident>,
-        },
+        Variant { name: Ident, binding: Option<Ident> },
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -464,6 +476,7 @@ pub mod types {
         U8,
         U32,
         U64,
+        Usize,
         F32,
         F64,
         Bool,
@@ -491,6 +504,7 @@ pub mod types {
                 "u8" => Some(Type::U8),
                 "u32" | "u" => Some(Type::U32),
                 "u64" => Some(Type::U64),
+                "usize" => Some(Type::Usize),
                 "char" | "c" => Some(Type::Char),
                 "f32" => Some(Type::F32),
                 "f64" | "f" => Some(Type::F64),
@@ -504,7 +518,14 @@ pub mod types {
         pub fn is_int(&self) -> bool {
             matches!(
                 self,
-                Type::I8 | Type::I32 | Type::I64 | Type::U8 | Type::U32 | Type::U64 | Type::Char
+                Type::I8
+                    | Type::I32
+                    | Type::I64
+                    | Type::U8
+                    | Type::U32
+                    | Type::U64
+                    | Type::Usize
+                    | Type::Char
             )
         }
 
@@ -726,6 +747,31 @@ pub mod mir {
         },
         ArrayLen {
             base: LocalId,
+        },
+        VecNew {
+            elem_type: Type,
+        },
+        VecWithCapacity {
+            elem_type: Type,
+            capacity: MirValue,
+        },
+        VecPush {
+            vec: LocalId,
+            elem_type: Type,
+            value: MirValue,
+        },
+        VecPop {
+            vec: LocalId,
+            elem_type: Type,
+        },
+        VecLen {
+            vec: LocalId,
+        },
+        VecIndex {
+            vec: LocalId,
+            elem_type: Type,
+            index: MirValue,
+            bounds_check: bool,
         },
         OwnNew {
             value: MirValue,

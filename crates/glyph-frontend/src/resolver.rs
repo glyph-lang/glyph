@@ -57,7 +57,9 @@ fn type_expr_to_string(ty: &TypeExpr) -> String {
             s.push('>');
             s
         }
-        TypeExpr::Ref { mutability, inner, .. } => {
+        TypeExpr::Ref {
+            mutability, inner, ..
+        } => {
             let mut s = String::from("&");
             if matches!(mutability, glyph_core::types::Mutability::Mutable) {
                 s.push_str("mut ");
@@ -95,12 +97,30 @@ fn resolve_type_expr_to_type(ty: &TypeExpr, ctx: &ResolverContext) -> Option<Typ
                     return Some(Type::Named(type_expr_to_string(ty)));
                 }
             }
+
+            if let Type::Named(name) = &base_ty {
+                if name == "RawPtr" && rendered_args.len() == 1 {
+                    return Some(Type::RawPtr(Box::new(rendered_args[0].clone())));
+                }
+                if name == "Own" && rendered_args.len() == 1 {
+                    return Some(Type::Own(Box::new(rendered_args[0].clone())));
+                }
+                if name == "Shared" && rendered_args.len() == 1 {
+                    return Some(Type::Shared(Box::new(rendered_args[0].clone())));
+                }
+            }
+
             match base_ty {
-                Type::Named(name) | Type::Enum(name) => Some(Type::App { base: name, args: rendered_args }),
+                Type::Named(name) | Type::Enum(name) => Some(Type::App {
+                    base: name,
+                    args: rendered_args,
+                }),
                 _ => Some(Type::Named(type_expr_to_string(ty))),
             }
         }
-        TypeExpr::Ref { mutability, inner, .. } => resolve_type_expr_to_type(inner, ctx)
+        TypeExpr::Ref {
+            mutability, inner, ..
+        } => resolve_type_expr_to_type(inner, ctx)
             .map(|inner_ty| Type::Ref(Box::new(inner_ty), *mutability)),
         TypeExpr::Array { elem, size, .. } => resolve_type_expr_to_type(elem, ctx)
             .map(|elem_ty| Type::Array(Box::new(elem_ty), *size)),
@@ -270,7 +290,9 @@ pub fn resolve_types(module: &Module) -> (ResolverContext, Vec<Diagnostic>) {
             let struct_name = s.name.0.clone();
 
             // Check for duplicate struct definitions
-            if ctx.struct_types.contains_key(&struct_name) || ctx.enum_types.contains_key(&struct_name) {
+            if ctx.struct_types.contains_key(&struct_name)
+                || ctx.enum_types.contains_key(&struct_name)
+            {
                 diagnostics.push(Diagnostic::error(
                     format!("struct '{}' is defined multiple times", struct_name),
                     Some(s.span),
@@ -344,9 +366,15 @@ pub fn resolve_types(module: &Module) -> (ResolverContext, Vec<Diagnostic>) {
     for item in &module.items {
         if let Item::Enum(e) = item {
             if let Some(enum_type) = ctx.enum_types.get(&e.name.0) {
+                // Allow payload types that are enum generic params, known structs, or known enums.
+                let generic_params: std::collections::HashSet<String> =
+                    e.generic_params.iter().map(|p| p.0.clone()).collect();
                 for variant in &enum_type.variants {
                     if let Some(Type::Named(type_name)) = &variant.payload {
-                        if !struct_names.contains(type_name) && !enum_names.contains(type_name) {
+                        let is_generic = generic_params.contains(type_name);
+                        let is_known =
+                            struct_names.contains(type_name) || enum_names.contains(type_name);
+                        if !is_generic && !is_known {
                             diagnostics.push(Diagnostic::error(
                                 format!(
                                     "undefined type '{}' used in variant '{}' of enum '{}'",
@@ -670,10 +698,17 @@ pub fn populate_imported_types(ctx: &mut ResolverContext) {
 }
 
 fn struct_type_from_def(def: &glyph_core::ast::StructDef, ctx: &ResolverContext) -> StructType {
+    let generics: std::collections::HashSet<String> =
+        def.generic_params.iter().map(|p| p.0.clone()).collect();
     let mut fields = Vec::new();
     for field in &def.fields {
-        let field_type = resolve_type_expr_to_type(&field.ty, ctx)
+        let mut field_type = resolve_type_expr_to_type(&field.ty, ctx)
             .unwrap_or_else(|| Type::Named(type_expr_to_string(&field.ty)));
+        if let Type::Named(n) = &field_type {
+            if generics.contains(n) {
+                field_type = Type::Param(n.clone());
+            }
+        }
         fields.push((field.name.0.clone(), field_type));
     }
 
@@ -684,15 +719,23 @@ fn struct_type_from_def(def: &glyph_core::ast::StructDef, ctx: &ResolverContext)
 }
 
 fn enum_type_from_def(def: &glyph_core::ast::EnumDef, ctx: &ResolverContext) -> EnumType {
+    let generics: std::collections::HashSet<String> =
+        def.generic_params.iter().map(|p| p.0.clone()).collect();
     let mut variants = Vec::new();
     for variant in &def.variants {
-        let payload_ty = match &variant.payload {
-            Some(payload_ident) => {
-                Some(resolve_type_expr_to_type(payload_ident, ctx)
-                    .unwrap_or_else(|| Type::Named(type_expr_to_string(payload_ident))))
-            }
+        let mut payload_ty = match &variant.payload {
+            Some(payload_ident) => Some(
+                resolve_type_expr_to_type(payload_ident, ctx)
+                    .unwrap_or_else(|| Type::Named(type_expr_to_string(payload_ident))),
+            ),
             None => None,
         };
+
+        if let Some(Type::Named(n)) = &payload_ty {
+            if generics.contains(n) {
+                payload_ty = Some(Type::Param(n.clone()));
+            }
+        }
 
         variants.push(glyph_core::types::EnumVariant {
             name: variant.name.0.clone(),
@@ -1165,21 +1208,19 @@ mod tests {
     fn detects_duplicate_struct_definitions() {
         let module = Module {
             imports: vec![],
-            items: vec![
-                Item::Struct(StructDef {
-                    name: Ident("Point".into()),
-                    generic_params: Vec::new(),
-                    fields: vec![FieldDef {
-                        name: Ident("top_left".into()),
-                        ty: path_ty("Point"),
-                        span: make_span(),
-                    }],
-                    interfaces: Vec::new(),
-                    methods: Vec::new(),
-                    inline_impls: Vec::new(),
+            items: vec![Item::Struct(StructDef {
+                name: Ident("Point".into()),
+                generic_params: Vec::new(),
+                fields: vec![FieldDef {
+                    name: Ident("top_left".into()),
+                    ty: path_ty("Point"),
                     span: make_span(),
-                })],
-
+                }],
+                interfaces: Vec::new(),
+                methods: Vec::new(),
+                inline_impls: Vec::new(),
+                span: make_span(),
+            })],
         };
 
         let (ctx, diags) = resolve_types(&module);
@@ -1197,7 +1238,8 @@ mod tests {
         let module = Module {
             imports: vec![],
             items: vec![
-                Item::Struct(StructDef { generic_params: Vec::new(),
+                Item::Struct(StructDef {
+                    generic_params: Vec::new(),
                     name: Ident("Point".into()),
                     fields: vec![FieldDef {
                         name: Ident("x".into()),
@@ -1209,7 +1251,8 @@ mod tests {
                     inline_impls: Vec::new(),
                     span: make_span(),
                 }),
-                Item::Struct(StructDef { generic_params: Vec::new(),
+                Item::Struct(StructDef {
+                    generic_params: Vec::new(),
                     name: Ident("Rect".into()),
                     fields: vec![FieldDef {
                         name: Ident("top_left".into()),
@@ -1237,7 +1280,8 @@ mod tests {
     fn get_field_returns_correct_type_and_index() {
         let module = Module {
             imports: vec![],
-            items: vec![Item::Struct(StructDef { generic_params: Vec::new(),
+            items: vec![Item::Struct(StructDef {
+                generic_params: Vec::new(),
                 name: Ident("Point".into()),
                 fields: vec![
                     FieldDef {
@@ -1296,7 +1340,8 @@ mod tests {
                     }],
                     span,
                 }),
-                Item::Struct(StructDef { generic_params: Vec::new(),
+                Item::Struct(StructDef {
+                    generic_params: Vec::new(),
                     name: Ident("Point".into()),
                     fields: vec![FieldDef {
                         name: Ident("x".into()),
@@ -1365,7 +1410,8 @@ mod tests {
                     }],
                     span,
                 }),
-                Item::Struct(StructDef { generic_params: Vec::new(),
+                Item::Struct(StructDef {
+                    generic_params: Vec::new(),
                     name: Ident("Point".into()),
                     fields: vec![],
                     interfaces: vec![Ident("Renderable".into())],

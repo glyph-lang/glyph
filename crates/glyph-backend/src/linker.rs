@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -190,8 +190,7 @@ fn make_executable(path: &Path) -> Result<()> {
     // Set executable bit for owner, group, and others (0o755 = rwxr-xr-x)
     perms.set_mode(0o755);
 
-    std::fs::set_permissions(path, perms)
-        .context("Failed to set executable permissions")?;
+    std::fs::set_permissions(path, perms).context("Failed to set executable permissions")?;
 
     Ok(())
 }

@@ -3,15 +3,14 @@ use glyph_core::{
     ast::{
         BinaryOp, Block, EnumDef, EnumVariantDef, Expr, ExternFunctionDecl, FieldDef, Function,
         Ident, ImplBlock, Import, ImportItem, ImportKind, ImportPath, InlineImpl, InterfaceDef,
-        InterfaceMethod, InterpSegment, Item, Literal, MatchArm, MatchPattern, Module, Param,
-        Stmt, StructDef, TypeExpr,
+        InterfaceMethod, InterpSegment, Item, Literal, MatchArm, MatchPattern, Module, Param, Stmt,
+        StructDef, TypeExpr,
     },
     diag::Diagnostic,
     span::Span,
     token::{Token, TokenKind},
     types::Mutability,
 };
-
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ParseOutput {
@@ -273,9 +272,6 @@ impl<'a> Parser<'a> {
             ret_type = self.parse_type_expr();
         }
 
-
-
-
         self.consume(
             TokenKind::Semicolon,
             "expected `;` after interface method signature",
@@ -402,7 +398,8 @@ impl<'a> Parser<'a> {
             if self.at(TokenKind::LParen) {
                 self.advance();
                 payload = self.parse_type_expr();
-                let close = self.consume(TokenKind::RParen, "expected `)` after variant payload")?;
+                let close =
+                    self.consume(TokenKind::RParen, "expected `)` after variant payload")?;
                 end = close.span.end;
             }
 
@@ -1659,7 +1656,9 @@ fn render_type_expr(ty: &TypeExpr) -> String {
             s.push('>');
             s
         }
-        TypeExpr::Ref { mutability, inner, .. } => {
+        TypeExpr::Ref {
+            mutability, inner, ..
+        } => {
             let mut s = String::from("&");
             if matches!(mutability, Mutability::Mutable) {
                 s.push_str("mut ");

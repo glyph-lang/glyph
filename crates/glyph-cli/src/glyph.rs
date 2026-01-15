@@ -7,8 +7,11 @@ use clap::{Parser, Subcommand};
 use serde::Deserialize;
 
 #[cfg(feature = "codegen")]
-use glyph_backend::{codegen::CodegenContext, linker::{Linker, LinkerOptions}};
-use glyph_frontend::{compile_source, FrontendOptions};
+use glyph_backend::{
+    codegen::CodegenContext,
+    linker::{Linker, LinkerOptions},
+};
+use glyph_frontend::{FrontendOptions, compile_source};
 
 const EXIT_SUCCESS: i32 = 0;
 const EXIT_USAGE: i32 = 1;
@@ -93,13 +96,20 @@ fn main() {
 fn run() -> GlyphResult<()> {
     let cli = Cli::parse();
     match cli.command {
-        GlyphCommand::Build { release, bin, verbose } => {
+        GlyphCommand::Build {
+            release,
+            bin,
+            verbose,
+        } => {
             let _ = build_cmd(release, bin, verbose)?;
             Ok(())
         }
-        GlyphCommand::Run { release, bin, args, verbose } => {
-            run_cmd(release, bin, args, verbose)
-        }
+        GlyphCommand::Run {
+            release,
+            bin,
+            args,
+            verbose,
+        } => run_cmd(release, bin, args, verbose),
     }
 }
 
@@ -160,8 +170,8 @@ fn locate_manifest(start: &Path) -> GlyphResult<PathBuf> {
 fn load_manifest(path: &Path, root: &Path) -> GlyphResult<Manifest> {
     let contents = fs::read_to_string(path)
         .map_err(|e| usage_err(format!("failed to read {}: {}", path.display(), e)))?;
-    let manifest: Manifest = toml::from_str(&contents)
-        .map_err(|e| usage_err(format!("invalid glph.toml: {}", e)))?;
+    let manifest: Manifest =
+        toml::from_str(&contents).map_err(|e| usage_err(format!("invalid glph.toml: {}", e)))?;
     validate_manifest(&manifest, root)?;
     Ok(manifest)
 }
@@ -186,28 +196,37 @@ fn validate_manifest(manifest: &Manifest, root: &Path) -> GlyphResult<()> {
             return Err(usage_err(format!("duplicate [[bin]] name '{}'", bin.name)));
         }
         if bin.path.trim().is_empty() {
-            return Err(usage_err(format!("[[bin]] '{}' must specify path", bin.name)));
+            return Err(usage_err(format!(
+                "[[bin]] '{}' must specify path",
+                bin.name
+            )));
         }
         let path = Path::new(&bin.path);
         if path.is_absolute() {
-            return Err(usage_err(format!("[[bin]].path must be relative: '{}'", bin.path)));
+            return Err(usage_err(format!(
+                "[[bin]].path must be relative: '{}'",
+                bin.path
+            )));
         }
-        if path
-            .components()
-            .any(|c| matches!(c, Component::ParentDir))
-        {
+        if path.components().any(|c| matches!(c, Component::ParentDir)) {
             return Err(usage_err(format!(
                 "[[bin]].path must not traverse parents ('{}')",
                 bin.path
             )));
         }
         if path.extension().and_then(|s| s.to_str()) != Some("glyph") {
-            return Err(usage_err(format!("[[bin]].path must end with .glyph ('{}')", bin.path)));
+            return Err(usage_err(format!(
+                "[[bin]].path must end with .glyph ('{}')",
+                bin.path
+            )));
         }
 
         let full = root.join(path);
         if !full.is_file() {
-            return Err(usage_err(format!("bin path does not exist: {}", full.display())));
+            return Err(usage_err(format!(
+                "bin path does not exist: {}",
+                full.display()
+            )));
         }
     }
 
@@ -216,14 +235,14 @@ fn validate_manifest(manifest: &Manifest, root: &Path) -> GlyphResult<()> {
 
 fn select_bin<'a>(manifest: &'a Manifest, requested: Option<&str>) -> GlyphResult<&'a BinTarget> {
     if let Some(name) = requested {
-        manifest
-            .bin
-            .iter()
-            .find(|b| b.name == name)
-            .ok_or_else(|| {
-                let names: Vec<_> = manifest.bin.iter().map(|b| b.name.as_str()).collect();
-                usage_err(format!("bin '{}' not found. available: {}", name, names.join(", ")))
-            })
+        manifest.bin.iter().find(|b| b.name == name).ok_or_else(|| {
+            let names: Vec<_> = manifest.bin.iter().map(|b| b.name.as_str()).collect();
+            usage_err(format!(
+                "bin '{}' not found. available: {}",
+                name,
+                names.join(", ")
+            ))
+        })
     } else if manifest.bin.len() == 1 {
         Ok(&manifest.bin[0])
     } else {
@@ -238,8 +257,10 @@ fn select_bin<'a>(manifest: &'a Manifest, requested: Option<&str>) -> GlyphResul
 fn build_bin(root: &Path, bin: &BinTarget, profile: &str, verbose: bool) -> GlyphResult<PathBuf> {
     let source_path = root.join(&bin.path);
     let output_dir = root.join("target").join(profile);
-    fs::create_dir_all(&output_dir)
-        .map_err(internal_err(format!("failed to create {}", output_dir.display())))?;
+    fs::create_dir_all(&output_dir).map_err(internal_err(format!(
+        "failed to create {}",
+        output_dir.display()
+    )))?;
 
     let source = fs::read_to_string(&source_path)
         .map_err(|e| usage_err(format!("failed to read {}: {}", source_path.display(), e)))?;
@@ -301,9 +322,7 @@ fn build_bin(root: &Path, bin: &BinTarget, profile: &str, verbose: bool) -> Glyp
             eprintln!("[glyph] linking to {}", exe_path.display());
         }
 
-        linker
-            .link(&opts)
-            .map_err(internal_err("linking failed"))?;
+        linker.link(&opts).map_err(internal_err("linking failed"))?;
         let _ = fs::remove_file(&obj_path);
         Ok(exe_path)
     }
@@ -332,10 +351,19 @@ mod tests {
     #[test]
     fn select_bin_requires_flag_when_multiple() {
         let manifest = Manifest {
-            package: PackageSection { name: "foo".into(), version: "0.1.0".into() },
+            package: PackageSection {
+                name: "foo".into(),
+                version: "0.1.0".into(),
+            },
             bin: vec![
-                BinTarget { name: "a".into(), path: "a.glyph".into() },
-                BinTarget { name: "b".into(), path: "b.glyph".into() },
+                BinTarget {
+                    name: "a".into(),
+                    path: "a.glyph".into(),
+                },
+                BinTarget {
+                    name: "b".into(),
+                    path: "b.glyph".into(),
+                },
             ],
             dependencies: toml::value::Table::new(),
         };
@@ -348,8 +376,14 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let root = temp.path();
         let manifest = Manifest {
-            package: PackageSection { name: "foo".into(), version: "0.1.0".into() },
-            bin: vec![BinTarget { name: "a".into(), path: "../a.glyph".into() }],
+            package: PackageSection {
+                name: "foo".into(),
+                version: "0.1.0".into(),
+            },
+            bin: vec![BinTarget {
+                name: "a".into(),
+                path: "../a.glyph".into(),
+            }],
             dependencies: toml::value::Table::new(),
         };
         // Need the file to exist to reach traversal check; create placeholder in root/.. not possible

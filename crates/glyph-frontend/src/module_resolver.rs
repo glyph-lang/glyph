@@ -728,7 +728,6 @@ mod tests {
                     inline_impls: vec![],
                     span: Span::new(0, 0),
                 })],
-
             },
         );
 

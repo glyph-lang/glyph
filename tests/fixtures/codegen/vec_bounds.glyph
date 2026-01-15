@@ -1,0 +1,7 @@
+extern "C" fn make_vec() -> Vec<i32>;
+
+fn main() -> i32 {
+  let v = make_vec()
+  let x = v[10]
+  ret x
+}

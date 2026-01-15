@@ -19,13 +19,16 @@ fn main() {
     }
 
     // Compile runtime C code to object file using cc
-    println!("cargo:warning=Compiling runtime library from {:?}", runtime_src);
+    println!(
+        "cargo:warning=Compiling runtime library from {:?}",
+        runtime_src
+    );
     let status = Command::new("cc")
         .args(&[
-            "-c",                    // Compile only, don't link
-            "-O2",                   // Optimize
-            "-fPIC",                 // Position-independent code for shared libraries
-            "-Wall",                 // Enable warnings
+            "-c",    // Compile only, don't link
+            "-O2",   // Optimize
+            "-fPIC", // Position-independent code for shared libraries
+            "-Wall", // Enable warnings
         ])
         .arg(&runtime_src)
         .arg("-o")
@@ -40,7 +43,7 @@ fn main() {
     // Create static library archive from object file using ar
     println!("cargo:warning=Creating static library at {:?}", runtime_lib);
     let status = Command::new("ar")
-        .args(&["rcs"])              // r=insert, c=create, s=index
+        .args(&["rcs"]) // r=insert, c=create, s=index
         .arg(&runtime_lib)
         .arg(&runtime_obj)
         .status()
@@ -57,5 +60,8 @@ fn main() {
     // Rerun build script if runtime source changes
     println!("cargo:rerun-if-changed=../../runtime/glyph_fmt.c");
 
-    println!("cargo:warning=Runtime library built successfully at {}", runtime_lib.display());
+    println!(
+        "cargo:warning=Runtime library built successfully at {}",
+        runtime_lib.display()
+    );
 }
