@@ -75,12 +75,26 @@ pub fn std_modules() -> HashMap<String, Module> {
         span,
     };
 
+    let println_extern = ExternFunctionDecl {
+        name: Ident("println".into()),
+        abi: Some("C".into()),
+        params: vec![Param {
+            name: Ident("msg".into()),
+            ty: Some(tp("String", span)),
+            span,
+        }],
+        ret_type: Some(tp("i32", span)),
+        link_name: None,
+        span,
+    };
+
     let std_io_module = Module {
         imports: vec![],
         items: vec![
             glyph_core::ast::Item::Struct(stdout_struct),
             glyph_core::ast::Item::ExternFunction(puts_extern),
             glyph_core::ast::Item::ExternFunction(raw_write_extern),
+            glyph_core::ast::Item::ExternFunction(println_extern),
         ],
     };
     modules.insert("std/io".into(), std_io_module);
