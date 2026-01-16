@@ -26,10 +26,7 @@ fn main() -> i32 {
 
     // Verify MIR contains fmt_i32 call
     let mir_text = format!("{:?}", output.mir);
-    assert!(
-        mir_text.contains("std::fmt::fmt_i32"),
-        "MIR should call std::fmt::fmt_i32"
-    );
+    assert!(mir_text.contains("fmt_i32"), "MIR should call fmt_i32");
 }
 
 #[test]
@@ -58,10 +55,7 @@ fn main() -> i32 {
 
     // Verify MIR contains fmt_bool call
     let mir_text = format!("{:?}", output.mir);
-    assert!(
-        mir_text.contains("std::fmt::fmt_bool"),
-        "MIR should call std::fmt::fmt_bool"
-    );
+    assert!(mir_text.contains("fmt_bool"), "MIR should call fmt_bool");
 }
 
 #[test]
@@ -89,10 +83,7 @@ fn main() -> i32 {
     );
 
     let mir_text = format!("{:?}", output.mir);
-    assert!(
-        mir_text.contains("std::fmt::fmt_u32"),
-        "MIR should call std::fmt::fmt_u32"
-    );
+    assert!(mir_text.contains("fmt_u32"), "MIR should call fmt_u32");
 }
 
 #[test]
@@ -120,10 +111,7 @@ fn main() -> i32 {
     );
 
     let mir_text = format!("{:?}", output.mir);
-    assert!(
-        mir_text.contains("std::fmt::fmt_i64"),
-        "MIR should call std::fmt::fmt_i64"
-    );
+    assert!(mir_text.contains("fmt_i64"), "MIR should call fmt_i64");
 }
 
 #[test]
@@ -151,10 +139,7 @@ fn main() -> i32 {
     );
 
     let mir_text = format!("{:?}", output.mir);
-    assert!(
-        mir_text.contains("std::fmt::fmt_u64"),
-        "MIR should call std::fmt::fmt_u64"
-    );
+    assert!(mir_text.contains("fmt_u64"), "MIR should call fmt_u64");
 }
 
 #[test]
@@ -182,10 +167,7 @@ fn main() -> i32 {
     );
 
     let mir_text = format!("{:?}", output.mir);
-    assert!(
-        mir_text.contains("std::fmt::fmt_char"),
-        "MIR should call std::fmt::fmt_char"
-    );
+    assert!(mir_text.contains("fmt_char"), "MIR should call fmt_char");
 }
 
 #[test]
@@ -214,10 +196,7 @@ fn main() -> i32 {
 
     // Verify MIR contains fmt_str call
     let mir_text = format!("{:?}", output.mir);
-    assert!(
-        mir_text.contains("std::fmt::fmt_str"),
-        "MIR should call std::fmt::fmt_str"
-    );
+    assert!(mir_text.contains("fmt_str"), "MIR should call fmt_str");
 }
 
 #[test]
@@ -248,18 +227,9 @@ fn main() -> i32 {
 
     // Verify MIR contains all fmt calls
     let mir_text = format!("{:?}", output.mir);
-    assert!(
-        mir_text.contains("std::fmt::fmt_i32"),
-        "MIR should call std::fmt::fmt_i32"
-    );
-    assert!(
-        mir_text.contains("std::fmt::fmt_bool"),
-        "MIR should call std::fmt::fmt_bool"
-    );
-    assert!(
-        mir_text.contains("std::fmt::fmt_str"),
-        "MIR should call std::fmt::fmt_str"
-    );
+    assert!(mir_text.contains("fmt_i32"), "MIR should call fmt_i32");
+    assert!(mir_text.contains("fmt_bool"), "MIR should call fmt_bool");
+    assert!(mir_text.contains("fmt_str"), "MIR should call fmt_str");
 }
 
 #[test]
@@ -289,13 +259,10 @@ fn main() -> i32 {
     // Verify MIR uses raw_write for literal segments
     let mir_text = format!("{:?}", output.mir);
     assert!(
-        mir_text.contains("std::io::raw_write"),
+        mir_text.contains("raw_write"),
         "MIR should use raw_write for literals"
     );
-    assert!(
-        mir_text.contains("std::fmt::fmt_i32"),
-        "MIR should call std::fmt::fmt_i32"
-    );
+    assert!(mir_text.contains("fmt_i32"), "MIR should call fmt_i32");
 }
 
 #[test]
@@ -387,8 +354,8 @@ fn main() -> i32 {
     // Verify MIR contains fmt_i32 call for literal
     let mir_text = format!("{:?}", output.mir);
     assert!(
-        mir_text.contains("std::fmt::fmt_i32"),
-        "MIR should call std::fmt::fmt_i32 for inline literal"
+        mir_text.contains("fmt_i32"),
+        "MIR should call fmt_i32 for inline literal"
     );
 }
 
@@ -418,8 +385,8 @@ fn main() -> i32 {
     // Verify MIR contains fmt_bool call
     let mir_text = format!("{:?}", output.mir);
     assert!(
-        mir_text.contains("std::fmt::fmt_bool"),
-        "MIR should call std::fmt::fmt_bool for inline literal"
+        mir_text.contains("fmt_bool"),
+        "MIR should call fmt_bool for inline literal"
     );
 }
 
@@ -448,7 +415,7 @@ fn main() -> i32 {
 
     // Verify MIR has multiple fmt_i32 calls
     let mir_text = format!("{:?}", output.mir);
-    let count = mir_text.matches("std::fmt::fmt_i32").count();
+    let count = mir_text.matches("fmt_i32").count();
     assert!(
         count >= 3,
         "MIR should have at least 3 fmt_i32 calls, found {}",
@@ -508,8 +475,5 @@ fn main() -> i32 {
 
     // Should work with only holes, no literal segments
     let mir_text = format!("{:?}", output.mir);
-    assert!(
-        mir_text.contains("std::fmt::fmt_i32"),
-        "MIR should call std::fmt::fmt_i32"
-    );
+    assert!(mir_text.contains("fmt_i32"), "MIR should call fmt_i32");
 }

@@ -658,10 +658,14 @@ pub mod mir {
 
     impl std::fmt::Debug for MirModule {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            use std::collections::BTreeMap;
+
             let mut ds = f.debug_struct("MirModule");
-            ds.field("struct_types", &self.struct_types);
+            let struct_types: BTreeMap<_, _> = self.struct_types.iter().collect();
+            ds.field("struct_types", &struct_types);
             if !self.enum_types.is_empty() {
-                ds.field("enum_types", &self.enum_types);
+                let enum_types: BTreeMap<_, _> = self.enum_types.iter().collect();
+                ds.field("enum_types", &enum_types);
             }
             ds.field("functions", &self.functions);
             if !self.extern_functions.is_empty() {
@@ -772,6 +776,56 @@ pub mod mir {
             elem_type: Type,
             index: MirValue,
             bounds_check: bool,
+        },
+        MapNew {
+            key_type: Type,
+            value_type: Type,
+        },
+        MapWithCapacity {
+            key_type: Type,
+            value_type: Type,
+            capacity: MirValue,
+        },
+        MapAdd {
+            map: LocalId,
+            key_type: Type,
+            key: MirValue,
+            value_type: Type,
+            value: MirValue,
+        },
+        MapUpdate {
+            map: LocalId,
+            key_type: Type,
+            key: MirValue,
+            value_type: Type,
+            value: MirValue,
+        },
+        MapDel {
+            map: LocalId,
+            key_type: Type,
+            value_type: Type,
+            key: MirValue,
+        },
+        MapGet {
+            map: LocalId,
+            key_type: Type,
+            value_type: Type,
+            key: MirValue,
+        },
+        MapHas {
+            map: LocalId,
+            key_type: Type,
+            key: MirValue,
+        },
+        MapKeys {
+            map: LocalId,
+            key_type: Type,
+            value_type: Type,
+        },
+        MapVals {
+            map: LocalId,
+            key_type: Type,
+            value_type: Type,
         },
         OwnNew {
             value: MirValue,

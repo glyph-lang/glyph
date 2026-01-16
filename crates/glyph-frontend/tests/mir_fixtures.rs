@@ -513,3 +513,16 @@ fn mir_shared_struct() {
     );
     assert_debug_snapshot!(out.mir);
 }
+
+#[test]
+fn mir_map_basic() {
+    let src = run_fixture("map_basic.glyph");
+    let out = compile_source(
+        &src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: true,
+        },
+    );
+    assert_debug_snapshot!(out.mir);
+}

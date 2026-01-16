@@ -1,0 +1,614 @@
+---
+source: crates/glyph-frontend/tests/mir_fixtures.rs
+expression: out.mir
+---
+MirModule {
+    struct_types: {
+        "Err": StructType {
+            name: "Err",
+            fields: [
+                (
+                    "msg",
+                    String,
+                ),
+            ],
+        },
+        "Map$i32__i32": StructType {
+            name: "Map$i32__i32",
+            fields: [
+                (
+                    "buckets",
+                    RawPtr(
+                        RawPtr(
+                            Named(
+                                "MapBucket$i32__i32",
+                            ),
+                        ),
+                    ),
+                ),
+                (
+                    "cap",
+                    Usize,
+                ),
+                (
+                    "len",
+                    Usize,
+                ),
+            ],
+        },
+        "MapBucket$i32__i32": StructType {
+            name: "MapBucket$i32__i32",
+            fields: [
+                (
+                    "key",
+                    I32,
+                ),
+                (
+                    "value",
+                    I32,
+                ),
+                (
+                    "next",
+                    RawPtr(
+                        Named(
+                            "MapBucket$i32__i32",
+                        ),
+                    ),
+                ),
+            ],
+        },
+        "Stdout": StructType {
+            name: "Stdout",
+            fields: [
+                (
+                    "fd",
+                    I32,
+                ),
+            ],
+        },
+        "Vec$i32": StructType {
+            name: "Vec$i32",
+            fields: [
+                (
+                    "data",
+                    RawPtr(
+                        I32,
+                    ),
+                ),
+                (
+                    "len",
+                    Usize,
+                ),
+                (
+                    "cap",
+                    Usize,
+                ),
+            ],
+        },
+    },
+    enum_types: {
+        "Option$i32": EnumType {
+            name: "Option$i32",
+            variants: [
+                EnumVariant {
+                    name: "None",
+                    payload: None,
+                },
+                EnumVariant {
+                    name: "Some",
+                    payload: Some(
+                        I32,
+                    ),
+                },
+            ],
+        },
+        "Result$i32__Err": EnumType {
+            name: "Result$i32__Err",
+            variants: [
+                EnumVariant {
+                    name: "Ok",
+                    payload: Some(
+                        I32,
+                    ),
+                },
+                EnumVariant {
+                    name: "Err",
+                    payload: Some(
+                        Named(
+                            "Err",
+                        ),
+                    ),
+                },
+            ],
+        },
+        "Result$void__Err": EnumType {
+            name: "Result$void__Err",
+            variants: [
+                EnumVariant {
+                    name: "Ok",
+                    payload: Some(
+                        Void,
+                    ),
+                },
+                EnumVariant {
+                    name: "Err",
+                    payload: Some(
+                        Named(
+                            "Err",
+                        ),
+                    ),
+                },
+            ],
+        },
+    },
+    functions: [
+        MirFunction {
+            name: "main",
+            ret_type: None,
+            params: [],
+            locals: [
+                Local {
+                    name: Some(
+                        "m",
+                    ),
+                    ty: Some(
+                        Named(
+                            "Map$i32__i32",
+                        ),
+                    ),
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        Named(
+                            "Map$i32__i32",
+                        ),
+                    ),
+                },
+                Local {
+                    name: Some(
+                        "_add",
+                    ),
+                    ty: Some(
+                        Enum(
+                            "Result$void__Err",
+                        ),
+                    ),
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        Enum(
+                            "Result$void__Err",
+                        ),
+                    ),
+                },
+                Local {
+                    name: Some(
+                        "_update",
+                    ),
+                    ty: Some(
+                        Enum(
+                            "Result$void__Err",
+                        ),
+                    ),
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        Enum(
+                            "Result$void__Err",
+                        ),
+                    ),
+                },
+                Local {
+                    name: Some(
+                        "_get",
+                    ),
+                    ty: Some(
+                        Enum(
+                            "Option$i32",
+                        ),
+                    ),
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        Enum(
+                            "Option$i32",
+                        ),
+                    ),
+                },
+                Local {
+                    name: Some(
+                        "_has",
+                    ),
+                    ty: Some(
+                        Bool,
+                    ),
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        Bool,
+                    ),
+                },
+                Local {
+                    name: Some(
+                        "_del",
+                    ),
+                    ty: Some(
+                        Enum(
+                            "Result$i32__Err",
+                        ),
+                    ),
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        Enum(
+                            "Result$i32__Err",
+                        ),
+                    ),
+                },
+                Local {
+                    name: Some(
+                        "_keys",
+                    ),
+                    ty: Some(
+                        Named(
+                            "Vec$i32",
+                        ),
+                    ),
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        Named(
+                            "Vec$i32",
+                        ),
+                    ),
+                },
+                Local {
+                    name: Some(
+                        "_vals",
+                    ),
+                    ty: Some(
+                        Named(
+                            "Vec$i32",
+                        ),
+                    ),
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        Named(
+                            "Vec$i32",
+                        ),
+                    ),
+                },
+            ],
+            blocks: [
+                MirBlock {
+                    insts: [
+                        Assign {
+                            local: LocalId(
+                                1,
+                            ),
+                            value: MapNew {
+                                key_type: I32,
+                                value_type: I32,
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                0,
+                            ),
+                            value: Move(
+                                LocalId(
+                                    1,
+                                ),
+                            ),
+                        },
+                        Assign {
+                            local: LocalId(
+                                3,
+                            ),
+                            value: MapAdd {
+                                map: LocalId(
+                                    0,
+                                ),
+                                key_type: I32,
+                                key: Int(
+                                    1,
+                                ),
+                                value_type: I32,
+                                value: Int(
+                                    2,
+                                ),
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                2,
+                            ),
+                            value: Move(
+                                LocalId(
+                                    3,
+                                ),
+                            ),
+                        },
+                        Assign {
+                            local: LocalId(
+                                5,
+                            ),
+                            value: MapUpdate {
+                                map: LocalId(
+                                    0,
+                                ),
+                                key_type: I32,
+                                key: Int(
+                                    1,
+                                ),
+                                value_type: I32,
+                                value: Int(
+                                    3,
+                                ),
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                4,
+                            ),
+                            value: Move(
+                                LocalId(
+                                    5,
+                                ),
+                            ),
+                        },
+                        Assign {
+                            local: LocalId(
+                                7,
+                            ),
+                            value: MapGet {
+                                map: LocalId(
+                                    0,
+                                ),
+                                key_type: I32,
+                                value_type: I32,
+                                key: Int(
+                                    1,
+                                ),
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                6,
+                            ),
+                            value: Move(
+                                LocalId(
+                                    7,
+                                ),
+                            ),
+                        },
+                        Assign {
+                            local: LocalId(
+                                9,
+                            ),
+                            value: MapHas {
+                                map: LocalId(
+                                    0,
+                                ),
+                                key_type: I32,
+                                key: Int(
+                                    1,
+                                ),
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                8,
+                            ),
+                            value: Move(
+                                LocalId(
+                                    9,
+                                ),
+                            ),
+                        },
+                        Assign {
+                            local: LocalId(
+                                11,
+                            ),
+                            value: MapDel {
+                                map: LocalId(
+                                    0,
+                                ),
+                                key_type: I32,
+                                value_type: I32,
+                                key: Int(
+                                    1,
+                                ),
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                10,
+                            ),
+                            value: Move(
+                                LocalId(
+                                    11,
+                                ),
+                            ),
+                        },
+                        Assign {
+                            local: LocalId(
+                                13,
+                            ),
+                            value: MapKeys {
+                                map: LocalId(
+                                    0,
+                                ),
+                                key_type: I32,
+                                value_type: I32,
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                12,
+                            ),
+                            value: Move(
+                                LocalId(
+                                    13,
+                                ),
+                            ),
+                        },
+                        Assign {
+                            local: LocalId(
+                                15,
+                            ),
+                            value: MapVals {
+                                map: LocalId(
+                                    0,
+                                ),
+                                key_type: I32,
+                                value_type: I32,
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                14,
+                            ),
+                            value: Move(
+                                LocalId(
+                                    15,
+                                ),
+                            ),
+                        },
+                        Return(
+                            None,
+                        ),
+                    ],
+                },
+            ],
+        },
+    ],
+    extern_functions: [
+        MirExternFunction {
+            name: "strdup",
+            ret_type: Some(
+                String,
+            ),
+            params: [
+                Str,
+            ],
+            abi: Some(
+                "C",
+            ),
+            link_name: Some(
+                "strdup",
+            ),
+        },
+        MirExternFunction {
+            name: "puts",
+            ret_type: Some(
+                I32,
+            ),
+            params: [
+                Str,
+            ],
+            abi: Some(
+                "C",
+            ),
+            link_name: None,
+        },
+        MirExternFunction {
+            name: "raw_write",
+            ret_type: Some(
+                I32,
+            ),
+            params: [
+                I32,
+                RawPtr(
+                    U8,
+                ),
+                U32,
+            ],
+            abi: Some(
+                "C",
+            ),
+            link_name: Some(
+                "write",
+            ),
+        },
+        MirExternFunction {
+            name: "fopen",
+            ret_type: Some(
+                RawPtr(
+                    U8,
+                ),
+            ),
+            params: [
+                Str,
+                Str,
+            ],
+            abi: Some(
+                "C",
+            ),
+            link_name: Some(
+                "fopen",
+            ),
+        },
+        MirExternFunction {
+            name: "write",
+            ret_type: Some(
+                U32,
+            ),
+            params: [
+                String,
+                U32,
+                U32,
+                RawPtr(
+                    U8,
+                ),
+            ],
+            abi: Some(
+                "C",
+            ),
+            link_name: Some(
+                "fwrite",
+            ),
+        },
+        MirExternFunction {
+            name: "read",
+            ret_type: Some(
+                I32,
+            ),
+            params: [
+                I32,
+                RawPtr(
+                    U8,
+                ),
+                U32,
+            ],
+            abi: Some(
+                "C",
+            ),
+            link_name: Some(
+                "read",
+            ),
+        },
+        MirExternFunction {
+            name: "println",
+            ret_type: Some(
+                I32,
+            ),
+            params: [
+                String,
+            ],
+            abi: Some(
+                "C",
+            ),
+            link_name: None,
+        },
+    ],
+}

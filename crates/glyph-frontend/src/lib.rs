@@ -85,6 +85,10 @@ pub fn compile_source(source: &str, opts: FrontendOptions) -> FrontendOutput {
                             ctx.import_scope = multi_ctx.import_scopes.get(&module_id).cloned();
                             ctx.all_modules = Some(multi_ctx.clone());
                             resolver::populate_imported_types(&mut ctx);
+                            resolver::validate_map_usage(module, &ctx, &mut diagnostics);
+                            if !diagnostics.is_empty() {
+                                break;
+                            }
 
                             let (lowered, lower_diags) = mir_lower::lower_module(module, &ctx);
                             diagnostics.extend(lower_diags);
@@ -119,6 +123,14 @@ pub fn compile_source(source: &str, opts: FrontendOptions) -> FrontendOutput {
                 let (ctx, resolve_diags) = resolver::resolve_types(m);
                 diagnostics.extend(resolve_diags);
                 if diagnostics.is_empty() {
+                    resolver::validate_map_usage(m, &ctx, &mut diagnostics);
+                    if !diagnostics.is_empty() {
+                        return FrontendOutput {
+                            module,
+                            mir,
+                            diagnostics,
+                        };
+                    }
                     let (mut lowered, lower_diags) = mir_lower::lower_module(m, &ctx);
                     diagnostics.extend(lower_diags);
                     if diagnostics.is_empty() {

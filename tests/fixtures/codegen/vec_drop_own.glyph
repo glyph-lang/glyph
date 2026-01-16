@@ -1,6 +1,5 @@
-extern "C" fn make_vec_own() -> Vec<Own<i32>>;
-
 fn main() -> i32 {
-  let v = make_vec_own()
+  let v: Vec<Own<i32>> = Vec::new()
+  v.push(Own::new(1))
   ret 0
 }

@@ -1,6 +1,6 @@
 fn main() -> i32 {
   let cap: usize = 4
-  let mut v: Vec<i32> = Vec::with_capacity(cap)
+  let v: Vec<i32> = Vec::with_capacity(cap)
   let len: usize = v.len()
   // prevent unused warnings
   if len == cap { ret 0 }

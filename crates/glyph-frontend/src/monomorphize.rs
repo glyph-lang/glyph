@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use glyph_core::{
     ast::{Item, Module, TypeExpr},
     diag::Diagnostic,
-    mir::MirModule,
+    mir::{MirInst, MirModule, Rvalue},
     types::{EnumType, EnumVariant, Mutability, StructType, Type},
 };
 
@@ -293,6 +293,163 @@ fn rewrite_type(
     }
 }
 
+fn rewrite_type_with_instantiations(
+    ty: &Type,
+    templates: &HashMap<String, Template>,
+    instantiations: &HashMap<(String, Vec<Type>), String>,
+) -> Type {
+    match ty {
+        Type::App { base, args } => {
+            let args_rewritten: Vec<Type> = args
+                .iter()
+                .map(|a| rewrite_type_with_instantiations(a, templates, instantiations))
+                .collect();
+            let key = (base.clone(), args_rewritten.clone());
+            if let Some(inst_name) = instantiations.get(&key) {
+                if let Some(template) = templates.get(base) {
+                    return match template {
+                        Template::Enum { .. } => Type::Enum(inst_name.clone()),
+                        Template::Struct { .. } => Type::Named(inst_name.clone()),
+                    };
+                }
+            }
+            Type::App {
+                base: base.clone(),
+                args: args_rewritten,
+            }
+        }
+        Type::Ref(inner, m) => Type::Ref(
+            Box::new(rewrite_type_with_instantiations(
+                inner,
+                templates,
+                instantiations,
+            )),
+            *m,
+        ),
+        Type::Array(inner, size) => Type::Array(
+            Box::new(rewrite_type_with_instantiations(
+                inner,
+                templates,
+                instantiations,
+            )),
+            *size,
+        ),
+        Type::Own(inner) => Type::Own(Box::new(rewrite_type_with_instantiations(
+            inner,
+            templates,
+            instantiations,
+        ))),
+        Type::RawPtr(inner) => Type::RawPtr(Box::new(rewrite_type_with_instantiations(
+            inner,
+            templates,
+            instantiations,
+        ))),
+        Type::Shared(inner) => Type::Shared(Box::new(rewrite_type_with_instantiations(
+            inner,
+            templates,
+            instantiations,
+        ))),
+        other => other.clone(),
+    }
+}
+
+fn rewrite_rvalue(
+    rvalue: &mut Rvalue,
+    assigned_ty: Option<&Type>,
+    templates: &HashMap<String, Template>,
+    instantiations: &mut HashMap<(String, Vec<Type>), String>,
+    worklist: &mut VecDeque<Type>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match rvalue {
+        Rvalue::ArrayLit { elem_type, .. } => {
+            *elem_type = rewrite_type(elem_type, templates, instantiations, worklist, diagnostics);
+        }
+        Rvalue::VecNew { elem_type }
+        | Rvalue::VecWithCapacity { elem_type, .. }
+        | Rvalue::VecPush { elem_type, .. }
+        | Rvalue::VecPop { elem_type, .. } => {
+            *elem_type = rewrite_type(elem_type, templates, instantiations, worklist, diagnostics);
+        }
+        Rvalue::MapNew {
+            key_type,
+            value_type,
+        }
+        | Rvalue::MapWithCapacity {
+            key_type,
+            value_type,
+            ..
+        }
+        | Rvalue::MapAdd {
+            key_type,
+            value_type,
+            ..
+        }
+        | Rvalue::MapUpdate {
+            key_type,
+            value_type,
+            ..
+        }
+        | Rvalue::MapDel {
+            key_type,
+            value_type,
+            ..
+        }
+        | Rvalue::MapGet {
+            key_type,
+            value_type,
+            ..
+        }
+        | Rvalue::MapKeys {
+            key_type,
+            value_type,
+            ..
+        }
+        | Rvalue::MapVals {
+            key_type,
+            value_type,
+            ..
+        } => {
+            *key_type = rewrite_type(key_type, templates, instantiations, worklist, diagnostics);
+            *value_type =
+                rewrite_type(value_type, templates, instantiations, worklist, diagnostics);
+        }
+        Rvalue::MapHas { key_type, .. } => {
+            *key_type = rewrite_type(key_type, templates, instantiations, worklist, diagnostics);
+        }
+        Rvalue::OwnNew { elem_type, .. }
+        | Rvalue::OwnIntoRaw { elem_type, .. }
+        | Rvalue::OwnFromRaw { elem_type, .. }
+        | Rvalue::RawPtrNull { elem_type }
+        | Rvalue::SharedNew { elem_type, .. }
+        | Rvalue::SharedClone { elem_type, .. } => {
+            *elem_type = rewrite_type(elem_type, templates, instantiations, worklist, diagnostics);
+        }
+        Rvalue::EnumPayload { payload_type, .. } => {
+            *payload_type = rewrite_type(
+                payload_type,
+                templates,
+                instantiations,
+                worklist,
+                diagnostics,
+            );
+        }
+        Rvalue::EnumConstruct { enum_name, .. } => {
+            if let Some(ty) = assigned_ty {
+                if let Type::Enum(name) | Type::Named(name) = ty {
+                    *enum_name = name.clone();
+                }
+            }
+        }
+        Rvalue::StructLit { struct_name, .. } => {
+            if let Some(Type::Named(name)) = assigned_ty {
+                *struct_name = name.clone();
+            }
+        }
+        _ => {}
+    }
+}
+
 fn instantiate_all(
     mir: &mut MirModule,
     templates: &HashMap<String, Template>,
@@ -310,7 +467,15 @@ fn instantiate_all(
                     params.iter().cloned().zip(args.iter().cloned()).collect();
                 let inst_fields = fields
                     .iter()
-                    .map(|(n, t)| (n.clone(), substitute(t, &subst)))
+                    .map(|(n, t)| {
+                        let substituted = substitute(t, &subst);
+                        let rewritten = rewrite_type_with_instantiations(
+                            &substituted,
+                            templates,
+                            instantiations,
+                        );
+                        (n.clone(), rewritten)
+                    })
                     .collect();
                 mir.struct_types.insert(
                     inst_name.clone(),
@@ -328,7 +493,9 @@ fn instantiate_all(
                     .iter()
                     .map(|v| EnumVariant {
                         name: v.name.clone(),
-                        payload: v.payload.as_ref().map(|p| substitute(p, &subst)),
+                        payload: v.payload.as_ref().map(|p| substitute(p, &subst)).map(|p| {
+                            rewrite_type_with_instantiations(&p, templates, instantiations)
+                        }),
                     })
                     .collect();
 
@@ -403,6 +570,25 @@ pub fn monomorphize_mir(mir: &mut MirModule, modules: &HashMap<String, Module>) 
                     &mut worklist,
                     &mut diagnostics,
                 );
+            }
+        }
+
+        for block in &mut func.blocks {
+            for inst in &mut block.insts {
+                if let MirInst::Assign { local, value } = inst {
+                    let assigned_ty = func
+                        .locals
+                        .get(local.0 as usize)
+                        .and_then(|l| l.ty.as_ref());
+                    rewrite_rvalue(
+                        value,
+                        assigned_ty,
+                        &templates,
+                        &mut instantiations,
+                        &mut worklist,
+                        &mut diagnostics,
+                    );
+                }
             }
         }
     }

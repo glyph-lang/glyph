@@ -25,6 +25,7 @@ struct FnSig {
 struct EnumCtorInfo {
     enum_name: String,
     variant_index: usize,
+    has_generics: bool,
 }
 
 pub fn type_expr_to_string(ty: &TypeExpr) -> String {
@@ -285,6 +286,7 @@ fn collect_function_signatures(
 
     // Enum variant constructors act like functions returning the enum type.
     for (enum_name, enum_ty) in &resolver.enum_types {
+        let has_generics = enum_has_generics(enum_name, module, resolver);
         for (idx, variant) in enum_ty.variants.iter().enumerate() {
             let ctor_name = format!("{}::{}", enum_name, variant.name);
             let mut params = Vec::new();
@@ -299,6 +301,7 @@ fn collect_function_signatures(
                 enum_ctor: Some(EnumCtorInfo {
                     enum_name: enum_name.clone(),
                     variant_index: idx,
+                    has_generics,
                 }),
             };
             if !signatures.contains_key(&ctor_name) {
@@ -886,6 +889,7 @@ fn lower_match<'a>(
 
     let enum_name = match ctx.locals[scrut_local.0 as usize].ty.clone() {
         Some(Type::Enum(name)) => name,
+        Some(Type::App { base, .. }) => base,
         _ => {
             ctx.error("match scrutinee must be an enum value", Some(span));
             return None;
@@ -1382,6 +1386,10 @@ fn lower_print_builtin<'a>(
         }
     }
 
+    if segments.is_empty() {
+        segments.push(PrintSegment::Literal(String::new()));
+    }
+
     if add_newline {
         segments.push(PrintSegment::Literal("\n".into()));
     }
@@ -1625,6 +1633,32 @@ fn lower_logical<'a>(
     Some(Rvalue::Move(result))
 }
 
+fn enum_has_generics(enum_name: &str, module: &Module, resolver: &ResolverContext) -> bool {
+    if let Some(all_modules) = &resolver.all_modules {
+        for (module_id, module) in &all_modules.modules {
+            let module_prefix = module_id.replace('/', "::");
+            for item in &module.items {
+                if let Item::Enum(def) = item {
+                    let qualified = format!("{}::{}", module_prefix, def.name.0);
+                    if def.name.0 == enum_name || qualified == enum_name {
+                        return !def.generic_params.is_empty();
+                    }
+                }
+            }
+        }
+    }
+
+    for item in &module.items {
+        if let Item::Enum(def) = item {
+            if def.name.0 == enum_name {
+                return !def.generic_params.is_empty();
+            }
+        }
+    }
+
+    false
+}
+
 fn lower_call<'a>(
     ctx: &mut LowerCtx<'a>,
     callee: &'a Expr,
@@ -1690,7 +1724,7 @@ fn lower_call<'a>(
     let mut ret_ty = sig.ret.clone();
 
     if let Some(enum_ctor) = &sig.enum_ctor {
-        if !lowered_args.is_empty() {
+        if enum_ctor.has_generics && !lowered_args.is_empty() {
             let mut arg_tys = Vec::new();
             for arg in &lowered_args {
                 if let Some(arg_ty) = infer_value_type(arg, ctx) {
@@ -1820,6 +1854,13 @@ fn lower_method_call<'a>(
                 return Some(rv);
             }
         }
+        "add" => return lower_map_add(ctx, receiver, args, span),
+        "update" => return lower_map_update(ctx, receiver, args, span),
+        "del" => return lower_map_del(ctx, receiver, args, span),
+        "get" => return lower_map_get(ctx, receiver, args, span),
+        "has" => return lower_map_has(ctx, receiver, args, span),
+        "keys" => return lower_map_keys(ctx, receiver, args, span),
+        "vals" => return lower_map_vals(ctx, receiver, args, span),
         "into_raw" => {
             if !args.is_empty() {
                 ctx.error("into_raw() does not take arguments", Some(span));
@@ -2037,6 +2078,13 @@ fn lower_method_builtin<'a>(
                 }
                 return Some(lower_own_into_raw(ctx, base, span));
             }
+            "add" => return Some(lower_map_add(ctx, base, args, span)),
+            "update" => return Some(lower_map_update(ctx, base, args, span)),
+            "del" => return Some(lower_map_del(ctx, base, args, span)),
+            "get" => return Some(lower_map_get(ctx, base, args, span)),
+            "has" => return Some(lower_map_has(ctx, base, args, span)),
+            "keys" => return Some(lower_map_keys(ctx, base, args, span)),
+            "vals" => return Some(lower_map_vals(ctx, base, args, span)),
             _ => {}
         }
     }
@@ -2059,6 +2107,8 @@ fn lower_static_builtin<'a>(
         "Shared::new" => lower_shared_new(ctx, args, span),
         "Vec::new" => lower_vec_static_new(ctx, args, span),
         "Vec::with_capacity" => lower_vec_static_with_capacity(ctx, args, span),
+        "Map::new" => lower_map_static_new(ctx, args, span),
+        "Map::with_capacity" => lower_map_static_with_capacity(ctx, args, span),
         "String::from_str" => lower_string_from(ctx, args, span),
         "print" | "std::print" => lower_print_builtin(ctx, args, span, false, false),
         "println" | "std::println" => lower_print_builtin(ctx, args, span, true, false),
@@ -2653,9 +2703,384 @@ fn lower_vec_static_with_capacity<'a>(
     Some(Rvalue::Move(tmp))
 }
 
+fn map_key_value_types(ty: &Type) -> Option<(Type, Type)> {
+    match ty {
+        Type::App { base, args } if base == "Map" => {
+            let key = args.get(0)?.clone();
+            let val = args.get(1)?.clone();
+            Some((key, val))
+        }
+        Type::Ref(inner, _) | Type::Own(inner) | Type::RawPtr(inner) | Type::Shared(inner) => {
+            map_key_value_types(inner)
+        }
+        _ => None,
+    }
+}
+
+fn lower_map_static_new<'a>(
+    ctx: &mut LowerCtx<'a>,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if !args.is_empty() {
+        ctx.error("Map::new does not take arguments", Some(span));
+        return None;
+    }
+    let key_type = Type::I32;
+    let value_type = Type::I32;
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::App {
+        base: "Map".into(),
+        args: vec![key_type.clone(), value_type.clone()],
+    });
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::MapNew {
+            key_type,
+            value_type,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_map_static_with_capacity<'a>(
+    ctx: &mut LowerCtx<'a>,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if args.len() != 1 {
+        ctx.error("Map::with_capacity expects one argument", Some(span));
+        return None;
+    }
+    let capacity = lower_value(ctx, &args[0])?;
+    let key_type = Type::I32;
+    let value_type = Type::I32;
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::App {
+        base: "Map".into(),
+        args: vec![key_type.clone(), value_type.clone()],
+    });
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::MapWithCapacity {
+            key_type,
+            value_type,
+            capacity,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_map_add<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if args.len() != 2 {
+        ctx.error("add expects (key, value)", Some(span));
+        return None;
+    }
+    let receiver_val = lower_value(ctx, base)?;
+    let receiver_local = match receiver_val {
+        MirValue::Local(id) => id,
+        _ => {
+            ctx.error("add receiver must be a local", Some(span));
+            return None;
+        }
+    };
+    let (key_type, value_type) = ctx
+        .locals
+        .get(receiver_local.0 as usize)
+        .and_then(|l| l.ty.as_ref())
+        .and_then(map_key_value_types)
+        .unwrap_or((Type::I32, Type::I32));
+
+    let key = lower_value(ctx, &args[0])?;
+    let value = lower_value(ctx, &args[1])?;
+
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::App {
+        base: "Result".into(),
+        args: vec![Type::Void, Type::Named("Err".into())],
+    });
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::MapAdd {
+            map: receiver_local,
+            key_type,
+            key,
+            value_type,
+            value,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_map_update<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if args.len() != 2 {
+        ctx.error("update expects (key, value)", Some(span));
+        return None;
+    }
+    let receiver_val = lower_value(ctx, base)?;
+    let receiver_local = match receiver_val {
+        MirValue::Local(id) => id,
+        _ => {
+            ctx.error("update receiver must be a local", Some(span));
+            return None;
+        }
+    };
+    let (key_type, value_type) = ctx
+        .locals
+        .get(receiver_local.0 as usize)
+        .and_then(|l| l.ty.as_ref())
+        .and_then(map_key_value_types)
+        .unwrap_or((Type::I32, Type::I32));
+
+    let key = lower_value(ctx, &args[0])?;
+    let value = lower_value(ctx, &args[1])?;
+
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::App {
+        base: "Result".into(),
+        args: vec![Type::Void, Type::Named("Err".into())],
+    });
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::MapUpdate {
+            map: receiver_local,
+            key_type,
+            key,
+            value_type,
+            value,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_map_del<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if args.len() != 1 {
+        ctx.error("del expects (key)", Some(span));
+        return None;
+    }
+    let receiver_val = lower_value(ctx, base)?;
+    let receiver_local = match receiver_val {
+        MirValue::Local(id) => id,
+        _ => {
+            ctx.error("del receiver must be a local", Some(span));
+            return None;
+        }
+    };
+    let (key_type, value_type) = ctx
+        .locals
+        .get(receiver_local.0 as usize)
+        .and_then(|l| l.ty.as_ref())
+        .and_then(map_key_value_types)
+        .unwrap_or((Type::I32, Type::I32));
+
+    let key = lower_value(ctx, &args[0])?;
+
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::App {
+        base: "Result".into(),
+        args: vec![value_type.clone(), Type::Named("Err".into())],
+    });
+
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::MapDel {
+            map: receiver_local,
+            key_type,
+            value_type,
+            key,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_map_get<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if args.len() != 1 {
+        ctx.error("get expects (key)", Some(span));
+        return None;
+    }
+    let receiver_val = lower_value(ctx, base)?;
+    let receiver_local = match receiver_val {
+        MirValue::Local(id) => id,
+        _ => {
+            ctx.error("get receiver must be a local", Some(span));
+            return None;
+        }
+    };
+    let (key_type, value_type) = ctx
+        .locals
+        .get(receiver_local.0 as usize)
+        .and_then(|l| l.ty.as_ref())
+        .and_then(map_key_value_types)
+        .unwrap_or((Type::I32, Type::I32));
+
+    let key = lower_value(ctx, &args[0])?;
+
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::App {
+        base: "Option".into(),
+        args: vec![value_type.clone()],
+    });
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::MapGet {
+            map: receiver_local,
+            key_type,
+            value_type,
+            key,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_map_has<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if args.len() != 1 {
+        ctx.error("has expects (key)", Some(span));
+        return None;
+    }
+    let receiver_val = lower_value(ctx, base)?;
+    let receiver_local = match receiver_val {
+        MirValue::Local(id) => id,
+        _ => {
+            ctx.error("has receiver must be a local", Some(span));
+            return None;
+        }
+    };
+    let (key_type, value_type) = ctx
+        .locals
+        .get(receiver_local.0 as usize)
+        .and_then(|l| l.ty.as_ref())
+        .and_then(map_key_value_types)
+        .unwrap_or((Type::I32, Type::I32));
+    let _ = value_type; // unused but ensures inference
+
+    let key = lower_value(ctx, &args[0])?;
+
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::Bool);
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::MapHas {
+            map: receiver_local,
+            key_type,
+            key,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_map_keys<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if !args.is_empty() {
+        ctx.error("keys does not take arguments", Some(span));
+        return None;
+    }
+    let receiver_val = lower_value(ctx, base)?;
+    let receiver_local = match receiver_val {
+        MirValue::Local(id) => id,
+        _ => {
+            ctx.error("keys receiver must be a local", Some(span));
+            return None;
+        }
+    };
+    let (key_type, value_type) = ctx
+        .locals
+        .get(receiver_local.0 as usize)
+        .and_then(|l| l.ty.as_ref())
+        .and_then(map_key_value_types)
+        .unwrap_or((Type::I32, Type::I32));
+    let _ = value_type;
+
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::App {
+        base: "Vec".into(),
+        args: vec![key_type.clone()],
+    });
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::MapKeys {
+            map: receiver_local,
+            key_type,
+            value_type,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_map_vals<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if !args.is_empty() {
+        ctx.error("vals does not take arguments", Some(span));
+        return None;
+    }
+    let receiver_val = lower_value(ctx, base)?;
+    let receiver_local = match receiver_val {
+        MirValue::Local(id) => id,
+        _ => {
+            ctx.error("vals receiver must be a local", Some(span));
+            return None;
+        }
+    };
+    let (key_type, value_type) = ctx
+        .locals
+        .get(receiver_local.0 as usize)
+        .and_then(|l| l.ty.as_ref())
+        .and_then(map_key_value_types)
+        .unwrap_or((Type::I32, Type::I32));
+    let _ = key_type;
+
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::App {
+        base: "Vec".into(),
+        args: vec![value_type.clone()],
+    });
+
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::MapVals {
+            map: receiver_local,
+            key_type,
+            value_type,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
 fn infer_value_type(value: &MirValue, ctx: &LowerCtx) -> Option<Type> {
     match value {
-        MirValue::Int(_) => Some(Type::Usize),
+        MirValue::Int(_) => Some(Type::I32),
         MirValue::Bool(_) => Some(Type::Bool),
         MirValue::Unit => Some(Type::Void),
         MirValue::Local(local_id) => ctx

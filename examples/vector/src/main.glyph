@@ -1,0 +1,24 @@
+from std/vec import Vec
+from std/io import println
+
+fn main() -> i32 {
+  // Start with explicit capacity so we exercise growth on push
+  let v: Vec<i32> = Vec::with_capacity(2)
+
+  // Push three elements (last push triggers growth)
+  v.push(10)
+  v.push(20)
+  v.push(30)
+
+  // Read an element via indexing (bounds-checked)
+  let third: i32 = v[2]
+
+  // Len returns usize; just call to show usage
+  let _len_after: usize = v.len()
+
+
+  println("vector demo ran")
+
+  // Return the element we fetched
+  ret third
+}

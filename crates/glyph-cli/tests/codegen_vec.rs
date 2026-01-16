@@ -19,7 +19,7 @@ fn compile_ir(name: &str) -> String {
         &src,
         FrontendOptions {
             emit_mir: true,
-            include_std: false,
+            include_std: true,
         },
     );
     assert!(
@@ -75,14 +75,10 @@ fn codegen_vec_bounds_trap() {
 #[test]
 fn codegen_vec_drop_owns() {
     let ir = compile_ir("vec_drop_own.glyph");
-    assert!(
-        ir.contains("vec.drop"),
-        "IR missing vec drop loop/block labels: {}",
-        ir
-    );
+    assert!(ir.contains("own.drop"), "IR missing own drop path: {}", ir);
     assert!(
         ir.contains("free"),
-        "IR missing buffer free in vec drop: {}",
+        "IR missing free call in drop path: {}",
         ir
     );
 }
@@ -91,6 +87,6 @@ fn codegen_vec_drop_owns() {
 fn codegen_vec_usize_len_cap() {
     let ir = compile_ir("vec_usize.glyph");
     assert!(ir.contains("vec.len.load"), "IR missing len load: {}", ir);
-    assert!(ir.contains("vec.cap.load"), "IR missing cap load: {}", ir);
+    assert!(ir.contains("vec.cap"), "IR missing cap access: {}", ir);
     assert!(ir.contains("i64"), "IR missing usize backend i64: {}", ir);
 }

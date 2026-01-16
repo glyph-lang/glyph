@@ -1,0 +1,18 @@
+from std/map import Map
+from std import println
+
+fn main() -> i32 {
+  let m: Map<i32, i32> = Map::new()
+  let _ = m.add(1, 2)
+  let _ = m.add(2, 4)
+  let _ = m.update(1, 3)
+  let has_two = m.has(2)
+  if has_two {
+    println($"map has key 2")
+  }
+  let _keys = m.keys()
+  let _vals = m.vals()
+  let _ = m.get(1)
+  let _ = m.del(2)
+  ret 0
+}

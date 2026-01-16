@@ -1,0 +1,10 @@
+[package]
+name = "map_basic"
+version = "0.1.0"
+
+[dependencies]
+# none yet
+
+[[bin]]
+name = "map_basic"
+path = "src/main.glyph"

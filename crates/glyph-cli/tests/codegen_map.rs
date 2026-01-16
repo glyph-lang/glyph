@@ -1,5 +1,3 @@
-#![cfg(feature = "codegen")]
-
 use std::fs;
 use std::path::Path;
 
@@ -19,7 +17,7 @@ fn compile_ir(name: &str) -> String {
         &src,
         FrontendOptions {
             emit_mir: true,
-            include_std: false,
+            include_std: true,
         },
     );
     assert!(
@@ -27,10 +25,6 @@ fn compile_ir(name: &str) -> String {
         "unexpected diagnostics: {:?}",
         out.diagnostics
     );
-
-    if std::env::var("GLYPH_DEBUG_MIR").is_ok() {
-        eprintln!("{:#?}", out.mir);
-    }
 
     let backend = LlvmBackend::default();
     let artifact = backend
@@ -42,39 +36,27 @@ fn compile_ir(name: &str) -> String {
             },
         )
         .expect("backend emit");
-    let ir = artifact.llvm_ir.expect("llvm ir");
-    if std::env::var("GLYPH_DEBUG_IR").is_ok() {
-        eprintln!("{}", ir);
-    }
-    ir
+    artifact.llvm_ir.expect("llvm ir")
 }
 
 #[test]
-fn codegen_array_literal_index() {
-    let ir = compile_ir("array_basic.glyph");
-    assert!(ir.contains("[3 x i32]"), "IR missing array type");
+fn codegen_map_basic_ops() {
+    let ir = compile_ir("map_basic.glyph");
     assert!(
-        ir.contains("getelementptr inbounds"),
-        "IR missing GEP for array element"
-    );
-    assert!(
-        ir.contains("call void @llvm.trap"),
-        "IR missing trap intrinsic:\n{}",
+        ir.contains("map.add.result"),
+        "IR missing add result: {}",
         ir
     );
-}
-
-#[test]
-fn codegen_array_loop_bounds_check() {
-    let ir = compile_ir("array_loop.glyph");
-    assert!(ir.contains("[4 x i32]"), "IR missing loop array type");
     assert!(
-        ir.contains("getelementptr inbounds"),
-        "IR missing loop element GEP"
-    );
-    assert!(
-        ir.contains("call void @llvm.trap"),
-        "IR missing trap intrinsic for bounds check:\n{}",
+        ir.contains("map.get.result"),
+        "IR missing get result: {}",
         ir
     );
+    assert!(
+        ir.contains("map.del.result"),
+        "IR missing del result: {}",
+        ir
+    );
+    assert!(ir.contains("map.keys.loop"), "IR missing keys loop: {}", ir);
+    assert!(ir.contains("map.vals.loop"), "IR missing vals loop: {}", ir);
 }

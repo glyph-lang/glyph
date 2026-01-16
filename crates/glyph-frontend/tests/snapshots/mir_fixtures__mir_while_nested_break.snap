@@ -4,5 +4,322 @@ expression: out.mir
 ---
 MirModule {
     struct_types: {},
-    functions: [],
+    functions: [
+        MirFunction {
+            name: "main",
+            ret_type: Some(
+                I32,
+            ),
+            params: [],
+            locals: [
+                Local {
+                    name: Some(
+                        "found",
+                    ),
+                    ty: None,
+                },
+                Local {
+                    name: Some(
+                        "i",
+                    ),
+                    ty: None,
+                },
+                Local {
+                    name: None,
+                    ty: None,
+                },
+                Local {
+                    name: Some(
+                        "j",
+                    ),
+                    ty: None,
+                },
+                Local {
+                    name: None,
+                    ty: None,
+                },
+                Local {
+                    name: None,
+                    ty: None,
+                },
+                Local {
+                    name: None,
+                    ty: None,
+                },
+                Local {
+                    name: None,
+                    ty: None,
+                },
+            ],
+            blocks: [
+                MirBlock {
+                    insts: [
+                        Assign {
+                            local: LocalId(
+                                0,
+                            ),
+                            value: ConstBool(
+                                false,
+                            ),
+                        },
+                        Assign {
+                            local: LocalId(
+                                1,
+                            ),
+                            value: ConstInt(
+                                0,
+                            ),
+                        },
+                        Goto(
+                            BlockId(
+                                1,
+                            ),
+                        ),
+                    ],
+                },
+                MirBlock {
+                    insts: [
+                        Assign {
+                            local: LocalId(
+                                2,
+                            ),
+                            value: Binary {
+                                op: Lt,
+                                lhs: Local(
+                                    LocalId(
+                                        1,
+                                    ),
+                                ),
+                                rhs: Int(
+                                    10,
+                                ),
+                            },
+                        },
+                        If {
+                            cond: Local(
+                                LocalId(
+                                    2,
+                                ),
+                            ),
+                            then_bb: BlockId(
+                                2,
+                            ),
+                            else_bb: BlockId(
+                                3,
+                            ),
+                        },
+                    ],
+                },
+                MirBlock {
+                    insts: [
+                        Assign {
+                            local: LocalId(
+                                3,
+                            ),
+                            value: ConstInt(
+                                0,
+                            ),
+                        },
+                        Goto(
+                            BlockId(
+                                4,
+                            ),
+                        ),
+                    ],
+                },
+                MirBlock {
+                    insts: [
+                        Return(
+                            Some(
+                                Local(
+                                    LocalId(
+                                        1,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+                MirBlock {
+                    insts: [
+                        Assign {
+                            local: LocalId(
+                                4,
+                            ),
+                            value: Binary {
+                                op: Lt,
+                                lhs: Local(
+                                    LocalId(
+                                        3,
+                                    ),
+                                ),
+                                rhs: Int(
+                                    10,
+                                ),
+                            },
+                        },
+                        If {
+                            cond: Local(
+                                LocalId(
+                                    4,
+                                ),
+                            ),
+                            then_bb: BlockId(
+                                5,
+                            ),
+                            else_bb: BlockId(
+                                6,
+                            ),
+                        },
+                    ],
+                },
+                MirBlock {
+                    insts: [
+                        Assign {
+                            local: LocalId(
+                                5,
+                            ),
+                            value: Binary {
+                                op: Eq,
+                                lhs: Local(
+                                    LocalId(
+                                        1,
+                                    ),
+                                ),
+                                rhs: Int(
+                                    3,
+                                ),
+                            },
+                        },
+                        If {
+                            cond: Local(
+                                LocalId(
+                                    5,
+                                ),
+                            ),
+                            then_bb: BlockId(
+                                7,
+                            ),
+                            else_bb: BlockId(
+                                8,
+                            ),
+                        },
+                    ],
+                },
+                MirBlock {
+                    insts: [
+                        If {
+                            cond: Local(
+                                LocalId(
+                                    0,
+                                ),
+                            ),
+                            then_bb: BlockId(
+                                9,
+                            ),
+                            else_bb: BlockId(
+                                10,
+                            ),
+                        },
+                    ],
+                },
+                MirBlock {
+                    insts: [
+                        Assign {
+                            local: LocalId(
+                                0,
+                            ),
+                            value: ConstBool(
+                                true,
+                            ),
+                        },
+                        Goto(
+                            BlockId(
+                                6,
+                            ),
+                        ),
+                    ],
+                },
+                MirBlock {
+                    insts: [
+                        Assign {
+                            local: LocalId(
+                                6,
+                            ),
+                            value: Binary {
+                                op: Add,
+                                lhs: Local(
+                                    LocalId(
+                                        3,
+                                    ),
+                                ),
+                                rhs: Int(
+                                    1,
+                                ),
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                3,
+                            ),
+                            value: Move(
+                                LocalId(
+                                    6,
+                                ),
+                            ),
+                        },
+                        Goto(
+                            BlockId(
+                                4,
+                            ),
+                        ),
+                    ],
+                },
+                MirBlock {
+                    insts: [
+                        Goto(
+                            BlockId(
+                                3,
+                            ),
+                        ),
+                    ],
+                },
+                MirBlock {
+                    insts: [
+                        Assign {
+                            local: LocalId(
+                                7,
+                            ),
+                            value: Binary {
+                                op: Add,
+                                lhs: Local(
+                                    LocalId(
+                                        1,
+                                    ),
+                                ),
+                                rhs: Int(
+                                    1,
+                                ),
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                1,
+                            ),
+                            value: Move(
+                                LocalId(
+                                    7,
+                                ),
+                            ),
+                        },
+                        Goto(
+                            BlockId(
+                                1,
+                            ),
+                        ),
+                    ],
+                },
+            ],
+        },
+    ],
 }
