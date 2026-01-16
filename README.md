@@ -4,6 +4,9 @@ Glyph is an experimental, compiled programming language with a Rust-based toolch
 
 **Thesis:** a token-efficient language that LLMs can generate easily while remaining readable to humans.
 
+**For newcomers:** the syntax stays small and predictable.
+**For LLM power users and vibe coders:** the language is designed to be low-token, high-signal, and easy to prompt.
+
 The repo currently contains a working prototype compiler pipeline:
 
 - Lexer + parser
@@ -34,6 +37,7 @@ Glyph is exploring a pragmatic “small language, real binaries” workflow:
 - Native executables via LLVM
 - A standard library surface (`std::print`, `std::println`) backed by a minimal runtime
 - Tooling-first layout (compiler crates + formatter + LSP placeholders)
+- Friendly entry points for both curious beginners and LLM-assisted, high-velocity prototyping
 
 ## Quickstart
 
@@ -49,6 +53,8 @@ export LLVM_SYS_201_PREFIX="/opt/homebrew/opt/llvm"
 ```
 
 ### Build the toolchain
+
+Use Cargo only to build the compiler toolchain itself:
 
 ```bash
 cargo build --release
@@ -67,32 +73,34 @@ The demo prints the source and the generated LLVM IR for a few fixtures.
 There are currently two binaries in `crates/glyph-cli`:
 
 - `glyph-cli`: a direct compiler driver (check/build/run)
-- `glyph`: a tiny project/workflow utility that reads `glph.toml`
+- `glyph`: the primary workflow tool for working with Glyph projects and files
+
+Use the `glyph` executable for day-to-day Glyph work; reserve Cargo for building the toolchain.
 
 ### Compile or check a file
 
 Parse + resolve types (and, if you point at a file inside a folder, it will discover and check all `.glyph` files in that project directory):
 
 ```bash
-cargo run --bin glyph-cli -- check examples/std_hello/hello.glyph
+glyph-cli check examples/std_hello/hello.glyph
 ```
 
 Emit LLVM IR to stdout:
 
 ```bash
-cargo run --bin glyph-cli --features codegen -- build tests/fixtures/codegen/simple_ret.glyph
+glyph-cli build tests/fixtures/codegen/simple_ret.glyph
 ```
 
 Build a native executable (writes `./<stem>` in the current working directory):
 
 ```bash
-cargo run --bin glyph-cli --features codegen -- build examples/std_hello/hello.glyph --emit exe
+glyph-cli build examples/std_hello/hello.glyph --emit exe
 ```
 
 Build and run:
 
 ```bash
-cargo run --bin glyph-cli --features codegen -- run examples/std_hello/hello.glyph
+glyph-cli run examples/std_hello/hello.glyph
 ```
 
 ### Project workflow (`glph.toml`)
@@ -111,11 +119,11 @@ name = "hello"
 path = "hello.glyph"
 ```
 
-Build or run a selected bin:
+Build or run a selected bin (using the `glyph` executable):
 
 ```bash
-cargo run --bin glyph --features codegen -- build --release
-cargo run --bin glyph --features codegen -- run --bin hello -- arg1 arg2
+glyph build --release
+glyph run --bin hello -- arg1 arg2
 ```
 
 ## Language snapshots
