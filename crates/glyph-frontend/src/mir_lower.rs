@@ -677,6 +677,15 @@ impl<'a> LowerCtx<'a> {
     }
 }
 
+fn imports_sys_argv(resolver: &ResolverContext) -> bool {
+    resolver
+        .import_scope
+        .as_ref()
+        .and_then(|scope| scope.direct_symbols.get("argv"))
+        .map(|(module, name)| module == "std/sys" && name == "argv")
+        .unwrap_or(false)
+}
+
 fn lower_function(
     func: &Function,
     resolver: &ResolverContext,
@@ -707,6 +716,25 @@ fn lower_function(
         }
         ctx.bindings.insert(&param.name.0, local);
         param_locals.push(local);
+    }
+
+    if imports_sys_argv(resolver) && !ctx.bindings.contains_key("argv") {
+        let argv_local = ctx.fresh_local(Some("argv"));
+        ctx.locals[argv_local.0 as usize].ty = Some(Type::App {
+            base: "Vec".into(),
+            args: vec![Type::String],
+        });
+        if let Some(state) = ctx.local_states.get_mut(argv_local.0 as usize) {
+            *state = LocalState::Initialized;
+        }
+        ctx.bindings.insert("argv", argv_local);
+        ctx.push_inst(MirInst::Assign {
+            local: argv_local,
+            value: Rvalue::Call {
+                name: "argv".into(),
+                args: Vec::new(),
+            },
+        });
     }
 
     let implicit_return = lower_block(&mut ctx, &func.body);

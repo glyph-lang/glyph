@@ -1,5 +1,6 @@
 ---
 source: crates/glyph-frontend/tests/mir_fixtures.rs
+assertion_line: 527
 expression: out.mir
 ---
 MirModule {
@@ -513,6 +514,32 @@ MirModule {
     ],
     extern_functions: [
         MirExternFunction {
+            name: "argv",
+            ret_type: Some(
+                Named(
+                    "Vec$String",
+                ),
+            ),
+            params: [],
+            abi: None,
+            link_name: None,
+        },
+        MirExternFunction {
+            name: "strdup",
+            ret_type: Some(
+                String,
+            ),
+            params: [
+                Str,
+            ],
+            abi: Some(
+                "C",
+            ),
+            link_name: Some(
+                "strdup",
+            ),
+        },
+        MirExternFunction {
             name: "puts",
             ret_type: Some(
                 I32,
@@ -612,32 +639,6 @@ MirModule {
             abi: Some(
                 "C",
             ),
-            link_name: None,
-        },
-        MirExternFunction {
-            name: "strdup",
-            ret_type: Some(
-                String,
-            ),
-            params: [
-                Str,
-            ],
-            abi: Some(
-                "C",
-            ),
-            link_name: Some(
-                "strdup",
-            ),
-        },
-        MirExternFunction {
-            name: "argv",
-            ret_type: Some(
-                Named(
-                    "Vec$String",
-                ),
-            ),
-            params: [],
-            abi: None,
             link_name: None,
         },
     ],

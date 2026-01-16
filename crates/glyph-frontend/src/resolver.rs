@@ -397,55 +397,71 @@ pub fn resolve_types(module: &Module) -> (ResolverContext, Vec<Diagnostic>) {
     // Third pass: collect extern function signatures (FFI subset)
     for item in &module.items {
         if let Item::ExternFunction(f) = item {
+            let is_sys_argv = f.name.0 == "argv" && f.params.is_empty() && f.abi.is_none();
+
             let mut params = Vec::new();
             let mut has_error = false;
-            for param in &f.params {
-                let Some(ty_ident) = param.ty.as_ref() else {
-                    diagnostics.push(Diagnostic::error(
-                        format!(
-                            "extern function '{}' parameter '{}' must have a type",
-                            f.name.0, param.name.0
-                        ),
-                        Some(param.span),
-                    ));
-                    has_error = true;
-                    continue;
-                };
+            if !is_sys_argv {
+                for param in &f.params {
+                    let Some(ty_ident) = param.ty.as_ref() else {
+                        diagnostics.push(Diagnostic::error(
+                            format!(
+                                "extern function '{}' parameter '{}' must have a type",
+                                f.name.0, param.name.0
+                            ),
+                            Some(param.span),
+                        ));
+                        has_error = true;
+                        continue;
+                    };
 
-                let ty_rendered = type_expr_to_string(ty_ident);
-                if let Some(resolved) = resolve_ffi_type(&ty_rendered) {
-                    params.push(resolved);
-                } else {
-                    diagnostics.push(Diagnostic::error(
-                        format!(
-                            "unsupported FFI parameter type '{}' in extern function '{}'",
-                            ty_rendered, f.name.0
-                        ),
-                        Some(param.span),
-                    ));
-                    has_error = true;
+                    let ty_rendered = type_expr_to_string(ty_ident);
+                    if let Some(resolved) = resolve_ffi_type(&ty_rendered) {
+                        params.push(resolved);
+                    } else {
+                        diagnostics.push(Diagnostic::error(
+                            format!(
+                                "unsupported FFI parameter type '{}' in extern function '{}'",
+                                ty_rendered, f.name.0
+                            ),
+                            Some(param.span),
+                        ));
+                        has_error = true;
+                    }
                 }
             }
 
             let ret_type = match &f.ret_type {
                 Some(ty) => {
-                    let ty_rendered = type_expr_to_string(ty);
-                    if let Some(resolved) = resolve_ffi_type(&ty_rendered) {
-                        Some(resolved)
+                    if is_sys_argv {
+                        resolve_type_expr_to_type(ty, &ctx)
                     } else {
-                        diagnostics.push(Diagnostic::error(
-                            format!(
-                                "unsupported FFI return type '{}' in extern function '{}'",
-                                ty_rendered, f.name.0
-                            ),
-                            Some(f.span),
-                        ));
-                        has_error = true;
-                        None
+                        let ty_rendered = type_expr_to_string(ty);
+                        if let Some(resolved) = resolve_ffi_type(&ty_rendered) {
+                            Some(resolved)
+                        } else {
+                            diagnostics.push(Diagnostic::error(
+                                format!(
+                                    "unsupported FFI return type '{}' in extern function '{}'",
+                                    ty_rendered, f.name.0
+                                ),
+                                Some(f.span),
+                            ));
+                            has_error = true;
+                            None
+                        }
                     }
                 }
                 None => None,
             };
+
+            if is_sys_argv && ret_type.is_none() {
+                diagnostics.push(Diagnostic::error(
+                    "argv() must return Vec<String>".to_string(),
+                    Some(f.span),
+                ));
+                has_error = true;
+            }
 
             if !has_error {
                 if ctx.extern_functions.contains_key(&f.name.0)

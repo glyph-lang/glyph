@@ -27,6 +27,7 @@ This is not the final language spec, but these features exist in some form (see 
 - Struct definitions, literals, and field access
 - Arrays and indexing
 - Basic module discovery / multi-file projects
+- Command-line args via `std::sys::argv`
 - Early experiments around interfaces and ownership/borrowing
 
 ## Why Glyph?

@@ -229,6 +229,14 @@ pub fn std_modules() -> HashMap<String, Module> {
             Import {
                 kind: ImportKind::Wildcard,
                 path: ImportPath {
+                    segments: vec!["std/sys".into()],
+                    span,
+                },
+                span,
+            },
+            Import {
+                kind: ImportKind::Wildcard,
+                path: ImportPath {
                     segments: vec!["std/hashing".into()],
                     span,
                 },
@@ -364,6 +372,26 @@ pub fn std_modules() -> HashMap<String, Module> {
         items: vec![glyph_core::ast::Item::ExternFunction(strdup_extern)],
     };
     modules.insert("std/string".into(), std_string_module);
+
+    // std/sys
+    let argv_extern = ExternFunctionDecl {
+        abi: None,
+        name: Ident("argv".into()),
+        params: vec![],
+        ret_type: Some(TypeExpr::App {
+            base: Box::new(tp("Vec", span)),
+            args: vec![tp("String", span)],
+            span,
+        }),
+        link_name: None,
+        span,
+    };
+
+    let std_sys_module = Module {
+        imports: vec![],
+        items: vec![glyph_core::ast::Item::ExternFunction(argv_extern)],
+    };
+    modules.insert("std/sys".into(), std_sys_module);
 
     // std/hashing with Hash interface placeholder
     let hash_interface = InterfaceDef {
