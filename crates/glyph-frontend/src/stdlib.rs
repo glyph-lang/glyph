@@ -151,6 +151,49 @@ pub fn std_modules() -> HashMap<String, Module> {
         span,
     };
 
+    let fclose_extern = ExternFunctionDecl {
+        abi: Some("C".into()),
+        name: Ident("fclose".into()),
+        params: vec![Param {
+            name: Ident("file".into()),
+            ty: Some(tp("RawPtr<u8>", span)),
+            span,
+        }],
+        ret_type: Some(tp("i32", span)),
+        link_name: Some("fclose".into()),
+        span,
+    };
+
+    let fread_extern = ExternFunctionDecl {
+        abi: Some("C".into()),
+        name: Ident("fread".into()),
+        params: vec![
+            Param {
+                name: Ident("buf".into()),
+                ty: Some(tp("RawPtr<u8>", span)),
+                span,
+            },
+            Param {
+                name: Ident("size".into()),
+                ty: Some(tp("u32", span)),
+                span,
+            },
+            Param {
+                name: Ident("count".into()),
+                ty: Some(tp("u32", span)),
+                span,
+            },
+            Param {
+                name: Ident("file".into()),
+                ty: Some(tp("RawPtr<u8>", span)),
+                span,
+            },
+        ],
+        ret_type: Some(tp("u32", span)),
+        link_name: Some("fread".into()),
+        span,
+    };
+
     let println_extern = ExternFunctionDecl {
         name: Ident("println".into()),
         abi: Some("C".into()),
@@ -173,6 +216,8 @@ pub fn std_modules() -> HashMap<String, Module> {
             glyph_core::ast::Item::ExternFunction(fopen_extern),
             glyph_core::ast::Item::ExternFunction(write_extern),
             glyph_core::ast::Item::ExternFunction(read_extern),
+            glyph_core::ast::Item::ExternFunction(fclose_extern),
+            glyph_core::ast::Item::ExternFunction(fread_extern),
             glyph_core::ast::Item::ExternFunction(println_extern),
         ],
     };

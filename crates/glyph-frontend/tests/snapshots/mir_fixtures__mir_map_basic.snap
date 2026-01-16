@@ -602,6 +602,45 @@ MirModule {
             ),
         },
         MirExternFunction {
+            name: "fclose",
+            ret_type: Some(
+                I32,
+            ),
+            params: [
+                RawPtr(
+                    U8,
+                ),
+            ],
+            abi: Some(
+                "C",
+            ),
+            link_name: Some(
+                "fclose",
+            ),
+        },
+        MirExternFunction {
+            name: "fread",
+            ret_type: Some(
+                U32,
+            ),
+            params: [
+                RawPtr(
+                    U8,
+                ),
+                U32,
+                U32,
+                RawPtr(
+                    U8,
+                ),
+            ],
+            abi: Some(
+                "C",
+            ),
+            link_name: Some(
+                "fread",
+            ),
+        },
+        MirExternFunction {
             name: "println",
             ret_type: Some(
                 I32,
