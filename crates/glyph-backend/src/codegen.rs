@@ -30,6 +30,7 @@ pub struct CodegenContext {
     free_fn: Option<LLVMValueRef>,
     strdup_fn: Option<LLVMValueRef>,
     string_globals: HashMap<String, LLVMValueRef>,
+    function_types: HashMap<String, LLVMTypeRef>,
     argv_global: Option<LLVMValueRef>,
     argc_global: Option<LLVMValueRef>,
     argv_vec_global: Option<LLVMValueRef>,
@@ -55,6 +56,7 @@ impl CodegenContext {
                 free_fn: None,
                 strdup_fn: None,
                 string_globals: HashMap::new(),
+                function_types: HashMap::new(),
                 argv_global: None,
                 argc_global: None,
                 argv_vec_global: None,
@@ -142,6 +144,13 @@ impl CodegenContext {
         name.chars()
             .map(|c| if c.is_alphanumeric() { c } else { '_' })
             .collect()
+    }
+
+    fn function_type_for(&self, name: &str) -> Result<LLVMTypeRef> {
+        self.function_types
+            .get(name)
+            .copied()
+            .ok_or_else(|| anyhow!("missing function type for {}", name))
     }
 
     fn type_key(&self, ty: &Type) -> String {
@@ -834,6 +843,7 @@ impl CodegenContext {
             };
             let func_name = CString::new(llvm_name)?;
             let llvm_func = unsafe { LLVMAddFunction(self.module, func_name.as_ptr(), func_type) };
+            self.function_types.insert(func.name.clone(), func_type);
             functions.insert(func.name.clone(), llvm_func);
         }
 
@@ -845,6 +855,7 @@ impl CodegenContext {
             let symbol_name = func.link_name.as_ref().unwrap_or(&func.name);
             let func_name = CString::new(symbol_name.as_str())?;
             let llvm_func = unsafe { LLVMAddFunction(self.module, func_name.as_ptr(), func_type) };
+            self.function_types.insert(func.name.clone(), func_type);
             unsafe { LLVMSetLinkage(llvm_func, LLVMLinkage::LLVMExternalLinkage) };
             if symbol_name == "strdup" && self.strdup_fn.is_none() {
                 self.strdup_fn = Some(llvm_func);
@@ -1280,6 +1291,67 @@ impl CodegenContext {
         Ok(())
     }
 
+    fn codegen_drop_file_slot(&mut self, slot: LLVMValueRef) -> Result<()> {
+        unsafe {
+            let file_ty = self.get_struct_type("File")?;
+            let handle_ptr = LLVMBuildStructGEP2(
+                self.builder,
+                file_ty,
+                slot,
+                0,
+                CString::new("file.handle")?.as_ptr(),
+            );
+            let handle_ty = LLVMGetElementType(LLVMTypeOf(handle_ptr));
+            let handle_val = LLVMBuildLoad2(
+                self.builder,
+                handle_ty,
+                handle_ptr,
+                CString::new("file.handle.load")?.as_ptr(),
+            );
+            let null_ptr = LLVMConstNull(handle_ty);
+            let is_null = LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                handle_val,
+                null_ptr,
+                CString::new("file.handle.null")?.as_ptr(),
+            );
+
+            let func = LLVMGetBasicBlockParent(LLVMGetInsertBlock(self.builder));
+            let drop_bb = LLVMAppendBasicBlockInContext(
+                self.context,
+                func,
+                CString::new("file.drop")?.as_ptr(),
+            );
+            let cont_bb = LLVMAppendBasicBlockInContext(
+                self.context,
+                func,
+                CString::new("file.drop.cont")?.as_ptr(),
+            );
+            LLVMBuildCondBr(self.builder, is_null, cont_bb, drop_bb);
+
+            LLVMPositionBuilderAtEnd(self.builder, drop_bb);
+            let fclose_fn = LLVMGetNamedFunction(self.module, CString::new("fclose")?.as_ptr());
+            if !fclose_fn.is_null() {
+                let mut args = vec![handle_val];
+                let fn_ty = LLVMGetElementType(LLVMTypeOf(fclose_fn));
+                LLVMBuildCall2(
+                    self.builder,
+                    fn_ty,
+                    fclose_fn,
+                    args.as_mut_ptr(),
+                    args.len() as u32,
+                    CString::new("file.drop.close")?.as_ptr(),
+                );
+            }
+            LLVMBuildStore(self.builder, null_ptr, handle_ptr);
+            LLVMBuildBr(self.builder, cont_bb);
+
+            LLVMPositionBuilderAtEnd(self.builder, cont_bb);
+        }
+        Ok(())
+    }
+
     fn codegen_string_literal(&mut self, content: &str, global_name: &str) -> Result<LLVMValueRef> {
         if let Some(&ptr) = self.string_globals.get(global_name) {
             return Ok(ptr);
@@ -1577,6 +1649,39 @@ impl CodegenContext {
                         payload_ptr,
                         CString::new("enum.payload")?.as_ptr(),
                     ))
+                }
+                Rvalue::FileOpen { path, create } => {
+                    self.codegen_file_open(path, *create, func, local_map, functions, mir_module)
+                }
+                Rvalue::FileReadToString { file } => {
+                    self.codegen_file_read_to_string(*file, func, local_map, functions, mir_module)
+                }
+                Rvalue::FileWriteString { file, contents } => self.codegen_file_write_string(
+                    *file, contents, func, local_map, functions, mir_module,
+                ),
+                Rvalue::FileClose { file } => {
+                    self.codegen_file_close(*file, func, local_map, functions, mir_module)
+                }
+                Rvalue::StringLen { base } => {
+                    self.codegen_string_len(*base, func, local_map, functions)
+                }
+                Rvalue::StringConcat { base, value } => {
+                    self.codegen_string_concat(*base, value, func, local_map, functions)
+                }
+                Rvalue::StringSlice { base, start, len } => {
+                    self.codegen_string_slice(*base, start, len, func, local_map, functions)
+                }
+                Rvalue::StringTrim { base } => {
+                    self.codegen_string_trim(*base, func, local_map, functions)
+                }
+                Rvalue::StringSplit { base, sep } => {
+                    self.codegen_string_split(*base, sep, func, local_map, functions)
+                }
+                Rvalue::StringStartsWith { base, needle } => {
+                    self.codegen_string_starts_with(*base, needle, func, local_map, functions)
+                }
+                Rvalue::StringEndsWith { base, needle } => {
+                    self.codegen_string_ends_with(*base, needle, func, local_map, functions)
                 }
                 Rvalue::Call { name, args } => {
                     if name == "argv" || name == "std::sys::argv" {
@@ -4880,6 +4985,1889 @@ impl CodegenContext {
         Ok(())
     }
 
+    fn get_extern_function(
+        &self,
+        functions: &HashMap<String, LLVMValueRef>,
+        name: &str,
+    ) -> Result<LLVMValueRef> {
+        functions
+            .get(name)
+            .copied()
+            .ok_or_else(|| anyhow!("missing extern function {}", name))
+    }
+
+    fn file_handle_ptr(
+        &mut self,
+        file: LocalId,
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+    ) -> Result<(LLVMTypeRef, LLVMValueRef)> {
+        let (struct_name, file_ptr) = self.struct_pointer_for_local(file, func, local_map)?;
+        let llvm_file_ty = self.get_struct_type(&struct_name)?;
+        let handle_ptr = unsafe {
+            LLVMBuildStructGEP2(
+                self.builder,
+                llvm_file_ty,
+                file_ptr,
+                0,
+                CString::new("file.handle")?.as_ptr(),
+            )
+        };
+        let handle_ty = unsafe { LLVMGetElementType(LLVMTypeOf(handle_ptr)) };
+        Ok((handle_ty, handle_ptr))
+    }
+
+    fn codegen_file_open(
+        &mut self,
+        path: &MirValue,
+        create: bool,
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+        functions: &HashMap<String, LLVMValueRef>,
+        _mir_module: &MirModule,
+    ) -> Result<LLVMValueRef> {
+        let path_val = self.codegen_value(path, func, local_map)?;
+        let mode_str = if create { "w" } else { "r" };
+        let mode_val = self.codegen_string_literal(mode_str, &format!(".str.file.{}", mode_str))?;
+        let fopen_fn = self.get_extern_function(functions, "fopen")?;
+        let mut args = vec![path_val, mode_val];
+        let fn_ty = unsafe { LLVMGetElementType(LLVMTypeOf(fopen_fn)) };
+        let call = unsafe {
+            LLVMBuildCall2(
+                self.builder,
+                fn_ty,
+                fopen_fn,
+                args.as_mut_ptr(),
+                args.len() as u32,
+                CString::new("file.open")?.as_ptr(),
+            )
+        };
+        let null_ptr = unsafe { LLVMConstNull(LLVMTypeOf(call)) };
+        let is_null = unsafe {
+            LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                call,
+                null_ptr,
+                CString::new("file.open.null")?.as_ptr(),
+            )
+        };
+
+        let parent_bb = unsafe { LLVMGetInsertBlock(self.builder) };
+        let parent_fn = unsafe { LLVMGetBasicBlockParent(parent_bb) };
+        let ok_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("file.open.ok")?.as_ptr(),
+            )
+        };
+        let err_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("file.open.err")?.as_ptr(),
+            )
+        };
+        let done_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("file.open.done")?.as_ptr(),
+            )
+        };
+        unsafe { LLVMBuildCondBr(self.builder, is_null, err_bb, ok_bb) };
+
+        let ok_type = Type::Named("File".into());
+        let err_type = Type::Named("Err".into());
+        let result_name = format!(
+            "Result${}__{}",
+            self.type_key(&ok_type),
+            self.type_key(&err_type)
+        );
+        let result_ty = self.get_enum_type(&result_name)?;
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, ok_bb) };
+        let file_ty = self.get_struct_type("File")?;
+        let file_alloca =
+            unsafe { LLVMBuildAlloca(self.builder, file_ty, CString::new("file.tmp")?.as_ptr()) };
+        let handle_ptr = unsafe {
+            LLVMBuildStructGEP2(
+                self.builder,
+                file_ty,
+                file_alloca,
+                0,
+                CString::new("file.handle")?.as_ptr(),
+            )
+        };
+        unsafe { LLVMBuildStore(self.builder, call, handle_ptr) };
+        let file_val = unsafe {
+            LLVMBuildLoad2(
+                self.builder,
+                file_ty,
+                file_alloca,
+                CString::new("file.val")?.as_ptr(),
+            )
+        };
+        let ok_val = self.codegen_result_ok(&ok_type, &err_type, Some(file_val))?;
+        unsafe { LLVMBuildBr(self.builder, done_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, err_bb) };
+        let err_msg = if create {
+            "failed to create file"
+        } else {
+            "failed to open file"
+        };
+        let err_payload = self.codegen_err_value(err_msg)?;
+        let err_val = self.codegen_result_err(&ok_type, &err_type, Some(err_payload))?;
+        unsafe { LLVMBuildBr(self.builder, done_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, done_bb) };
+        let phi = unsafe {
+            let phi_name = CString::new("file.open.result")?;
+            let phi_node = LLVMBuildPhi(self.builder, result_ty, phi_name.as_ptr());
+            let mut vals = vec![err_val, ok_val];
+            let mut bbs = vec![err_bb, ok_bb];
+            LLVMAddIncoming(
+                phi_node,
+                vals.as_mut_ptr(),
+                bbs.as_mut_ptr(),
+                vals.len() as u32,
+            );
+            phi_node
+        };
+        Ok(phi)
+    }
+
+    fn codegen_file_read_to_string(
+        &mut self,
+        file: LocalId,
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+        functions: &HashMap<String, LLVMValueRef>,
+        _mir_module: &MirModule,
+    ) -> Result<LLVMValueRef> {
+        let (handle_ty, handle_ptr) = self.file_handle_ptr(file, func, local_map)?;
+        let handle_val = unsafe {
+            LLVMBuildLoad2(
+                self.builder,
+                handle_ty,
+                handle_ptr,
+                CString::new("file.handle.load")?.as_ptr(),
+            )
+        };
+        let null_ptr = unsafe { LLVMConstNull(handle_ty) };
+        let is_null = unsafe {
+            LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                handle_val,
+                null_ptr,
+                CString::new("file.null")?.as_ptr(),
+            )
+        };
+
+        let ok_type = Type::String;
+        let err_type = Type::Named("Err".into());
+        let result_name = format!(
+            "Result${}__{}",
+            self.type_key(&ok_type),
+            self.type_key(&err_type)
+        );
+        let result_ty = self.get_enum_type(&result_name)?;
+
+        let parent_bb = unsafe { LLVMGetInsertBlock(self.builder) };
+        let parent_fn = unsafe { LLVMGetBasicBlockParent(parent_bb) };
+        let err_null_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("file.read.err.null")?.as_ptr(),
+            )
+        };
+        let seek_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("file.read.seek")?.as_ptr(),
+            )
+        };
+        let done_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("file.read.done")?.as_ptr(),
+            )
+        };
+        unsafe { LLVMBuildCondBr(self.builder, is_null, err_null_bb, seek_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, err_null_bb) };
+        let err_payload = self.codegen_err_value("file is closed")?;
+        let err_val = self.codegen_result_err(&ok_type, &err_type, Some(err_payload))?;
+        unsafe { LLVMBuildBr(self.builder, done_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, seek_bb) };
+        let fseek_fn = self.get_extern_function(functions, "fseek")?;
+        let ftell_fn = self.get_extern_function(functions, "ftell")?;
+        let rewind_fn = self.get_extern_function(functions, "rewind")?;
+        let fread_fn = self.get_extern_function(functions, "fread")?;
+        let i32_ty = unsafe { LLVMInt32TypeInContext(self.context) };
+        let i64_ty = unsafe { LLVMInt64TypeInContext(self.context) };
+        let zero_i64 = unsafe { LLVMConstInt(i64_ty, 0, 0) };
+        let seek_end = unsafe { LLVMConstInt(i32_ty, 2, 0) };
+        let mut seek_args = vec![handle_val, zero_i64, seek_end];
+        let seek_ty = unsafe { LLVMGetElementType(LLVMTypeOf(fseek_fn)) };
+        let seek_res = unsafe {
+            LLVMBuildCall2(
+                self.builder,
+                seek_ty,
+                fseek_fn,
+                seek_args.as_mut_ptr(),
+                seek_args.len() as u32,
+                CString::new("file.fseek")?.as_ptr(),
+            )
+        };
+        let seek_ok = unsafe {
+            LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                seek_res,
+                LLVMConstInt(i32_ty, 0, 0),
+                CString::new("file.seek.ok")?.as_ptr(),
+            )
+        };
+
+        let seek_err_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("file.read.seek.err")?.as_ptr(),
+            )
+        };
+        let tell_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("file.read.tell")?.as_ptr(),
+            )
+        };
+        unsafe { LLVMBuildCondBr(self.builder, seek_ok, tell_bb, seek_err_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, seek_err_bb) };
+        let seek_err_payload = self.codegen_err_value("failed to seek file")?;
+        let seek_err_val = self.codegen_result_err(&ok_type, &err_type, Some(seek_err_payload))?;
+        unsafe { LLVMBuildBr(self.builder, done_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, tell_bb) };
+        let mut tell_args = vec![handle_val];
+        let tell_ty = unsafe { LLVMGetElementType(LLVMTypeOf(ftell_fn)) };
+        let size_val = unsafe {
+            LLVMBuildCall2(
+                self.builder,
+                tell_ty,
+                ftell_fn,
+                tell_args.as_mut_ptr(),
+                tell_args.len() as u32,
+                CString::new("file.ftell")?.as_ptr(),
+            )
+        };
+        let size_neg = unsafe {
+            LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntSLT,
+                size_val,
+                LLVMConstInt(i64_ty, 0, 1),
+                CString::new("file.size.neg")?.as_ptr(),
+            )
+        };
+        let size_err_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("file.read.size.err")?.as_ptr(),
+            )
+        };
+        let alloc_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("file.read.alloc")?.as_ptr(),
+            )
+        };
+        unsafe { LLVMBuildCondBr(self.builder, size_neg, size_err_bb, alloc_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, size_err_bb) };
+        let size_err_payload = self.codegen_err_value("failed to read file")?;
+        let size_err_val = self.codegen_result_err(&ok_type, &err_type, Some(size_err_payload))?;
+        unsafe { LLVMBuildBr(self.builder, done_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, alloc_bb) };
+        unsafe {
+            let mut rewind_args = vec![handle_val];
+            let rewind_ty = LLVMGetElementType(LLVMTypeOf(rewind_fn));
+            LLVMBuildCall2(
+                self.builder,
+                rewind_ty,
+                rewind_fn,
+                rewind_args.as_mut_ptr(),
+                rewind_args.len() as u32,
+                CString::new("file.rewind")?.as_ptr(),
+            );
+        }
+
+        let size_plus_one = unsafe {
+            LLVMBuildAdd(
+                self.builder,
+                size_val,
+                LLVMConstInt(i64_ty, 1, 0),
+                CString::new("file.size.plus")?.as_ptr(),
+            )
+        };
+        let malloc_fn = self.ensure_malloc_fn()?;
+        let malloc_ty = self.malloc_function_type();
+        let mut malloc_args = vec![size_plus_one];
+        let buf_ptr = unsafe {
+            LLVMBuildCall2(
+                self.builder,
+                malloc_ty,
+                malloc_fn,
+                malloc_args.as_mut_ptr(),
+                malloc_args.len() as u32,
+                CString::new("file.buf")?.as_ptr(),
+            )
+        };
+        let buf_null = unsafe {
+            LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                buf_ptr,
+                LLVMConstNull(LLVMTypeOf(buf_ptr)),
+                CString::new("file.buf.null")?.as_ptr(),
+            )
+        };
+        let buf_err_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("file.read.buf.err")?.as_ptr(),
+            )
+        };
+        let read_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("file.read.body")?.as_ptr(),
+            )
+        };
+        unsafe { LLVMBuildCondBr(self.builder, buf_null, buf_err_bb, read_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, buf_err_bb) };
+        let buf_err_payload = self.codegen_err_value("failed to allocate buffer")?;
+        let buf_err_val = self.codegen_result_err(&ok_type, &err_type, Some(buf_err_payload))?;
+        unsafe { LLVMBuildBr(self.builder, done_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, read_bb) };
+        let size_u32 = unsafe {
+            LLVMBuildTrunc(
+                self.builder,
+                size_val,
+                LLVMInt32TypeInContext(self.context),
+                CString::new("file.size.u32")?.as_ptr(),
+            )
+        };
+        let one_u32 = unsafe { LLVMConstInt(LLVMInt32TypeInContext(self.context), 1, 0) };
+        let mut fread_args = vec![buf_ptr, one_u32, size_u32, handle_val];
+        let fread_ty = unsafe { LLVMGetElementType(LLVMTypeOf(fread_fn)) };
+        let read_count = unsafe {
+            LLVMBuildCall2(
+                self.builder,
+                fread_ty,
+                fread_fn,
+                fread_args.as_mut_ptr(),
+                fread_args.len() as u32,
+                CString::new("file.fread")?.as_ptr(),
+            )
+        };
+        let size_zero = unsafe {
+            LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                size_u32,
+                LLVMConstInt(LLVMInt32TypeInContext(self.context), 0, 0),
+                CString::new("file.size.zero")?.as_ptr(),
+            )
+        };
+        let read_zero = unsafe {
+            LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                read_count,
+                LLVMConstInt(LLVMInt32TypeInContext(self.context), 0, 0),
+                CString::new("file.read.zero")?.as_ptr(),
+            )
+        };
+        let read_err = unsafe {
+            LLVMBuildAnd(
+                self.builder,
+                read_zero,
+                LLVMBuildNot(
+                    self.builder,
+                    size_zero,
+                    CString::new("file.size.notzero")?.as_ptr(),
+                ),
+                CString::new("file.read.err")?.as_ptr(),
+            )
+        };
+        let read_err_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("file.read.fail")?.as_ptr(),
+            )
+        };
+        let read_ok_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("file.read.ok")?.as_ptr(),
+            )
+        };
+        unsafe { LLVMBuildCondBr(self.builder, read_err, read_err_bb, read_ok_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, read_err_bb) };
+        self.codegen_free(buf_ptr)?;
+        let read_err_payload = self.codegen_err_value("failed to read file")?;
+        let read_err_val = self.codegen_result_err(&ok_type, &err_type, Some(read_err_payload))?;
+        unsafe { LLVMBuildBr(self.builder, done_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, read_ok_bb) };
+        let read_count64 = unsafe {
+            LLVMBuildZExt(
+                self.builder,
+                read_count,
+                i64_ty,
+                CString::new("file.read.count64")?.as_ptr(),
+            )
+        };
+        let i8_ty = unsafe { LLVMInt8TypeInContext(self.context) };
+        let null_ptr = unsafe { LLVMPointerType(i8_ty, 0) };
+        let buf_i8 = unsafe {
+            LLVMBuildBitCast(
+                self.builder,
+                buf_ptr,
+                null_ptr,
+                CString::new("file.buf.cast")?.as_ptr(),
+            )
+        };
+        let null_idx_ptr = unsafe {
+            LLVMBuildGEP2(
+                self.builder,
+                i8_ty,
+                buf_i8,
+                vec![read_count64].as_mut_ptr(),
+                1,
+                CString::new("file.buf.term")?.as_ptr(),
+            )
+        };
+        unsafe { LLVMBuildStore(self.builder, LLVMConstInt(i8_ty, 0, 0), null_idx_ptr) };
+        let ok_val = self.codegen_result_ok(&ok_type, &err_type, Some(buf_ptr))?;
+        unsafe { LLVMBuildBr(self.builder, done_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, done_bb) };
+        let phi = unsafe {
+            let phi_name = CString::new("file.read.result")?;
+            let phi_node = LLVMBuildPhi(self.builder, result_ty, phi_name.as_ptr());
+            let mut vals = vec![
+                err_val,
+                seek_err_val,
+                size_err_val,
+                buf_err_val,
+                read_err_val,
+                ok_val,
+            ];
+            let mut bbs = vec![
+                err_null_bb,
+                seek_err_bb,
+                size_err_bb,
+                buf_err_bb,
+                read_err_bb,
+                read_ok_bb,
+            ];
+            LLVMAddIncoming(
+                phi_node,
+                vals.as_mut_ptr(),
+                bbs.as_mut_ptr(),
+                vals.len() as u32,
+            );
+            phi_node
+        };
+        Ok(phi)
+    }
+
+    fn codegen_file_write_string(
+        &mut self,
+        file: LocalId,
+        contents: &MirValue,
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+        functions: &HashMap<String, LLVMValueRef>,
+        _mir_module: &MirModule,
+    ) -> Result<LLVMValueRef> {
+        let (handle_ty, handle_ptr) = self.file_handle_ptr(file, func, local_map)?;
+        let handle_val = unsafe {
+            LLVMBuildLoad2(
+                self.builder,
+                handle_ty,
+                handle_ptr,
+                CString::new("file.handle.load")?.as_ptr(),
+            )
+        };
+        let null_ptr = unsafe { LLVMConstNull(handle_ty) };
+
+        let is_null = unsafe {
+            LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                handle_val,
+                null_ptr,
+                CString::new("file.null")?.as_ptr(),
+            )
+        };
+
+        let ok_type = Type::U32;
+        let err_type = Type::Named("Err".into());
+        let result_name = format!(
+            "Result${}__{}",
+            self.type_key(&ok_type),
+            self.type_key(&err_type)
+        );
+        let result_ty = self.get_enum_type(&result_name)?;
+
+        let parent_bb = unsafe { LLVMGetInsertBlock(self.builder) };
+        let parent_fn = unsafe { LLVMGetBasicBlockParent(parent_bb) };
+        let err_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("file.write.err")?.as_ptr(),
+            )
+        };
+        let body_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("file.write.body")?.as_ptr(),
+            )
+        };
+        let done_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("file.write.done")?.as_ptr(),
+            )
+        };
+        unsafe { LLVMBuildCondBr(self.builder, is_null, err_bb, body_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, err_bb) };
+        let err_payload = self.codegen_err_value("file is closed")?;
+        let err_val = self.codegen_result_err(&ok_type, &err_type, Some(err_payload))?;
+        unsafe { LLVMBuildBr(self.builder, done_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, body_bb) };
+        let contents_val = self.codegen_value(contents, func, local_map)?;
+        let strlen_fn = self.get_extern_function(functions, "strlen")?;
+        let mut strlen_args = vec![contents_val];
+        let strlen_ty = unsafe { LLVMGetElementType(LLVMTypeOf(strlen_fn)) };
+        let len_val = unsafe {
+            LLVMBuildCall2(
+                self.builder,
+                strlen_ty,
+                strlen_fn,
+                strlen_args.as_mut_ptr(),
+                strlen_args.len() as u32,
+                CString::new("file.strlen")?.as_ptr(),
+            )
+        };
+        let len_u32 = unsafe {
+            LLVMBuildTrunc(
+                self.builder,
+                len_val,
+                LLVMInt32TypeInContext(self.context),
+                CString::new("file.len.u32")?.as_ptr(),
+            )
+        };
+        let fwrite_fn = self.get_extern_function(functions, "fwrite")?;
+        let one_u32 = unsafe { LLVMConstInt(LLVMInt32TypeInContext(self.context), 1, 0) };
+        let mut fwrite_args = vec![contents_val, one_u32, len_u32, handle_val];
+        let fwrite_ty = unsafe { LLVMGetElementType(LLVMTypeOf(fwrite_fn)) };
+        let wrote = unsafe {
+            LLVMBuildCall2(
+                self.builder,
+                fwrite_ty,
+                fwrite_fn,
+                fwrite_args.as_mut_ptr(),
+                fwrite_args.len() as u32,
+                CString::new("file.fwrite")?.as_ptr(),
+            )
+        };
+        let wrote_zero = unsafe {
+            LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                wrote,
+                LLVMConstInt(LLVMInt32TypeInContext(self.context), 0, 0),
+                CString::new("file.write.zero")?.as_ptr(),
+            )
+        };
+        let len_zero = unsafe {
+            LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                len_u32,
+                LLVMConstInt(LLVMInt32TypeInContext(self.context), 0, 0),
+                CString::new("file.len.zero")?.as_ptr(),
+            )
+        };
+        let write_err = unsafe {
+            LLVMBuildAnd(
+                self.builder,
+                wrote_zero,
+                LLVMBuildNot(
+                    self.builder,
+                    len_zero,
+                    CString::new("file.len.notzero")?.as_ptr(),
+                ),
+                CString::new("file.write.err")?.as_ptr(),
+            )
+        };
+        let ok_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("file.write.ok")?.as_ptr(),
+            )
+        };
+        let err_write_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("file.write.fail")?.as_ptr(),
+            )
+        };
+        unsafe { LLVMBuildCondBr(self.builder, write_err, err_write_bb, ok_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, err_write_bb) };
+        let err_write_payload = self.codegen_err_value("failed to write file")?;
+        let err_write_val =
+            self.codegen_result_err(&ok_type, &err_type, Some(err_write_payload))?;
+        unsafe { LLVMBuildBr(self.builder, done_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, ok_bb) };
+        let ok_val = self.codegen_result_ok(&ok_type, &err_type, Some(wrote))?;
+        unsafe { LLVMBuildBr(self.builder, done_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, done_bb) };
+        let phi = unsafe {
+            let phi_name = CString::new("file.write.result")?;
+            let phi_node = LLVMBuildPhi(self.builder, result_ty, phi_name.as_ptr());
+            let mut vals = vec![err_val, err_write_val, ok_val];
+            let mut bbs = vec![err_bb, err_write_bb, ok_bb];
+            LLVMAddIncoming(
+                phi_node,
+                vals.as_mut_ptr(),
+                bbs.as_mut_ptr(),
+                vals.len() as u32,
+            );
+            phi_node
+        };
+        Ok(phi)
+    }
+
+    fn codegen_file_close(
+        &mut self,
+        file: LocalId,
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+        functions: &HashMap<String, LLVMValueRef>,
+        _mir_module: &MirModule,
+    ) -> Result<LLVMValueRef> {
+        let (handle_ty, handle_ptr) = self.file_handle_ptr(file, func, local_map)?;
+        let handle_val = unsafe {
+            LLVMBuildLoad2(
+                self.builder,
+                handle_ty,
+                handle_ptr,
+                CString::new("file.handle.load")?.as_ptr(),
+            )
+        };
+        let null_ptr = unsafe { LLVMConstNull(handle_ty) };
+        let is_null = unsafe {
+            LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                handle_val,
+                null_ptr,
+                CString::new("file.null")?.as_ptr(),
+            )
+        };
+
+        let ok_type = Type::I32;
+        let err_type = Type::Named("Err".into());
+        let result_name = format!(
+            "Result${}__{}",
+            self.type_key(&ok_type),
+            self.type_key(&err_type)
+        );
+        let result_ty = self.get_enum_type(&result_name)?;
+
+        let parent_bb = unsafe { LLVMGetInsertBlock(self.builder) };
+        let parent_fn = unsafe { LLVMGetBasicBlockParent(parent_bb) };
+        let err_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("file.close.err")?.as_ptr(),
+            )
+        };
+        let body_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("file.close.body")?.as_ptr(),
+            )
+        };
+        let done_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("file.close.done")?.as_ptr(),
+            )
+        };
+        unsafe { LLVMBuildCondBr(self.builder, is_null, err_bb, body_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, err_bb) };
+        let err_payload = self.codegen_err_value("file already closed")?;
+        let err_val = self.codegen_result_err(&ok_type, &err_type, Some(err_payload))?;
+        unsafe { LLVMBuildBr(self.builder, done_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, body_bb) };
+        let fclose_fn = self.get_extern_function(functions, "fclose")?;
+        let mut fclose_args = vec![handle_val];
+        let fclose_ty = unsafe { LLVMGetElementType(LLVMTypeOf(fclose_fn)) };
+        let close_res = unsafe {
+            LLVMBuildCall2(
+                self.builder,
+                fclose_ty,
+                fclose_fn,
+                fclose_args.as_mut_ptr(),
+                fclose_args.len() as u32,
+                CString::new("file.fclose")?.as_ptr(),
+            )
+        };
+        let close_ok = unsafe {
+            LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                close_res,
+                LLVMConstInt(LLVMInt32TypeInContext(self.context), 0, 0),
+                CString::new("file.close.ok")?.as_ptr(),
+            )
+        };
+        let ok_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("file.close.ok.bb")?.as_ptr(),
+            )
+        };
+        let err_close_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("file.close.fail")?.as_ptr(),
+            )
+        };
+        unsafe { LLVMBuildCondBr(self.builder, close_ok, ok_bb, err_close_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, err_close_bb) };
+        let err_close_payload = self.codegen_err_value("failed to close file")?;
+        let err_close_val =
+            self.codegen_result_err(&ok_type, &err_type, Some(err_close_payload))?;
+        unsafe { LLVMBuildBr(self.builder, done_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, ok_bb) };
+        unsafe { LLVMBuildStore(self.builder, null_ptr, handle_ptr) };
+        let ok_val = self.codegen_result_ok(&ok_type, &err_type, Some(close_res))?;
+        unsafe { LLVMBuildBr(self.builder, done_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, done_bb) };
+        let phi = unsafe {
+            let phi_name = CString::new("file.close.result")?;
+            let phi_node = LLVMBuildPhi(self.builder, result_ty, phi_name.as_ptr());
+            let mut vals = vec![err_val, err_close_val, ok_val];
+            let mut bbs = vec![err_bb, err_close_bb, ok_bb];
+            LLVMAddIncoming(
+                phi_node,
+                vals.as_mut_ptr(),
+                bbs.as_mut_ptr(),
+                vals.len() as u32,
+            );
+            phi_node
+        };
+        Ok(phi)
+    }
+
+    fn codegen_string_len_value(
+        &mut self,
+        value: LLVMValueRef,
+        functions: &HashMap<String, LLVMValueRef>,
+    ) -> Result<LLVMValueRef> {
+        let strlen_fn = self.get_extern_function(functions, "strlen")?;
+        let mut args = vec![value];
+        let fn_ty = self.function_type_for("strlen")?;
+        Ok(unsafe {
+            LLVMBuildCall2(
+                self.builder,
+                fn_ty,
+                strlen_fn,
+                args.as_mut_ptr(),
+                args.len() as u32,
+                CString::new("str.len")?.as_ptr(),
+            )
+        })
+    }
+
+    fn codegen_string_copy_from_ptr_len(
+        &mut self,
+        ptr: LLVMValueRef,
+        len: LLVMValueRef,
+        functions: &HashMap<String, LLVMValueRef>,
+    ) -> Result<LLVMValueRef> {
+        let malloc_fn = self.ensure_malloc_fn()?;
+        let malloc_ty = self.malloc_function_type();
+        let size_plus = unsafe {
+            LLVMBuildAdd(
+                self.builder,
+                len,
+                LLVMConstInt(LLVMTypeOf(len), 1, 0),
+                CString::new("str.len.plus")?.as_ptr(),
+            )
+        };
+        let mut malloc_args = vec![size_plus];
+        let buf = unsafe {
+            LLVMBuildCall2(
+                self.builder,
+                malloc_ty,
+                malloc_fn,
+                malloc_args.as_mut_ptr(),
+                malloc_args.len() as u32,
+                CString::new("str.alloc")?.as_ptr(),
+            )
+        };
+        let memcpy_fn = self.get_extern_function(functions, "memcpy")?;
+        let mut memcpy_args = vec![buf, ptr, len];
+        let memcpy_ty = self.function_type_for("memcpy")?;
+        unsafe {
+            LLVMBuildCall2(
+                self.builder,
+                memcpy_ty,
+                memcpy_fn,
+                memcpy_args.as_mut_ptr(),
+                memcpy_args.len() as u32,
+                CString::new("str.memcpy")?.as_ptr(),
+            );
+        }
+        let i8_ty = unsafe { LLVMInt8TypeInContext(self.context) };
+        let buf_i8 = unsafe {
+            LLVMBuildBitCast(
+                self.builder,
+                buf,
+                LLVMPointerType(i8_ty, 0),
+                CString::new("str.buf.cast")?.as_ptr(),
+            )
+        };
+        let term_ptr = unsafe {
+            LLVMBuildGEP2(
+                self.builder,
+                i8_ty,
+                buf_i8,
+                vec![len].as_mut_ptr(),
+                1,
+                CString::new("str.term")?.as_ptr(),
+            )
+        };
+        unsafe { LLVMBuildStore(self.builder, LLVMConstInt(i8_ty, 0, 0), term_ptr) };
+        Ok(buf)
+    }
+
+    fn codegen_string_empty(
+        &mut self,
+        functions: &HashMap<String, LLVMValueRef>,
+    ) -> Result<LLVMValueRef> {
+        let zero = unsafe { LLVMConstInt(LLVMInt64TypeInContext(self.context), 0, 0) };
+        let empty_ptr = self.codegen_string_literal("", ".str.empty")?;
+        self.codegen_string_copy_from_ptr_len(empty_ptr, zero, functions)
+    }
+
+    fn codegen_string_len(
+        &mut self,
+        base: LocalId,
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+        functions: &HashMap<String, LLVMValueRef>,
+    ) -> Result<LLVMValueRef> {
+        let base_val = self.codegen_value(&MirValue::Local(base), func, local_map)?;
+        self.codegen_string_len_value(base_val, functions)
+    }
+
+    fn codegen_string_concat(
+        &mut self,
+        base: LocalId,
+        value: &MirValue,
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+        functions: &HashMap<String, LLVMValueRef>,
+    ) -> Result<LLVMValueRef> {
+        let left_val = self.codegen_value(&MirValue::Local(base), func, local_map)?;
+        let right_val = self.codegen_value(value, func, local_map)?;
+        let left_len = self.codegen_string_len_value(left_val, functions)?;
+        let right_len = self.codegen_string_len_value(right_val, functions)?;
+        let total_len = unsafe {
+            LLVMBuildAdd(
+                self.builder,
+                left_len,
+                right_len,
+                CString::new("str.concat.len")?.as_ptr(),
+            )
+        };
+        let malloc_fn = self.ensure_malloc_fn()?;
+        let malloc_ty = self.malloc_function_type();
+        let size_plus = unsafe {
+            LLVMBuildAdd(
+                self.builder,
+                total_len,
+                LLVMConstInt(LLVMTypeOf(total_len), 1, 0),
+                CString::new("str.concat.size")?.as_ptr(),
+            )
+        };
+        let mut malloc_args = vec![size_plus];
+        let buf = unsafe {
+            LLVMBuildCall2(
+                self.builder,
+                malloc_ty,
+                malloc_fn,
+                malloc_args.as_mut_ptr(),
+                malloc_args.len() as u32,
+                CString::new("str.concat.alloc")?.as_ptr(),
+            )
+        };
+        let memcpy_fn = self.get_extern_function(functions, "memcpy")?;
+        let memcpy_ty = self.function_type_for("memcpy")?;
+        let mut memcpy_args = vec![buf, left_val, left_len];
+        unsafe {
+            LLVMBuildCall2(
+                self.builder,
+                memcpy_ty,
+                memcpy_fn,
+                memcpy_args.as_mut_ptr(),
+                memcpy_args.len() as u32,
+                CString::new("str.concat.copy1")?.as_ptr(),
+            );
+        }
+        let i8_ty = unsafe { LLVMInt8TypeInContext(self.context) };
+        let buf_i8 = unsafe {
+            LLVMBuildBitCast(
+                self.builder,
+                buf,
+                LLVMPointerType(i8_ty, 0),
+                CString::new("str.concat.cast")?.as_ptr(),
+            )
+        };
+        let right_ptr = unsafe {
+            LLVMBuildGEP2(
+                self.builder,
+                i8_ty,
+                buf_i8,
+                vec![left_len].as_mut_ptr(),
+                1,
+                CString::new("str.concat.ptr")?.as_ptr(),
+            )
+        };
+        let mut memcpy_args2 = vec![right_ptr, right_val, right_len];
+        unsafe {
+            LLVMBuildCall2(
+                self.builder,
+                memcpy_ty,
+                memcpy_fn,
+                memcpy_args2.as_mut_ptr(),
+                memcpy_args2.len() as u32,
+                CString::new("str.concat.copy2")?.as_ptr(),
+            );
+        }
+        let term_ptr = unsafe {
+            LLVMBuildGEP2(
+                self.builder,
+                i8_ty,
+                buf_i8,
+                vec![total_len].as_mut_ptr(),
+                1,
+                CString::new("str.concat.term")?.as_ptr(),
+            )
+        };
+        unsafe { LLVMBuildStore(self.builder, LLVMConstInt(i8_ty, 0, 0), term_ptr) };
+        Ok(buf)
+    }
+
+    fn codegen_string_slice(
+        &mut self,
+        base: LocalId,
+        start: &MirValue,
+        len: &MirValue,
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+        functions: &HashMap<String, LLVMValueRef>,
+    ) -> Result<LLVMValueRef> {
+        let base_val = self.codegen_value(&MirValue::Local(base), func, local_map)?;
+        let start_val = self.codegen_value(start, func, local_map)?;
+        let len_val = self.codegen_value(len, func, local_map)?;
+        let usize_ty = unsafe { LLVMInt64TypeInContext(self.context) };
+        let start_val = self.ensure_usize(start_val, usize_ty)?;
+        let len_val = self.ensure_usize(len_val, usize_ty)?;
+        let base_len = self.codegen_string_len_value(base_val, functions)?;
+
+        let parent_bb = unsafe { LLVMGetInsertBlock(self.builder) };
+        let parent_fn = unsafe { LLVMGetBasicBlockParent(parent_bb) };
+        let empty_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.slice.empty")?.as_ptr(),
+            )
+        };
+        let body_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.slice.body")?.as_ptr(),
+            )
+        };
+        let done_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.slice.done")?.as_ptr(),
+            )
+        };
+        let start_ge = unsafe {
+            LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntUGE,
+                start_val,
+                base_len,
+                CString::new("str.slice.start.ge")?.as_ptr(),
+            )
+        };
+        unsafe { LLVMBuildCondBr(self.builder, start_ge, empty_bb, body_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, empty_bb) };
+        let empty_val = self.codegen_string_empty(functions)?;
+        unsafe { LLVMBuildBr(self.builder, done_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, body_bb) };
+        let remaining = unsafe {
+            LLVMBuildSub(
+                self.builder,
+                base_len,
+                start_val,
+                CString::new("str.slice.rem")?.as_ptr(),
+            )
+        };
+        let len_gt = unsafe {
+            LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntUGT,
+                len_val,
+                remaining,
+                CString::new("str.slice.len.gt")?.as_ptr(),
+            )
+        };
+        let actual_len = unsafe {
+            LLVMBuildSelect(
+                self.builder,
+                len_gt,
+                remaining,
+                len_val,
+                CString::new("str.slice.len")?.as_ptr(),
+            )
+        };
+        let i8_ty = unsafe { LLVMInt8TypeInContext(self.context) };
+        let base_i8 = unsafe {
+            LLVMBuildBitCast(
+                self.builder,
+                base_val,
+                LLVMPointerType(i8_ty, 0),
+                CString::new("str.slice.cast")?.as_ptr(),
+            )
+        };
+        let slice_ptr = unsafe {
+            LLVMBuildGEP2(
+                self.builder,
+                i8_ty,
+                base_i8,
+                vec![start_val].as_mut_ptr(),
+                1,
+                CString::new("str.slice.ptr")?.as_ptr(),
+            )
+        };
+        let slice_val = self.codegen_string_copy_from_ptr_len(slice_ptr, actual_len, functions)?;
+        unsafe { LLVMBuildBr(self.builder, done_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, done_bb) };
+        let phi = unsafe {
+            let phi_name = CString::new("str.slice.result")?;
+            let phi_node = LLVMBuildPhi(
+                self.builder,
+                self.get_llvm_type(&Type::String)?,
+                phi_name.as_ptr(),
+            );
+            let mut vals = vec![empty_val, slice_val];
+            let mut bbs = vec![empty_bb, body_bb];
+            LLVMAddIncoming(
+                phi_node,
+                vals.as_mut_ptr(),
+                bbs.as_mut_ptr(),
+                vals.len() as u32,
+            );
+            phi_node
+        };
+        Ok(phi)
+    }
+
+    fn codegen_string_trim(
+        &mut self,
+        base: LocalId,
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+        functions: &HashMap<String, LLVMValueRef>,
+    ) -> Result<LLVMValueRef> {
+        let base_val = self.codegen_value(&MirValue::Local(base), func, local_map)?;
+        let len_val = self.codegen_string_len_value(base_val, functions)?;
+        let usize_ty = unsafe { LLVMInt64TypeInContext(self.context) };
+        let zero = unsafe { LLVMConstInt(usize_ty, 0, 0) };
+
+        let result = unsafe {
+            let parent_bb = LLVMGetInsertBlock(self.builder);
+            let parent_fn = unsafe { LLVMGetBasicBlockParent(parent_bb) };
+            let empty_bb = unsafe {
+                LLVMAppendBasicBlockInContext(
+                    self.context,
+                    parent_fn,
+                    CString::new("str.trim.empty")?.as_ptr(),
+                )
+            };
+            let start_bb = unsafe {
+                LLVMAppendBasicBlockInContext(
+                    self.context,
+                    parent_fn,
+                    CString::new("str.trim.start")?.as_ptr(),
+                )
+            };
+            let done_bb = unsafe {
+                LLVMAppendBasicBlockInContext(
+                    self.context,
+                    parent_fn,
+                    CString::new("str.trim.done")?.as_ptr(),
+                )
+            };
+            let len_zero = unsafe {
+                LLVMBuildICmp(
+                    self.builder,
+                    llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                    len_val,
+                    zero,
+                    CString::new("str.trim.len.zero")?.as_ptr(),
+                )
+            };
+            unsafe { LLVMBuildCondBr(self.builder, len_zero, empty_bb, start_bb) };
+
+            unsafe { LLVMPositionBuilderAtEnd(self.builder, empty_bb) };
+            let empty_val = self.codegen_string_empty(functions)?;
+            unsafe { LLVMBuildBr(self.builder, done_bb) };
+
+            unsafe { LLVMPositionBuilderAtEnd(self.builder, start_bb) };
+            let start_slot = LLVMBuildAlloca(
+                self.builder,
+                usize_ty,
+                CString::new("str.trim.start.idx")?.as_ptr(),
+            );
+            let end_slot = LLVMBuildAlloca(
+                self.builder,
+                usize_ty,
+                CString::new("str.trim.end.idx")?.as_ptr(),
+            );
+            LLVMBuildStore(self.builder, zero, start_slot);
+            LLVMBuildStore(self.builder, len_val, end_slot);
+
+            let i8_ty = LLVMInt8TypeInContext(self.context);
+            let base_i8 = LLVMBuildBitCast(
+                self.builder,
+                base_val,
+                LLVMPointerType(i8_ty, 0),
+                CString::new("str.trim.cast")?.as_ptr(),
+            );
+            let isspace_fn = self.get_extern_function(functions, "isspace")?;
+            let space_ty = self.function_type_for("isspace")?;
+
+            let loop_start_check = LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.trim.start.check")?.as_ptr(),
+            );
+            let loop_start_body = LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.trim.start.body")?.as_ptr(),
+            );
+            let loop_start_done = LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.trim.start.done")?.as_ptr(),
+            );
+            LLVMBuildBr(self.builder, loop_start_check);
+
+            LLVMPositionBuilderAtEnd(self.builder, loop_start_check);
+            let start_val = LLVMBuildLoad2(
+                self.builder,
+                usize_ty,
+                start_slot,
+                CString::new("str.trim.start.load")?.as_ptr(),
+            );
+            let end_val = LLVMBuildLoad2(
+                self.builder,
+                usize_ty,
+                end_slot,
+                CString::new("str.trim.end.load")?.as_ptr(),
+            );
+            let start_lt = LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntULT,
+                start_val,
+                end_val,
+                CString::new("str.trim.start.lt")?.as_ptr(),
+            );
+            LLVMBuildCondBr(self.builder, start_lt, loop_start_body, loop_start_done);
+
+            LLVMPositionBuilderAtEnd(self.builder, loop_start_body);
+            let char_ptr = LLVMBuildGEP2(
+                self.builder,
+                i8_ty,
+                base_i8,
+                vec![start_val].as_mut_ptr(),
+                1,
+                CString::new("str.trim.char")?.as_ptr(),
+            );
+            let ch = LLVMBuildLoad2(
+                self.builder,
+                i8_ty,
+                char_ptr,
+                CString::new("str.trim.ch")?.as_ptr(),
+            );
+            let ch_i32 = LLVMBuildSExt(
+                self.builder,
+                ch,
+                LLVMInt32TypeInContext(self.context),
+                CString::new("str.trim.ch.i32")?.as_ptr(),
+            );
+            let mut space_args = vec![ch_i32];
+            let space_res = LLVMBuildCall2(
+                self.builder,
+                space_ty,
+                isspace_fn,
+                space_args.as_mut_ptr(),
+                space_args.len() as u32,
+                CString::new("str.trim.space")?.as_ptr(),
+            );
+            let is_space = LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntNE,
+                space_res,
+                LLVMConstInt(LLVMInt32TypeInContext(self.context), 0, 0),
+                CString::new("str.trim.is_space")?.as_ptr(),
+            );
+            let inc_start_bb = LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.trim.start.inc")?.as_ptr(),
+            );
+            let keep_start_bb = LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.trim.start.keep")?.as_ptr(),
+            );
+            LLVMBuildCondBr(self.builder, is_space, inc_start_bb, keep_start_bb);
+
+            LLVMPositionBuilderAtEnd(self.builder, inc_start_bb);
+            let start_next = LLVMBuildAdd(
+                self.builder,
+                start_val,
+                LLVMConstInt(usize_ty, 1, 0),
+                CString::new("str.trim.start.next")?.as_ptr(),
+            );
+            LLVMBuildStore(self.builder, start_next, start_slot);
+            LLVMBuildBr(self.builder, loop_start_check);
+
+            LLVMPositionBuilderAtEnd(self.builder, keep_start_bb);
+            LLVMBuildBr(self.builder, loop_start_done);
+
+            LLVMPositionBuilderAtEnd(self.builder, loop_start_done);
+            let loop_end_check = LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.trim.end.check")?.as_ptr(),
+            );
+            let loop_end_body = LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.trim.end.body")?.as_ptr(),
+            );
+            let loop_end_done = LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.trim.end.done")?.as_ptr(),
+            );
+            LLVMBuildBr(self.builder, loop_end_check);
+
+            LLVMPositionBuilderAtEnd(self.builder, loop_end_check);
+            let start_val2 = LLVMBuildLoad2(
+                self.builder,
+                usize_ty,
+                start_slot,
+                CString::new("str.trim.start.load2")?.as_ptr(),
+            );
+            let end_val2 = LLVMBuildLoad2(
+                self.builder,
+                usize_ty,
+                end_slot,
+                CString::new("str.trim.end.load2")?.as_ptr(),
+            );
+            let end_gt = LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntUGT,
+                end_val2,
+                start_val2,
+                CString::new("str.trim.end.gt")?.as_ptr(),
+            );
+            LLVMBuildCondBr(self.builder, end_gt, loop_end_body, loop_end_done);
+
+            LLVMPositionBuilderAtEnd(self.builder, loop_end_body);
+            let end_minus = LLVMBuildSub(
+                self.builder,
+                end_val2,
+                LLVMConstInt(usize_ty, 1, 0),
+                CString::new("str.trim.end.minus")?.as_ptr(),
+            );
+            let end_char_ptr = LLVMBuildGEP2(
+                self.builder,
+                i8_ty,
+                base_i8,
+                vec![end_minus].as_mut_ptr(),
+                1,
+                CString::new("str.trim.end.char")?.as_ptr(),
+            );
+            let end_ch = LLVMBuildLoad2(
+                self.builder,
+                i8_ty,
+                end_char_ptr,
+                CString::new("str.trim.end.ch")?.as_ptr(),
+            );
+            let end_ch_i32 = LLVMBuildSExt(
+                self.builder,
+                end_ch,
+                LLVMInt32TypeInContext(self.context),
+                CString::new("str.trim.end.ch.i32")?.as_ptr(),
+            );
+            let mut end_space_args = vec![end_ch_i32];
+            let end_space_res = LLVMBuildCall2(
+                self.builder,
+                space_ty,
+                isspace_fn,
+                end_space_args.as_mut_ptr(),
+                end_space_args.len() as u32,
+                CString::new("str.trim.end.space")?.as_ptr(),
+            );
+            let end_is_space = LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntNE,
+                end_space_res,
+                LLVMConstInt(LLVMInt32TypeInContext(self.context), 0, 0),
+                CString::new("str.trim.end.is_space")?.as_ptr(),
+            );
+            let dec_end_bb = LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.trim.end.dec")?.as_ptr(),
+            );
+            let keep_end_bb = LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.trim.end.keep")?.as_ptr(),
+            );
+            LLVMBuildCondBr(self.builder, end_is_space, dec_end_bb, keep_end_bb);
+
+            LLVMPositionBuilderAtEnd(self.builder, dec_end_bb);
+            LLVMBuildStore(self.builder, end_minus, end_slot);
+            LLVMBuildBr(self.builder, loop_end_check);
+
+            LLVMPositionBuilderAtEnd(self.builder, keep_end_bb);
+            LLVMBuildBr(self.builder, loop_end_done);
+
+            LLVMPositionBuilderAtEnd(self.builder, loop_end_done);
+            let final_start = LLVMBuildLoad2(
+                self.builder,
+                usize_ty,
+                start_slot,
+                CString::new("str.trim.start.final")?.as_ptr(),
+            );
+            let final_end = LLVMBuildLoad2(
+                self.builder,
+                usize_ty,
+                end_slot,
+                CString::new("str.trim.end.final")?.as_ptr(),
+            );
+            let final_len = LLVMBuildSub(
+                self.builder,
+                final_end,
+                final_start,
+                CString::new("str.trim.len")?.as_ptr(),
+            );
+            let trim_ptr = LLVMBuildGEP2(
+                self.builder,
+                i8_ty,
+                base_i8,
+                vec![final_start].as_mut_ptr(),
+                1,
+                CString::new("str.trim.ptr")?.as_ptr(),
+            );
+            let trim_val = self.codegen_string_copy_from_ptr_len(trim_ptr, final_len, functions)?;
+            LLVMBuildBr(self.builder, done_bb);
+
+            LLVMPositionBuilderAtEnd(self.builder, done_bb);
+            let phi = LLVMBuildPhi(
+                self.builder,
+                self.get_llvm_type(&Type::String)?,
+                CString::new("str.trim.result")?.as_ptr(),
+            );
+            let mut vals = vec![empty_val, trim_val];
+            let mut bbs = vec![empty_bb, loop_end_done];
+            LLVMAddIncoming(phi, vals.as_mut_ptr(), bbs.as_mut_ptr(), vals.len() as u32);
+            Ok(phi)
+        };
+        result
+    }
+
+    fn codegen_string_split(
+        &mut self,
+        base: LocalId,
+        sep: &MirValue,
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+        functions: &HashMap<String, LLVMValueRef>,
+    ) -> Result<LLVMValueRef> {
+        let base_val = self.codegen_value(&MirValue::Local(base), func, local_map)?;
+        let sep_val = self.codegen_value(sep, func, local_map)?;
+        let base_len = self.codegen_string_len_value(base_val, functions)?;
+        let sep_len = self.codegen_string_len_value(sep_val, functions)?;
+
+        let cap = unsafe {
+            LLVMBuildAdd(
+                self.builder,
+                base_len,
+                LLVMConstInt(LLVMTypeOf(base_len), 1, 0),
+                CString::new("str.split.cap")?.as_ptr(),
+            )
+        };
+        let vec_val = self.codegen_vec_init_with_capacity_value(&Type::String, cap)?;
+        let vec_name = format!("Vec${}", self.type_key(&Type::String));
+        let llvm_vec_ty = self.get_struct_type(&vec_name)?;
+        let vec_ptr = unsafe {
+            let alloca = LLVMBuildAlloca(
+                self.builder,
+                llvm_vec_ty,
+                CString::new("str.split.vec")?.as_ptr(),
+            );
+            LLVMBuildStore(self.builder, vec_val, alloca);
+            alloca
+        };
+
+        let parent_bb = unsafe { LLVMGetInsertBlock(self.builder) };
+        let parent_fn = unsafe { LLVMGetBasicBlockParent(parent_bb) };
+        let sep_zero = unsafe {
+            LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                sep_len,
+                LLVMConstInt(LLVMTypeOf(sep_len), 0, 0),
+                CString::new("str.split.sep.zero")?.as_ptr(),
+            )
+        };
+        let sep_zero_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.split.sep.zero.bb")?.as_ptr(),
+            )
+        };
+        let loop_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.split.loop")?.as_ptr(),
+            )
+        };
+        let done_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.split.done")?.as_ptr(),
+            )
+        };
+        unsafe { LLVMBuildCondBr(self.builder, sep_zero, sep_zero_bb, loop_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, sep_zero_bb) };
+        let dup_val = self.codegen_string_copy_from_ptr_len(base_val, base_len, functions)?;
+        self.codegen_vec_push_no_grow(vec_ptr, &Type::String, dup_val)?;
+        unsafe { LLVMBuildBr(self.builder, done_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, loop_bb) };
+        let current_slot = unsafe {
+            LLVMBuildAlloca(
+                self.builder,
+                self.get_llvm_type(&Type::String)?,
+                CString::new("str.split.curr")?.as_ptr(),
+            )
+        };
+        unsafe { LLVMBuildStore(self.builder, base_val, current_slot) };
+
+        let loop_check = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.split.check")?.as_ptr(),
+            )
+        };
+        let loop_body = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.split.body")?.as_ptr(),
+            )
+        };
+        let loop_end = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.split.end")?.as_ptr(),
+            )
+        };
+        unsafe { LLVMBuildBr(self.builder, loop_check) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, loop_check) };
+        let current_val = unsafe {
+            LLVMBuildLoad2(
+                self.builder,
+                self.get_llvm_type(&Type::String)?,
+                current_slot,
+                CString::new("str.split.curr.load")?.as_ptr(),
+            )
+        };
+        let strstr_fn = self.get_extern_function(functions, "strstr")?;
+        let mut strstr_args = vec![current_val, sep_val];
+        let strstr_ty = self.function_type_for("strstr")?;
+        let found = unsafe {
+            LLVMBuildCall2(
+                self.builder,
+                strstr_ty,
+                strstr_fn,
+                strstr_args.as_mut_ptr(),
+                strstr_args.len() as u32,
+                CString::new("str.split.find")?.as_ptr(),
+            )
+        };
+        let null_ptr = unsafe { LLVMConstNull(LLVMTypeOf(found)) };
+        let found_null = unsafe {
+            LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                found,
+                null_ptr,
+                CString::new("str.split.found.null")?.as_ptr(),
+            )
+        };
+        unsafe { LLVMBuildCondBr(self.builder, found_null, loop_end, loop_body) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, loop_body) };
+        let current_int = unsafe {
+            LLVMBuildPtrToInt(
+                self.builder,
+                current_val,
+                LLVMInt64TypeInContext(self.context),
+                CString::new("str.split.curr.int")?.as_ptr(),
+            )
+        };
+        let found_int = unsafe {
+            LLVMBuildPtrToInt(
+                self.builder,
+                found,
+                LLVMInt64TypeInContext(self.context),
+                CString::new("str.split.found.int")?.as_ptr(),
+            )
+        };
+        let seg_len = unsafe {
+            LLVMBuildSub(
+                self.builder,
+                found_int,
+                current_int,
+                CString::new("str.split.seg.len")?.as_ptr(),
+            )
+        };
+        let seg_val = self.codegen_string_copy_from_ptr_len(current_val, seg_len, functions)?;
+        self.codegen_vec_push_no_grow(vec_ptr, &Type::String, seg_val)?;
+        let next_ptr = unsafe {
+            LLVMBuildGEP2(
+                self.builder,
+                LLVMInt8TypeInContext(self.context),
+                found,
+                vec![sep_len].as_mut_ptr(),
+                1,
+                CString::new("str.split.next")?.as_ptr(),
+            )
+        };
+        unsafe { LLVMBuildStore(self.builder, next_ptr, current_slot) };
+        unsafe { LLVMBuildBr(self.builder, loop_check) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, loop_end) };
+        let tail_len = self.codegen_string_len_value(current_val, functions)?;
+        let tail_val = self.codegen_string_copy_from_ptr_len(current_val, tail_len, functions)?;
+        self.codegen_vec_push_no_grow(vec_ptr, &Type::String, tail_val)?;
+        unsafe { LLVMBuildBr(self.builder, done_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, done_bb) };
+        let vec_val = unsafe {
+            LLVMBuildLoad2(
+                self.builder,
+                llvm_vec_ty,
+                vec_ptr,
+                CString::new("str.split.load")?.as_ptr(),
+            )
+        };
+        Ok(vec_val)
+    }
+
+    fn codegen_string_compare(
+        &mut self,
+        left: LLVMValueRef,
+        right: LLVMValueRef,
+        len: LLVMValueRef,
+        functions: &HashMap<String, LLVMValueRef>,
+    ) -> Result<LLVMValueRef> {
+        let memcmp_fn = self.get_extern_function(functions, "memcmp")?;
+        let mut args = vec![left, right, len];
+        let memcmp_ty = self.function_type_for("memcmp")?;
+        let cmp_val = unsafe {
+            LLVMBuildCall2(
+                self.builder,
+                memcmp_ty,
+                memcmp_fn,
+                args.as_mut_ptr(),
+                args.len() as u32,
+                CString::new("str.memcmp")?.as_ptr(),
+            )
+        };
+        Ok(cmp_val)
+    }
+
+    fn codegen_string_starts_with(
+        &mut self,
+        base: LocalId,
+        needle: &MirValue,
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+        functions: &HashMap<String, LLVMValueRef>,
+    ) -> Result<LLVMValueRef> {
+        let base_val = self.codegen_value(&MirValue::Local(base), func, local_map)?;
+        let needle_val = self.codegen_value(needle, func, local_map)?;
+        let base_len = self.codegen_string_len_value(base_val, functions)?;
+        let needle_len = self.codegen_string_len_value(needle_val, functions)?;
+        let result = unsafe {
+            let too_long = LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntUGT,
+                needle_len,
+                base_len,
+                CString::new("str.starts.gt")?.as_ptr(),
+            );
+            let parent_bb = LLVMGetInsertBlock(self.builder);
+            let parent_fn = unsafe { LLVMGetBasicBlockParent(parent_bb) };
+            let fail_bb = unsafe {
+                LLVMAppendBasicBlockInContext(
+                    self.context,
+                    parent_fn,
+                    CString::new("str.starts.fail")?.as_ptr(),
+                )
+            };
+            let body_bb = unsafe {
+                LLVMAppendBasicBlockInContext(
+                    self.context,
+                    parent_fn,
+                    CString::new("str.starts.body")?.as_ptr(),
+                )
+            };
+            let done_bb = unsafe {
+                LLVMAppendBasicBlockInContext(
+                    self.context,
+                    parent_fn,
+                    CString::new("str.starts.done")?.as_ptr(),
+                )
+            };
+            unsafe { LLVMBuildCondBr(self.builder, too_long, fail_bb, body_bb) };
+
+            unsafe { LLVMPositionBuilderAtEnd(self.builder, fail_bb) };
+            let false_val = LLVMConstInt(LLVMInt1TypeInContext(self.context), 0, 0);
+            unsafe { LLVMBuildBr(self.builder, done_bb) };
+
+            unsafe { LLVMPositionBuilderAtEnd(self.builder, body_bb) };
+            let cmp_val =
+                self.codegen_string_compare(base_val, needle_val, needle_len, functions)?;
+            let cmp_zero = unsafe {
+                LLVMBuildICmp(
+                    self.builder,
+                    llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                    cmp_val,
+                    LLVMConstInt(LLVMInt32TypeInContext(self.context), 0, 0),
+                    CString::new("str.starts.eq")?.as_ptr(),
+                )
+            };
+            unsafe { LLVMBuildBr(self.builder, done_bb) };
+
+            unsafe { LLVMPositionBuilderAtEnd(self.builder, done_bb) };
+            let phi = unsafe {
+                let phi_name = CString::new("str.starts.result")?;
+                let phi_node = LLVMBuildPhi(
+                    self.builder,
+                    LLVMInt1TypeInContext(self.context),
+                    phi_name.as_ptr(),
+                );
+                let mut vals = vec![false_val, cmp_zero];
+                let mut bbs = vec![fail_bb, body_bb];
+                LLVMAddIncoming(
+                    phi_node,
+                    vals.as_mut_ptr(),
+                    bbs.as_mut_ptr(),
+                    vals.len() as u32,
+                );
+                phi_node
+            };
+            Ok(phi)
+        };
+        result
+    }
+
+    fn codegen_string_ends_with(
+        &mut self,
+        base: LocalId,
+        needle: &MirValue,
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+        functions: &HashMap<String, LLVMValueRef>,
+    ) -> Result<LLVMValueRef> {
+        let base_val = self.codegen_value(&MirValue::Local(base), func, local_map)?;
+        let needle_val = self.codegen_value(needle, func, local_map)?;
+        let base_len = self.codegen_string_len_value(base_val, functions)?;
+        let needle_len = self.codegen_string_len_value(needle_val, functions)?;
+        let result = unsafe {
+            let too_long = LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntUGT,
+                needle_len,
+                base_len,
+                CString::new("str.ends.gt")?.as_ptr(),
+            );
+            let parent_bb = LLVMGetInsertBlock(self.builder);
+            let parent_fn = unsafe { LLVMGetBasicBlockParent(parent_bb) };
+            let fail_bb = unsafe {
+                LLVMAppendBasicBlockInContext(
+                    self.context,
+                    parent_fn,
+                    CString::new("str.ends.fail")?.as_ptr(),
+                )
+            };
+            let body_bb = unsafe {
+                LLVMAppendBasicBlockInContext(
+                    self.context,
+                    parent_fn,
+                    CString::new("str.ends.body")?.as_ptr(),
+                )
+            };
+            let done_bb = unsafe {
+                LLVMAppendBasicBlockInContext(
+                    self.context,
+                    parent_fn,
+                    CString::new("str.ends.done")?.as_ptr(),
+                )
+            };
+            unsafe { LLVMBuildCondBr(self.builder, too_long, fail_bb, body_bb) };
+
+            unsafe { LLVMPositionBuilderAtEnd(self.builder, fail_bb) };
+            let false_val = LLVMConstInt(LLVMInt1TypeInContext(self.context), 0, 0);
+            unsafe { LLVMBuildBr(self.builder, done_bb) };
+
+            unsafe { LLVMPositionBuilderAtEnd(self.builder, body_bb) };
+            let i8_ty = LLVMInt8TypeInContext(self.context);
+            let base_i8 = LLVMBuildBitCast(
+                self.builder,
+                base_val,
+                LLVMPointerType(i8_ty, 0),
+                CString::new("str.ends.cast")?.as_ptr(),
+            );
+            let offset = LLVMBuildSub(
+                self.builder,
+                base_len,
+                needle_len,
+                CString::new("str.ends.offset")?.as_ptr(),
+            );
+            let tail_ptr = LLVMBuildGEP2(
+                self.builder,
+                i8_ty,
+                base_i8,
+                vec![offset].as_mut_ptr(),
+                1,
+                CString::new("str.ends.ptr")?.as_ptr(),
+            );
+            let cmp_val =
+                self.codegen_string_compare(tail_ptr, needle_val, needle_len, functions)?;
+            let cmp_zero = LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                cmp_val,
+                LLVMConstInt(LLVMInt32TypeInContext(self.context), 0, 0),
+                CString::new("str.ends.eq")?.as_ptr(),
+            );
+            LLVMBuildBr(self.builder, done_bb);
+
+            LLVMPositionBuilderAtEnd(self.builder, done_bb);
+            let phi = LLVMBuildPhi(
+                self.builder,
+                LLVMInt1TypeInContext(self.context),
+                CString::new("str.ends.result")?.as_ptr(),
+            );
+            let mut vals = vec![false_val, cmp_zero];
+            let mut bbs = vec![fail_bb, body_bb];
+            LLVMAddIncoming(phi, vals.as_mut_ptr(), bbs.as_mut_ptr(), vals.len() as u32);
+            Ok(phi)
+        };
+        result
+    }
+
     fn codegen_vec_init_with_capacity_value(
         &mut self,
         elem_type: &Type,
@@ -6045,6 +8033,7 @@ impl CodegenContext {
             Type::Own(inner) => self.codegen_drop_own_slot(slot, inner),
             Type::Shared(inner) => self.codegen_drop_shared_slot(slot, inner),
             Type::String => self.codegen_drop_string_slot(slot),
+            Type::Named(name) if name == "File" => self.codegen_drop_file_slot(slot),
             _ => Ok(()),
         }
     }
@@ -6335,7 +8324,7 @@ impl CodegenContext {
             let cast_name = CString::new("own.free.cast")?;
             let cast_ptr = LLVMBuildBitCast(self.builder, ptr, i8_ptr, cast_name.as_ptr());
             let mut args = vec![cast_ptr];
-            let call_name = CString::new("own.free")?;
+            let call_name = CString::new("")?;
             LLVMBuildCall2(
                 self.builder,
                 fn_ty,

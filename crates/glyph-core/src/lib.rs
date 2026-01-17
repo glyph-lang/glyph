@@ -827,6 +827,47 @@ pub mod mir {
             key_type: Type,
             value_type: Type,
         },
+        FileOpen {
+            path: MirValue,
+            create: bool,
+        },
+        FileReadToString {
+            file: LocalId,
+        },
+        FileWriteString {
+            file: LocalId,
+            contents: MirValue,
+        },
+        FileClose {
+            file: LocalId,
+        },
+        StringLen {
+            base: LocalId,
+        },
+        StringConcat {
+            base: LocalId,
+            value: MirValue,
+        },
+        StringSlice {
+            base: LocalId,
+            start: MirValue,
+            len: MirValue,
+        },
+        StringTrim {
+            base: LocalId,
+        },
+        StringSplit {
+            base: LocalId,
+            sep: MirValue,
+        },
+        StringStartsWith {
+            base: LocalId,
+            needle: MirValue,
+        },
+        StringEndsWith {
+            base: LocalId,
+            needle: MirValue,
+        },
         OwnNew {
             value: MirValue,
             elem_type: Type,

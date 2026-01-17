@@ -194,6 +194,57 @@ pub fn std_modules() -> HashMap<String, Module> {
         span,
     };
 
+    let fseek_extern = ExternFunctionDecl {
+        abi: Some("C".into()),
+        name: Ident("fseek".into()),
+        params: vec![
+            Param {
+                name: Ident("file".into()),
+                ty: Some(tp("RawPtr<u8>", span)),
+                span,
+            },
+            Param {
+                name: Ident("offset".into()),
+                ty: Some(tp("i64", span)),
+                span,
+            },
+            Param {
+                name: Ident("origin".into()),
+                ty: Some(tp("i32", span)),
+                span,
+            },
+        ],
+        ret_type: Some(tp("i32", span)),
+        link_name: Some("fseek".into()),
+        span,
+    };
+
+    let ftell_extern = ExternFunctionDecl {
+        abi: Some("C".into()),
+        name: Ident("ftell".into()),
+        params: vec![Param {
+            name: Ident("file".into()),
+            ty: Some(tp("RawPtr<u8>", span)),
+            span,
+        }],
+        ret_type: Some(tp("i64", span)),
+        link_name: Some("ftell".into()),
+        span,
+    };
+
+    let rewind_extern = ExternFunctionDecl {
+        abi: Some("C".into()),
+        name: Ident("rewind".into()),
+        params: vec![Param {
+            name: Ident("file".into()),
+            ty: Some(tp("RawPtr<u8>", span)),
+            span,
+        }],
+        ret_type: None,
+        link_name: Some("rewind".into()),
+        span,
+    };
+
     let println_extern = ExternFunctionDecl {
         name: Ident("println".into()),
         abi: Some("C".into()),
@@ -207,10 +258,29 @@ pub fn std_modules() -> HashMap<String, Module> {
         span,
     };
 
+    let file_struct = StructDef {
+        name: Ident("File".into()),
+        generic_params: vec![],
+        fields: vec![glyph_core::ast::FieldDef {
+            name: Ident("handle".into()),
+            ty: TypeExpr::App {
+                base: Box::new(tp("RawPtr", span)),
+                args: vec![tp("u8", span)],
+                span,
+            },
+            span,
+        }],
+        interfaces: vec![],
+        methods: Vec::new(),
+        inline_impls: Vec::new(),
+        span,
+    };
+
     let std_io_module = Module {
         imports: vec![],
         items: vec![
             glyph_core::ast::Item::Struct(stdout_struct),
+            glyph_core::ast::Item::Struct(file_struct),
             glyph_core::ast::Item::ExternFunction(puts_extern),
             glyph_core::ast::Item::ExternFunction(raw_write_extern),
             glyph_core::ast::Item::ExternFunction(fopen_extern),
@@ -218,6 +288,9 @@ pub fn std_modules() -> HashMap<String, Module> {
             glyph_core::ast::Item::ExternFunction(read_extern),
             glyph_core::ast::Item::ExternFunction(fclose_extern),
             glyph_core::ast::Item::ExternFunction(fread_extern),
+            glyph_core::ast::Item::ExternFunction(fseek_extern),
+            glyph_core::ast::Item::ExternFunction(ftell_extern),
+            glyph_core::ast::Item::ExternFunction(rewind_extern),
             glyph_core::ast::Item::ExternFunction(println_extern),
         ],
     };
@@ -412,9 +485,136 @@ pub fn std_modules() -> HashMap<String, Module> {
         span,
     };
 
+    let strlen_extern = ExternFunctionDecl {
+        abi: Some("C".into()),
+        name: Ident("strlen".into()),
+        params: vec![Param {
+            name: Ident("input".into()),
+            ty: Some(tp("str", span)),
+            span,
+        }],
+        ret_type: Some(tp("usize", span)),
+        link_name: Some("strlen".into()),
+        span,
+    };
+
+    let memcmp_extern = ExternFunctionDecl {
+        abi: Some("C".into()),
+        name: Ident("memcmp".into()),
+        params: vec![
+            Param {
+                name: Ident("lhs".into()),
+                ty: Some(TypeExpr::App {
+                    base: Box::new(tp("RawPtr", span)),
+                    args: vec![tp("u8", span)],
+                    span,
+                }),
+                span,
+            },
+            Param {
+                name: Ident("rhs".into()),
+                ty: Some(TypeExpr::App {
+                    base: Box::new(tp("RawPtr", span)),
+                    args: vec![tp("u8", span)],
+                    span,
+                }),
+                span,
+            },
+            Param {
+                name: Ident("len".into()),
+                ty: Some(tp("usize", span)),
+                span,
+            },
+        ],
+        ret_type: Some(tp("i32", span)),
+        link_name: Some("memcmp".into()),
+        span,
+    };
+
+    let memcpy_extern = ExternFunctionDecl {
+        abi: Some("C".into()),
+        name: Ident("memcpy".into()),
+        params: vec![
+            Param {
+                name: Ident("dst".into()),
+                ty: Some(TypeExpr::App {
+                    base: Box::new(tp("RawPtr", span)),
+                    args: vec![tp("u8", span)],
+                    span,
+                }),
+                span,
+            },
+            Param {
+                name: Ident("src".into()),
+                ty: Some(TypeExpr::App {
+                    base: Box::new(tp("RawPtr", span)),
+                    args: vec![tp("u8", span)],
+                    span,
+                }),
+                span,
+            },
+            Param {
+                name: Ident("len".into()),
+                ty: Some(tp("usize", span)),
+                span,
+            },
+        ],
+        ret_type: Some(TypeExpr::App {
+            base: Box::new(tp("RawPtr", span)),
+            args: vec![tp("u8", span)],
+            span,
+        }),
+        link_name: Some("memcpy".into()),
+        span,
+    };
+
+    let strstr_extern = ExternFunctionDecl {
+        abi: Some("C".into()),
+        name: Ident("strstr".into()),
+        params: vec![
+            Param {
+                name: Ident("haystack".into()),
+                ty: Some(tp("str", span)),
+                span,
+            },
+            Param {
+                name: Ident("needle".into()),
+                ty: Some(tp("str", span)),
+                span,
+            },
+        ],
+        ret_type: Some(TypeExpr::App {
+            base: Box::new(tp("RawPtr", span)),
+            args: vec![tp("u8", span)],
+            span,
+        }),
+        link_name: Some("strstr".into()),
+        span,
+    };
+
+    let isspace_extern = ExternFunctionDecl {
+        abi: Some("C".into()),
+        name: Ident("isspace".into()),
+        params: vec![Param {
+            name: Ident("ch".into()),
+            ty: Some(tp("i32", span)),
+            span,
+        }],
+        ret_type: Some(tp("i32", span)),
+        link_name: Some("isspace".into()),
+        span,
+    };
+
     let std_string_module = Module {
         imports: vec![],
-        items: vec![glyph_core::ast::Item::ExternFunction(strdup_extern)],
+        items: vec![
+            glyph_core::ast::Item::ExternFunction(strdup_extern),
+            glyph_core::ast::Item::ExternFunction(strlen_extern),
+            glyph_core::ast::Item::ExternFunction(memcmp_extern),
+            glyph_core::ast::Item::ExternFunction(memcpy_extern),
+            glyph_core::ast::Item::ExternFunction(strstr_extern),
+            glyph_core::ast::Item::ExternFunction(isspace_extern),
+        ],
     };
     modules.insert("std/string".into(), std_string_module);
 

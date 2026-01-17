@@ -1867,6 +1867,9 @@ fn lower_method_call<'a>(
                 ctx.error(".len() does not take arguments", Some(span));
                 return None;
             }
+            if let Some(rv) = lower_string_len(ctx, receiver, args, span) {
+                return Some(rv);
+            }
             if let Some(rv) = lower_vec_len(ctx, receiver, span) {
                 return Some(rv);
             }
@@ -1889,6 +1892,15 @@ fn lower_method_call<'a>(
         "has" => return lower_map_has(ctx, receiver, args, span),
         "keys" => return lower_map_keys(ctx, receiver, args, span),
         "vals" => return lower_map_vals(ctx, receiver, args, span),
+        "read_to_string" => return lower_file_read_to_string(ctx, receiver, args, span),
+        "write_string" => return lower_file_write_string(ctx, receiver, args, span),
+        "close" => return lower_file_close(ctx, receiver, args, span),
+        "concat" => return lower_string_concat(ctx, receiver, args, span),
+        "slice" => return lower_string_slice(ctx, receiver, args, span),
+        "trim" => return lower_string_trim(ctx, receiver, args, span),
+        "split" => return lower_string_split(ctx, receiver, args, span),
+        "starts_with" => return lower_string_starts_with(ctx, receiver, args, span),
+        "ends_with" => return lower_string_ends_with(ctx, receiver, args, span),
         "into_raw" => {
             if !args.is_empty() {
                 ctx.error("into_raw() does not take arguments", Some(span));
@@ -2137,6 +2149,8 @@ fn lower_static_builtin<'a>(
         "Vec::with_capacity" => lower_vec_static_with_capacity(ctx, args, span),
         "Map::new" => lower_map_static_new(ctx, args, span),
         "Map::with_capacity" => lower_map_static_with_capacity(ctx, args, span),
+        "File::open" => lower_file_open(ctx, args, span, false),
+        "File::create" => lower_file_open(ctx, args, span, true),
         "String::from_str" => lower_string_from(ctx, args, span),
         "print" | "std::print" => lower_print_builtin(ctx, args, span, false, false),
         "println" | "std::println" => lower_print_builtin(ctx, args, span, true, false),
@@ -2726,6 +2740,319 @@ fn lower_vec_static_with_capacity<'a>(
         value: Rvalue::VecWithCapacity {
             elem_type,
             capacity,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn file_result_type(ok_type: Type) -> Type {
+    Type::App {
+        base: "Result".into(),
+        args: vec![ok_type, Type::Named("Err".into())],
+    }
+}
+
+fn file_receiver_local<'a>(ctx: &mut LowerCtx<'a>, base: &'a Expr, span: Span) -> Option<LocalId> {
+    let receiver_val = lower_value(ctx, base)?;
+    let receiver_local = match receiver_val {
+        MirValue::Local(id) => id,
+        _ => {
+            ctx.error("file receiver must be a local", Some(span));
+            return None;
+        }
+    };
+    let receiver_ty = ctx
+        .locals
+        .get(receiver_local.0 as usize)
+        .and_then(|l| l.ty.as_ref());
+    let is_file = matches!(receiver_ty, Some(Type::Named(name)) if name == "File")
+        || matches!(receiver_ty, Some(Type::Ref(inner, _)) if matches!(inner.as_ref(), Type::Named(name) if name == "File"));
+    if !is_file {
+        ctx.error("file methods require a File receiver", Some(span));
+        return None;
+    }
+    Some(receiver_local)
+}
+
+fn string_receiver_local<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    span: Span,
+) -> Option<LocalId> {
+    let receiver_val = lower_value(ctx, base)?;
+    let receiver_local = match receiver_val {
+        MirValue::Local(id) => id,
+        _ => {
+            ctx.error("string receiver must be a local", Some(span));
+            return None;
+        }
+    };
+    let receiver_ty = ctx
+        .locals
+        .get(receiver_local.0 as usize)
+        .and_then(|l| l.ty.as_ref());
+    let is_string = matches!(receiver_ty, Some(Type::String))
+        || matches!(receiver_ty, Some(Type::Str))
+        || matches!(receiver_ty, Some(Type::Ref(inner, _)) if matches!(inner.as_ref(), Type::String | Type::Str));
+    if !is_string {
+        ctx.error("string methods require a String receiver", Some(span));
+        return None;
+    }
+    Some(receiver_local)
+}
+
+fn lower_string_len<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if !args.is_empty() {
+        ctx.error("len() does not take arguments", Some(span));
+        return None;
+    }
+    let receiver_local = string_receiver_local(ctx, base, span)?;
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::Usize);
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::StringLen {
+            base: receiver_local,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_string_concat<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if args.len() != 1 {
+        ctx.error("concat() expects one argument", Some(span));
+        return None;
+    }
+    let receiver_local = string_receiver_local(ctx, base, span)?;
+    let value = lower_value(ctx, &args[0])?;
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::String);
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::StringConcat {
+            base: receiver_local,
+            value,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_string_slice<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if args.len() != 2 {
+        ctx.error("slice() expects (start, len)", Some(span));
+        return None;
+    }
+    let receiver_local = string_receiver_local(ctx, base, span)?;
+    let start = lower_value(ctx, &args[0])?;
+    let len = lower_value(ctx, &args[1])?;
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::String);
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::StringSlice {
+            base: receiver_local,
+            start,
+            len,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_string_trim<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if !args.is_empty() {
+        ctx.error("trim() does not take arguments", Some(span));
+        return None;
+    }
+    let receiver_local = string_receiver_local(ctx, base, span)?;
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::String);
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::StringTrim {
+            base: receiver_local,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_string_split<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if args.len() != 1 {
+        ctx.error("split() expects a separator", Some(span));
+        return None;
+    }
+    let receiver_local = string_receiver_local(ctx, base, span)?;
+    let sep = lower_value(ctx, &args[0])?;
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::App {
+        base: "Vec".into(),
+        args: vec![Type::String],
+    });
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::StringSplit {
+            base: receiver_local,
+            sep,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_string_starts_with<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if args.len() != 1 {
+        ctx.error("starts_with() expects a prefix", Some(span));
+        return None;
+    }
+    let receiver_local = string_receiver_local(ctx, base, span)?;
+    let needle = lower_value(ctx, &args[0])?;
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::Bool);
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::StringStartsWith {
+            base: receiver_local,
+            needle,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_string_ends_with<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if args.len() != 1 {
+        ctx.error("ends_with() expects a suffix", Some(span));
+        return None;
+    }
+    let receiver_local = string_receiver_local(ctx, base, span)?;
+    let needle = lower_value(ctx, &args[0])?;
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::Bool);
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::StringEndsWith {
+            base: receiver_local,
+            needle,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_file_open<'a>(
+    ctx: &mut LowerCtx<'a>,
+    args: &'a [Expr],
+    span: Span,
+    create: bool,
+) -> Option<Rvalue> {
+    if args.len() != 1 {
+        ctx.error("File::open expects a path", Some(span));
+        return None;
+    }
+    let path = lower_value(ctx, &args[0])?;
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(file_result_type(Type::Named("File".into())));
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::FileOpen { path, create },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_file_read_to_string<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if !args.is_empty() {
+        ctx.error("read_to_string() takes no arguments", Some(span));
+        return None;
+    }
+    let receiver_local = file_receiver_local(ctx, base, span)?;
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(file_result_type(Type::String));
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::FileReadToString {
+            file: receiver_local,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_file_write_string<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if args.len() != 1 {
+        ctx.error("write_string() expects one argument", Some(span));
+        return None;
+    }
+    let receiver_local = file_receiver_local(ctx, base, span)?;
+    let contents = lower_value(ctx, &args[0])?;
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(file_result_type(Type::U32));
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::FileWriteString {
+            file: receiver_local,
+            contents,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_file_close<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if !args.is_empty() {
+        ctx.error("close() takes no arguments", Some(span));
+        return None;
+    }
+    let receiver_local = file_receiver_local(ctx, base, span)?;
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(file_result_type(Type::I32));
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::FileClose {
+            file: receiver_local,
         },
     });
     Some(Rvalue::Move(tmp))
