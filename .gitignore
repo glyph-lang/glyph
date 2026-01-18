@@ -1,6 +1,7 @@
 /target
 **/target
 **/.DS_Store
-docs/
+docs/*
 !docs/reports/
+!docs/book/
 .opencode

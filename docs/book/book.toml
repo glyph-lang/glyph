@@ -1,0 +1,6 @@
+[book]
+title = "Glyph"
+authors = ["Glyph contributors"]
+
+[build]
+build-dir = "book"
