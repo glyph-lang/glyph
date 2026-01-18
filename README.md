@@ -68,17 +68,34 @@ fn main() -> i32 {
 }
 ```
 
-**Pattern matching and error handling:**
+**Pattern matching with match expressions:**
 
 ```glyph
-fn classify(n: i32) -> &str {
-  if n < 0 { ret "negative" }
-  if n == 0 { ret "zero" }
-  if n < 10 { ret "small" }
-  if n < 100 { ret "medium" }
-  ret "large"
+fn classify(opt: Option<i32>) -> &str {
+  match opt {
+    Some(n) => {
+      if n < 0 { ret "negative" }
+      if n < 10 { ret "small" }
+      ret "large"
+    },
+    None => ret "empty",
+  }
 }
 
+fn handle_result(res: Result<File, Error>) -> i32 {
+  match res {
+    Ok(file) => {
+      let _ = file.write_string("success")
+      0
+    },
+    Err(e) => 1,
+  }
+}
+```
+
+**Error handling with ? operator:**
+
+```glyph
 fn read_file(path: &str) -> Result<String, Error> {
   let f = open(path)?
   let s = f.read()?
