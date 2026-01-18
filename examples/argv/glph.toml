@@ -1,0 +1,10 @@
+[package]
+name = "argv"
+version = "0.1.0"
+
+[dependencies]
+# none yet
+
+[[bin]]
+name = "argv"
+path = "src/main.glyph"

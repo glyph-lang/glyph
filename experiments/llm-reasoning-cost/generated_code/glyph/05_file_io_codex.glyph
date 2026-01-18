@@ -1,0 +1,8 @@
+from std/io import File, Error
+
+fn write_greeting(filename: &str) -> Result<(), Error> {
+  let mut f = File::create(filename)?
+  f.write("Hello from the program!")?
+  f.close()?
+  ret Ok(())
+}

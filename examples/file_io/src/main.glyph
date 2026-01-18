@@ -1,0 +1,19 @@
+from std/io import File
+from std import println
+from std/enums import Result
+
+fn main() -> i32 {
+  let created = File::create("out.txt")
+  let status = match created {
+    Ok(file) => {
+      let _ = file.write_string(String::from_str("hello from glyph"))
+      let _ = file.close()
+      0
+    },
+    Err(_err) => {
+      println("failed to create file")
+      1
+    },
+  }
+  ret status
+}

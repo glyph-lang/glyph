@@ -1,0 +1,23 @@
+fn main() -> i32 {
+  let base = String::from_str("  hello world  ")
+  let _len = base.len()
+
+  let base_concat = String::from_str("  hello world  ")
+  let _concat = base_concat.concat(String::from_str("!"))
+
+  let base_slice = String::from_str("  hello world  ")
+  let _slice = base_slice.slice(2, 5)
+
+  let base_trim = String::from_str("  hello world  ")
+  let _trimmed = base_trim.trim()
+
+  let base_split = String::from_str("  hello world  ")
+  let _split = base_split.split(String::from_str(" "))
+
+  let base_starts = String::from_str("  hello world  ")
+  let _starts = base_starts.starts_with(String::from_str("  he"))
+
+  let base_ends = String::from_str("  hello world  ")
+  let _ends = base_ends.ends_with(String::from_str("ld  "))
+  ret 0
+}

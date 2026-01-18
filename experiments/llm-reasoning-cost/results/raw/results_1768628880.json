@@ -1,0 +1,67 @@
+[
+  {
+    "language": "glyph",
+    "model": "gpt-5.1-codex-mini",
+    "task": "02_fibonacci",
+    "input_tokens": 847,
+    "output_tokens": 50,
+    "total_tokens": 897,
+    "adjusted_tokens": 207,
+    "generated_code": "",
+    "compilation_success": false,
+    "compilation_error": "Error: IO error for operation on /var/folders/rf/7ynffqvj3kdcwsc0bz3f36n40000gn/T/com.apple.appleaccountd/TemporaryItems: Operation not permitted (os error 1)\n\nCaused by:\n    Operation not permitted (os error 1)\n",
+    "timestamp": "2026-01-16 21:47:51"
+  },
+  {
+    "language": "c",
+    "model": "gpt-5.1-codex-mini",
+    "task": "02_fibonacci",
+    "input_tokens": 157,
+    "output_tokens": 180,
+    "total_tokens": 337,
+    "adjusted_tokens": 337,
+    "generated_code": "",
+    "compilation_success": true,
+    "compilation_error": "",
+    "timestamp": "2026-01-16 21:47:53"
+  },
+  {
+    "language": "cpp",
+    "model": "gpt-5.1-codex-mini",
+    "task": "02_fibonacci",
+    "input_tokens": 157,
+    "output_tokens": 56,
+    "total_tokens": 213,
+    "adjusted_tokens": 213,
+    "generated_code": "",
+    "compilation_success": true,
+    "compilation_error": "",
+    "timestamp": "2026-01-16 21:47:55"
+  },
+  {
+    "language": "go",
+    "model": "gpt-5.1-codex-mini",
+    "task": "02_fibonacci",
+    "input_tokens": 157,
+    "output_tokens": 61,
+    "total_tokens": 218,
+    "adjusted_tokens": 218,
+    "generated_code": "",
+    "compilation_success": false,
+    "compilation_error": "[Errno 2] No such file or directory: 'go'",
+    "timestamp": "2026-01-16 21:47:58"
+  },
+  {
+    "language": "java",
+    "model": "gpt-5.1-codex-mini",
+    "task": "02_fibonacci",
+    "input_tokens": 157,
+    "output_tokens": 56,
+    "total_tokens": 213,
+    "adjusted_tokens": 213,
+    "generated_code": "",
+    "compilation_success": false,
+    "compilation_error": "Could not find public class declaration",
+    "timestamp": "2026-01-16 21:48:00"
+  }
+]

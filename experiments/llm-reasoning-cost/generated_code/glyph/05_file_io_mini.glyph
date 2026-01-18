@@ -1,0 +1,11 @@
+```glyph
+from std/io import File
+from std/io import Error
+from std import Result
+
+fn write_greeting(filename: &str) -> Result<(), Error> {
+  let f = File::create(filename)?    // Create/open the file
+  f.write("Hello from the program!")? // Write the greeting
+  ret Ok(())                          // Return success
+}
+```

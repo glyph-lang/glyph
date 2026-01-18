@@ -1,0 +1,11 @@
+from std/sys import argv
+from std import println
+
+fn main() -> i32 {
+  let count = argv.len()
+  println("argv example")
+  if count == 0 {
+    ret 1
+  }
+  ret 0
+}

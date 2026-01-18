@@ -1,0 +1,10 @@
+[package]
+name = "file_io"
+version = "0.1.0"
+
+[dependencies]
+# none yet
+
+[[bin]]
+name = "file_io"
+path = "src/main.glyph"

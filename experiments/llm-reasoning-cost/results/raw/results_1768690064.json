@@ -1,0 +1,93 @@
+[
+  {
+    "language": "glyph",
+    "model": "gpt-5.1-codex",
+    "task": "02_fibonacci",
+    "input_tokens": 847,
+    "output_tokens": 50,
+    "total_tokens": 897,
+    "adjusted_tokens": 207,
+    "generated_code": "fn fib(n: i32) -> i32 {\n  if n < 2 {\n    ret n\n  } else {\n    ret fib(n - 1) + fib(n - 2)\n  }\n}",
+    "compilation_success": false,
+    "compilation_error": "Error: IO error for operation on /var/folders/rf/7ynffqvj3kdcwsc0bz3f36n40000gn/T/com.apple.appleaccountd/TemporaryItems: Operation not permitted (os error 1)\n\nCaused by:\n    Operation not permitted (os error 1)\n",
+    "timestamp": "2026-01-17 14:47:30"
+  },
+  {
+    "language": "rust",
+    "model": "gpt-5.1-codex",
+    "task": "02_fibonacci",
+    "input_tokens": 157,
+    "output_tokens": 48,
+    "total_tokens": 205,
+    "adjusted_tokens": 205,
+    "generated_code": "fn fib(n: i32) -> i32 {\n    if n < 2 {\n        n\n    } else {\n        fib(n - 1) + fib(n - 2)\n    }\n}",
+    "compilation_success": false,
+    "compilation_error": "warning: function `fib` is never used\n --> /var/folders/rf/7ynffqvj3kdcwsc0bz3f36n40000gn/T/tmp_hli3h85.rs:1:4\n  |\n1 | fn fib(n: i32) -> i32 {\n  |    ^^^\n  |\n  = note: `#[warn(dead_code)]` on by default\n\nerror: couldn't create a temp dir: Operation not permitted (os error 1) at path \"/dev/rmetaohhiqR\"\n\nerror: aborting due to 1 previous error; 1 warning emitted\n\n",
+    "timestamp": "2026-01-17 14:47:33"
+  },
+  {
+    "language": "c",
+    "model": "gpt-5.1-codex",
+    "task": "02_fibonacci",
+    "input_tokens": 157,
+    "output_tokens": 56,
+    "total_tokens": 213,
+    "adjusted_tokens": 213,
+    "generated_code": "```c\n#include <stdint.h>\n\nint32_t fib(int32_t n) {\n    if (n < 2) {\n        return n;\n    }\n    return fib(n - 1) + fib(n - 2);\n}\n```",
+    "compilation_success": false,
+    "compilation_error": "/var/folders/rf/7ynffqvj3kdcwsc0bz3f36n40000gn/T/tmpwsxn6y6x.c:1:1: error: expected identifier or '('\n    1 | ```c\n      | ^\nIn file included from /var/folders/rf/7ynffqvj3kdcwsc0bz3f36n40000gn/T/tmpwsxn6y6x.c:2:\nIn file included from /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/17/include/stdint.h:56:\n/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/stdint.h:29:9: error: unknown type name 'int8_t'; did you mean 'uint8_t'?\n   29 | typedef int8_t           int_least8_t;\n      |         ^\n/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/_types/_uint8_t.h:31:23: note: 'uint8_t' declared here\n   31 | typedef unsigned char uint8_t;\n      |                       ^\nIn file included from /var/folders/rf/7ynffqvj3kdcwsc0bz3f36n40000gn/T/tmpwsxn6y6x.c:2:\nIn file included from /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/17/include/stdint.h:56:\n/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/stdint.h:40:9: error: unknown type name 'int8_t'; did you mean 'uint8_t'?\n   40 | typedef int8_t            int_fast8_t;\n      |         ^\n/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/_types/_uint8_t.h:31:23: note: 'uint8_t' declared here\n   31 | typedef unsigned char uint8_t;\n      |                       ^\n/var/folders/rf/7ynffqvj3kdcwsc0bz3f36n40000gn/T/tmpwsxn6y6x.c:10:1: error: expected identifier or '('\n   10 | ```\n      | ^\n4 errors generated.\n",
+    "timestamp": "2026-01-17 14:47:35"
+  },
+  {
+    "language": "cpp",
+    "model": "gpt-5.1-codex",
+    "task": "02_fibonacci",
+    "input_tokens": 157,
+    "output_tokens": 48,
+    "total_tokens": 205,
+    "adjusted_tokens": 205,
+    "generated_code": "#include <cstdint>\n\nint32_t fib(int32_t n) {\n    if (n < 2) return n;\n    return fib(n - 1) + fib(n - 2);\n}",
+    "compilation_success": true,
+    "compilation_error": "",
+    "timestamp": "2026-01-17 14:47:37"
+  },
+  {
+    "language": "go",
+    "model": "gpt-5.1-codex",
+    "task": "02_fibonacci",
+    "input_tokens": 157,
+    "output_tokens": 171,
+    "total_tokens": 328,
+    "adjusted_tokens": 328,
+    "generated_code": "package main\n\nfunc fib(n int32) int32 {\n\tif n < 2 {\n\t\treturn n\n\t}\n\treturn fib(n-1) + fib(n-2)\n}",
+    "compilation_success": false,
+    "compilation_error": "[Errno 2] No such file or directory: 'go'",
+    "timestamp": "2026-01-17 14:47:40"
+  },
+  {
+    "language": "java",
+    "model": "gpt-5.1-codex",
+    "task": "02_fibonacci",
+    "input_tokens": 157,
+    "output_tokens": 52,
+    "total_tokens": 209,
+    "adjusted_tokens": 209,
+    "generated_code": "public class Fibonacci {\n    public static int fib(int n) {\n        if (n < 2) {\n            return n;\n        }\n        return fib(n - 1) + fib(n - 2);\n    }\n}",
+    "compilation_success": true,
+    "compilation_error": "",
+    "timestamp": "2026-01-17 14:47:42"
+  },
+  {
+    "language": "python",
+    "model": "gpt-5.1-codex",
+    "task": "02_fibonacci",
+    "input_tokens": 157,
+    "output_tokens": 45,
+    "total_tokens": 202,
+    "adjusted_tokens": 202,
+    "generated_code": "```python\ndef fib(n: int) -> int:\n    if n < 2:\n        return n\n    return fib(n - 1) + fib(n - 2)\n```",
+    "compilation_success": false,
+    "compilation_error": "  File \"/var/folders/rf/7ynffqvj3kdcwsc0bz3f36n40000gn/T/tmpnbojmldc.py\", line 1\n    ```python\n    ^\nSyntaxError: invalid syntax\n",
+    "timestamp": "2026-01-17 14:47:44"
+  }
+]
