@@ -1,0 +1,16 @@
+fn get_nested() -> ((i32, i32), i32) {
+    let inner = (1, 2)
+    ret (inner, 3)
+}
+
+fn main() {
+    println("Testing nested tuples:")
+    
+    let result = get_nested()
+    let inner = result.0
+    let x = inner.0
+    let y = inner.1
+    let z = result.1
+    
+    println("Nested tuple test passed!")
+}

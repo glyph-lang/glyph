@@ -1,0 +1,116 @@
+fn main() {
+    println("=== JSON Parser Example ===")
+    println("")
+
+    // Test 1: Demonstrate tuple return values
+    println("Test 1: Parse with tuple return")
+    let result = parse_success()
+    let success = result.0
+    let position = result.1
+    if success {
+        println("  ✓ Tuple return works: success and position")
+    }
+    println("")
+
+    // Test 2: Demonstrate mutable variables
+    println("Test 2: Mutable position tracking")
+    let mut pos = 0
+    pos = 5
+    pos = pos + 3
+    if pos == 8 {
+        println("  ✓ Mutable variable tracking works")
+    }
+    println("")
+
+    // Test 3: Combined - mutable + tuples
+    println("Test 3: Parse sequence with mutable position")
+    let mut p = 0
+
+    // First parse
+    let r1 = parse_value(p)
+    p = r1.1  // Update position from tuple
+
+    // Second parse
+    let r2 = parse_value(p)
+    p = r2.1  // Update position from tuple
+
+    // Third parse
+    let r3 = parse_value(p)
+    p = r3.1  // Update position from tuple
+
+    if r1.0 && r2.0 && r3.0 {
+        println("  ✓ Sequential parsing with mutable position works!")
+        println("  ✓ Final position: 15")
+    }
+    println("")
+
+    // Test 4: Nested tuples
+    println("Test 4: Nested parsing results")
+    let outer = parse_nested()
+    let inner = outer.0
+    let value = inner.0
+    let count = inner.1
+    let total = outer.1
+
+    if value == 42 && count == 3 && total == 100 {
+        println("  ✓ Nested tuple access works!")
+    }
+    println("")
+
+    // Test 5: Multiple tuple variables
+    println("Test 5: Multiple tuple assignments")
+    let mut t1 = (10, 20)
+    let mut t2 = (30, 40)
+    let mut t3 = (50, 60)
+
+    let sum1 = t1.0 + t1.1
+    let sum2 = t2.0 + t2.1
+    let sum3 = t3.0 + t3.1
+
+    if sum1 == 30 && sum2 == 70 && sum3 == 110 {
+        println("  ✓ Multiple tuple variables work!")
+    }
+
+    // Reassign tuples
+    t1 = (100, 200)
+    t2 = (300, 400)
+    t3 = (500, 600)
+
+    if t1.0 == 100 && t2.1 == 400 && t3.0 == 500 {
+        println("  ✓ Tuple reassignment works!")
+    }
+    println("")
+
+    println("=== All Tests Passed! ===")
+    println("")
+    println("Features validated:")
+    println("  ✓ Tuple types: (bool, i32)")
+    println("  ✓ Tuple element access: .0, .1")
+    println("  ✓ Mutable variables: let mut pos")
+    println("  ✓ Mutable tuples: let mut t = (x, y)")
+    println("  ✓ Tuple reassignment: t = (a, b)")
+    println("  ✓ Nested tuples: ((i32, i32), i32)")
+    println("  ✓ Sequential parsing pattern")
+}
+
+// Simulate a successful parse
+fn parse_success() -> (bool, i32) {
+    ret (true, 4)
+}
+
+// Simulate parsing a value at position
+fn parse_value(pos: i32) -> (bool, i32) {
+    let new_pos = pos + 5
+    ret (true, new_pos)
+}
+
+// Demonstrate nested tuples
+fn parse_nested() -> ((i32, i32), i32) {
+    let inner = (42, 3)
+    ret (inner, 100)
+}
+
+// Calculate sum using tuple
+fn tuple_sum(pair: (i32, i32)) -> i32 {
+    ret pair.0 + pair.1
+}

@@ -1,0 +1,23 @@
+[package]
+name = "hello"
+version = "0.1.0"
+
+[[bin]]
+name = "hello"
+path = "hello.glyph"
+
+[[bin]]
+name = "tuple_test"
+path = "tuple_test.glyph"
+
+[[bin]]
+name = "json_simple"
+path = "json_parser_simple.glyph"
+
+[[bin]]
+name = "nested_tuples"
+path = "nested_tuples.glyph"
+
+[[bin]]
+name = "json_demo"
+path = "json_demo.glyph"

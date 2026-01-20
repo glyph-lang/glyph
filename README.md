@@ -169,6 +169,30 @@ export LLVM_SYS_201_PREFIX="/opt/homebrew/opt/llvm"
 cargo build --release
 ```
 
+### Install to System Path (Recommended)
+
+With [just](https://github.com/casey/just) installed:
+
+```bash
+# Install the glyph project tool
+just install
+
+# Or install all CLI tools
+just install-all
+```
+
+Without just:
+
+```bash
+# Install the glyph project tool
+cargo install --path crates/glyph-cli --bin glyph
+
+# Or install all tools
+cargo install --path crates/glyph-cli
+```
+
+This installs binaries to `~/.cargo/bin/`, which should be in your PATH.
+
 ### Try It Out
 
 ```bash
@@ -208,7 +232,22 @@ mdbook build docs/book
 
 ## 🏗️ Project Workflow
 
-Glyph supports project-based workflows with `glph.toml`:
+### Initialize a New Project
+
+Create a new Glyph project with a single command:
+
+```bash
+glyph init my-project
+cd my-project
+glyph build
+glyph run
+```
+
+This creates a `glyph.toml` manifest and a `src/main.glyph` file with a basic "Hello, Glyph!" program.
+
+### Manual Setup
+
+Alternatively, create a `glyph.toml` manually:
 
 ```toml
 [package]
@@ -255,7 +294,7 @@ The repo contains a complete working compiler pipeline:
 
 **CLI Tools** (`crates/glyph-cli`)
 - `glyph-cli` — Direct compiler driver (check/build/run)
-- `glyph` — Project workflow tool (build via `glph.toml`)
+- `glyph` — Project workflow tool (build via `glyph.toml`)
 
 **Future Tooling** (placeholders)
 - `glyphfmt` — Code formatter

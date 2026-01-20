@@ -3,7 +3,7 @@
 This example demonstrates basic `Map<K, V>` usage with add/update/get/has/keys/vals/del.
 
 ## Files
-- `glph.toml` — package definition
+- `glyph.toml` — package definition
 - `src/main.glyph` — example program
 
 ## Build and run

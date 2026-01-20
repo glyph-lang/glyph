@@ -343,7 +343,8 @@ impl<'a> Parser<'a> {
                 TypeExpr::Path { span, .. }
                 | TypeExpr::App { span, .. }
                 | TypeExpr::Ref { span, .. }
-                | TypeExpr::Array { span, .. } => span.end,
+                | TypeExpr::Array { span, .. }
+                | TypeExpr::Tuple { span, .. } => span.end,
             };
 
             let field = FieldDef {
@@ -620,6 +621,43 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_type_expr(&mut self) -> Option<TypeExpr> {
+        // Tuple type: (T1, T2, ...) or parenthesized type: (T)
+        if self.at(TokenKind::LParen) {
+            let lp = self.advance().unwrap();
+
+            // Empty tuple: ()
+            if self.at(TokenKind::RParen) {
+                let rp = self.advance().unwrap();
+                return Some(TypeExpr::Tuple {
+                    elements: vec![],
+                    span: Span::new(lp.span.start, rp.span.end),
+                });
+            }
+
+            let first = self.parse_type_expr()?;
+
+            // Check if it's a tuple (has comma) or just parenthesized
+            if self.at(TokenKind::Comma) {
+                let mut elements = vec![first];
+                while self.at(TokenKind::Comma) {
+                    self.advance();
+                    if self.at(TokenKind::RParen) {
+                        break;
+                    }
+                    elements.push(self.parse_type_expr()?);
+                }
+                let rp = self.consume(TokenKind::RParen, "expected `)`")?;
+                return Some(TypeExpr::Tuple {
+                    elements,
+                    span: Span::new(lp.span.start, rp.span.end),
+                });
+            } else {
+                // Parenthesized type
+                self.consume(TokenKind::RParen, "expected `)`")?;
+                return Some(first);
+            }
+        }
+
         // Array type: [T; N]
         if self.at(TokenKind::LBracket) {
             let lb = self.advance().unwrap();
@@ -649,7 +687,8 @@ impl<'a> Parser<'a> {
                 TypeExpr::Path { span, .. }
                 | TypeExpr::App { span, .. }
                 | TypeExpr::Ref { span, .. }
-                | TypeExpr::Array { span, .. } => span.end,
+                | TypeExpr::Array { span, .. }
+                | TypeExpr::Tuple { span, .. } => span.end,
             };
             return Some(TypeExpr::Ref {
                 mutability,
@@ -763,6 +802,14 @@ impl<'a> Parser<'a> {
     fn parse_stmt(&mut self) -> Option<Stmt> {
         if self.at(TokenKind::Let) {
             let let_tok = self.advance().unwrap();
+
+            let mutable = if self.at(TokenKind::Mut) {
+                self.advance();
+                true
+            } else {
+                false
+            };
+
             let name_tok = self.consume(TokenKind::Ident, "expected identifier after `let`")?;
             let mut ty = None;
             if self.at(TokenKind::Colon) {
@@ -781,6 +828,7 @@ impl<'a> Parser<'a> {
             let span = Span::new(let_tok.span.start, end);
             return Some(Stmt::Let {
                 name: Ident(self.slice(name_tok)),
+                mutable,
                 ty,
                 value,
                 span,
@@ -984,9 +1032,17 @@ impl<'a> Parser<'a> {
             } else if self.at(TokenKind::Dot) {
                 // Field access or method call - need lookahead
                 self.advance(); // consume dot
-                let name_tok =
-                    self.consume(TokenKind::Ident, "expected field or method name after `.`")?;
-                let name = Ident(self.slice(name_tok));
+
+                // Check for numeric index (tuple element access like .0, .1)
+                let (name_tok, name) = if self.at(TokenKind::Int) {
+                    let idx_tok = self.advance().unwrap();
+                    let idx_str = self.slice(idx_tok);
+                    (idx_tok, Ident(idx_str.to_string()))
+                } else {
+                    let ident_tok =
+                        self.consume(TokenKind::Ident, "expected field or method name after `.`")?;
+                    (ident_tok, Ident(self.slice(ident_tok)))
+                };
 
                 // Lookahead: is there a `(` after the identifier?
                 if self.at(TokenKind::LParen) {
@@ -1077,9 +1133,39 @@ impl<'a> Parser<'a> {
             TokenKind::InterpStr => self.parse_interpolated_string(tok),
             TokenKind::Bool => Some(Expr::Lit(self.literal_from(tok), tok.span)),
             TokenKind::LParen => {
-                let expr = self.parse_expr();
-                self.consume(TokenKind::RParen, "expected `)`");
-                expr
+                let start = tok.span.start;
+
+                // Empty tuple: ()
+                if self.at(TokenKind::RParen) {
+                    let rp = self.advance().unwrap();
+                    return Some(Expr::Tuple {
+                        elements: vec![],
+                        span: Span::new(start, rp.span.end),
+                    });
+                }
+
+                let first = self.parse_expr()?;
+
+                // Check if it's a tuple (has comma) or just parenthesized
+                if self.at(TokenKind::Comma) {
+                    let mut elements = vec![first];
+                    while self.at(TokenKind::Comma) {
+                        self.advance();
+                        if self.at(TokenKind::RParen) {
+                            break;
+                        }
+                        elements.push(self.parse_expr()?);
+                    }
+                    let rp = self.consume(TokenKind::RParen, "expected `)`")?;
+                    Some(Expr::Tuple {
+                        elements,
+                        span: Span::new(start, rp.span.end),
+                    })
+                } else {
+                    // Parenthesized expression
+                    self.consume(TokenKind::RParen, "expected `)`")?;
+                    Some(first)
+                }
             }
             TokenKind::If => self.parse_if(tok.span.start),
             TokenKind::While => self.parse_while(tok.span.start),
@@ -1401,6 +1487,7 @@ impl<'a> Parser<'a> {
             Expr::Index { span, .. } => span.start,
             Expr::MethodCall { span, .. } => span.start,
             Expr::Match { span, .. } => span.start,
+            Expr::Tuple { span, .. } => span.start,
         }
     }
 
@@ -1422,6 +1509,7 @@ impl<'a> Parser<'a> {
             Expr::Index { span, .. } => span.end,
             Expr::MethodCall { span, .. } => span.end,
             Expr::Match { span, .. } => span.end,
+            Expr::Tuple { span, .. } => span.end,
         }
     }
 
@@ -1667,6 +1755,10 @@ fn render_type_expr(ty: &TypeExpr) -> String {
             s
         }
         TypeExpr::Array { elem, size, .. } => format!("[{}; {}]", render_type_expr(elem), size),
+        TypeExpr::Tuple { elements, .. } => {
+            let elem_strs: Vec<String> = elements.iter().map(render_type_expr).collect();
+            format!("({})", elem_strs.join(", "))
+        }
     }
 }
 

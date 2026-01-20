@@ -122,6 +122,13 @@ fn type_expr_to_type(expr: &TypeExpr, param_set: &HashSet<String>) -> Type {
                 },
             }
         }
+        TypeExpr::Tuple { elements, .. } => {
+            let elem_types: Vec<Type> = elements
+                .iter()
+                .map(|e| type_expr_to_type(e, param_set))
+                .collect();
+            Type::Tuple(elem_types)
+        }
     }
 }
 
@@ -159,6 +166,14 @@ fn type_key(ty: &Type) -> String {
         Type::App { base, args } => {
             let args: Vec<String> = args.iter().map(type_key).collect();
             format!("app_{}_{}", sanitize(base), args.join("__"))
+        }
+        Type::Tuple(elem_types) => {
+            if elem_types.is_empty() {
+                "unit".into()
+            } else {
+                let type_names: Vec<String> = elem_types.iter().map(type_key).collect();
+                format!("__Tuple{}_{}", elem_types.len(), type_names.join("_"))
+            }
         }
     }
 }
@@ -288,6 +303,13 @@ fn rewrite_type(
             // Fallback: treat unresolved params as i32 to keep codegen moving.
             // TODO: replace with proper contextual substitution.
             Type::I32
+        }
+        Type::Tuple(elem_types) => {
+            let rewritten_elems: Vec<Type> = elem_types
+                .iter()
+                .map(|t| rewrite_type(t, templates, instantiations, worklist, diagnostics))
+                .collect();
+            Type::Tuple(rewritten_elems)
         }
         other => other.clone(),
     }
@@ -612,6 +634,52 @@ pub fn monomorphize_mir(mir: &mut MirModule, modules: &HashMap<String, Module>) 
                 &mut diagnostics,
             );
         }
+    }
+
+    // Generate struct types for all tuples
+    let mut tuple_types_to_generate = std::collections::HashSet::new();
+    for func in &mir.functions {
+        // Check return type
+        if let Some(Type::Tuple(elem_types)) = &func.ret_type {
+            if !elem_types.is_empty() {
+                tuple_types_to_generate.insert(elem_types.clone());
+            }
+        }
+        // Check local types
+        for local in &func.locals {
+            if let Some(Type::Tuple(elem_types)) = &local.ty {
+                if !elem_types.is_empty() {
+                    tuple_types_to_generate.insert(elem_types.clone());
+                }
+            }
+        }
+    }
+
+    // Helper function to generate tuple struct names consistently
+    let tuple_struct_name_mono = |elem_types: &[Type]| -> String {
+        if elem_types.is_empty() {
+            "unit".to_string()
+        } else {
+            let type_names: Vec<String> = elem_types.iter().map(type_key).collect();
+            format!("__Tuple{}_{}", elem_types.len(), type_names.join("_"))
+        }
+    };
+
+    for elem_types in tuple_types_to_generate {
+        let struct_name = tuple_struct_name_mono(&elem_types);
+        let fields: Vec<(String, Type)> = elem_types
+            .into_iter()
+            .enumerate()
+            .map(|(idx, ty)| (idx.to_string(), ty))
+            .collect();
+
+        mir.struct_types.insert(
+            struct_name.clone(),
+            StructType {
+                name: struct_name,
+                fields,
+            },
+        );
     }
 
     // Instantiate until queue drains. (Queue items were pushed as Type::App.)

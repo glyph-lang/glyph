@@ -27,7 +27,12 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum GlyphCommand {
-    /// Build binaries described in glph.toml
+    /// Initialize a new Glyph project
+    Init {
+        /// Project name (defaults to directory name)
+        name: Option<String>,
+    },
+    /// Build binaries described in glyph.toml
     Build {
         /// Build the release profile
         #[arg(long)]
@@ -96,6 +101,7 @@ fn main() {
 fn run() -> GlyphResult<()> {
     let cli = Cli::parse();
     match cli.command {
+        GlyphCommand::Init { name } => init_cmd(name),
         GlyphCommand::Build {
             release,
             bin,
@@ -113,12 +119,78 @@ fn run() -> GlyphResult<()> {
     }
 }
 
+fn init_cmd(name: Option<String>) -> GlyphResult<()> {
+    let cwd = std::env::current_dir().map_err(internal_err("failed to read current dir"))?;
+    let manifest_path = cwd.join("glyph.toml");
+
+    // Check if glyph.toml already exists
+    if manifest_path.exists() {
+        return Err(usage_err("glyph.toml already exists in current directory"));
+    }
+
+    // Get project name from argument or directory name
+    let project_name = if let Some(name) = name {
+        name
+    } else {
+        cwd.file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| usage_err("could not determine project name from directory"))?
+            .to_string()
+    };
+
+    // Create glyph.toml
+    let toml_content = format!(
+        r#"[package]
+name = "{}"
+version = "0.1.0"
+
+[dependencies]
+# Add dependencies here
+
+[[bin]]
+name = "{}"
+path = "src/main.glyph"
+"#,
+        project_name, project_name
+    );
+
+    fs::write(&manifest_path, toml_content)
+        .map_err(internal_err("failed to write glyph.toml"))?;
+
+    println!("Created glyph.toml");
+
+    // Create src directory
+    let src_dir = cwd.join("src");
+    fs::create_dir_all(&src_dir).map_err(internal_err("failed to create src/ directory"))?;
+
+    // Create src/main.glyph
+    let main_glyph_content = r#"from std import println
+
+fn main() -> i32 {
+  println("Hello, Glyph!")
+  ret 0
+}
+"#;
+
+    let main_path = src_dir.join("main.glyph");
+    fs::write(&main_path, main_glyph_content)
+        .map_err(internal_err("failed to write src/main.glyph"))?;
+
+    println!("Created src/main.glyph");
+    println!("\nProject '{}' initialized!", project_name);
+    println!("\nNext steps:");
+    println!("  glyph build");
+    println!("  glyph run");
+
+    Ok(())
+}
+
 fn build_cmd(release: bool, bin: Option<String>, verbose: bool) -> GlyphResult<PathBuf> {
     let cwd = std::env::current_dir().map_err(internal_err("failed to read current dir"))?;
     let manifest_path = locate_manifest(&cwd)?;
     let root = manifest_path
         .parent()
-        .ok_or_else(|| usage_err("glph.toml has no parent directory"))?;
+        .ok_or_else(|| usage_err("glyph.toml has no parent directory"))?;
 
     let manifest = load_manifest(&manifest_path, root)?;
     let target = select_bin(&manifest, bin.as_deref())?;
@@ -156,14 +228,14 @@ fn run_cmd(
 
 fn locate_manifest(start: &Path) -> GlyphResult<PathBuf> {
     for ancestor in start.ancestors() {
-        let candidate = ancestor.join("glph.toml");
+        let candidate = ancestor.join("glyph.toml");
         if candidate.is_file() {
             return Ok(candidate);
         }
     }
     Err(GlyphError {
         code: EXIT_USAGE,
-        message: "glph.toml not found (searching current dir and parents)".to_string(),
+        message: "glyph.toml not found (searching current dir and parents)".to_string(),
     })
 }
 
@@ -171,7 +243,7 @@ fn load_manifest(path: &Path, root: &Path) -> GlyphResult<Manifest> {
     let contents = fs::read_to_string(path)
         .map_err(|e| usage_err(format!("failed to read {}: {}", path.display(), e)))?;
     let manifest: Manifest =
-        toml::from_str(&contents).map_err(|e| usage_err(format!("invalid glph.toml: {}", e)))?;
+        toml::from_str(&contents).map_err(|e| usage_err(format!("invalid glyph.toml: {}", e)))?;
     validate_manifest(&manifest, root)?;
     Ok(manifest)
 }

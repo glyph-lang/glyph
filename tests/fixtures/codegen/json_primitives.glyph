@@ -1,0 +1,14 @@
+from std/json import JsonValue, ParseError
+from std import println
+
+fn main() -> i32 {
+  // Test JSON primitive types
+  let null_val = JsonValue::Null
+  let true_val = JsonValue::Bool(true)
+  let false_val = JsonValue::Bool(false)
+  let num_val = JsonValue::Number(42.5)
+  let str_val = JsonValue::String(String::from_str("hello"))
+
+  println($"JSON primitive types work")
+  ret 0
+}

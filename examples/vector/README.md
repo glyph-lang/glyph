@@ -10,7 +10,7 @@ This example demonstrates the new `Vec<T>` support with `push`, `pop`, `len`, an
 - Prints a short message and returns the fetched element.
 
 ## Files
-- `glph.toml` — package definition
+- `glyph.toml` — package definition
 - `src/main.glyph` — example program
 
 ## Build and run

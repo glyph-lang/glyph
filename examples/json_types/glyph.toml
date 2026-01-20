@@ -1,0 +1,10 @@
+[package]
+name = "json_types"
+version = "0.1.0"
+
+[dependencies]
+# none yet
+
+[[bin]]
+name = "json_types"
+path = "src/main.glyph"

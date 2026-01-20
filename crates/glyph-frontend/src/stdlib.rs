@@ -62,7 +62,11 @@ pub fn std_modules() -> HashMap<String, Module> {
             },
             Param {
                 name: Ident("bytes".into()),
-                ty: Some(tp("RawPtr<u8>", span)),
+                ty: Some(TypeExpr::App {
+                    base: Box::new(tp("RawPtr", span)),
+                    args: vec![tp("u8", span)],
+                    span,
+                }),
                 span,
             },
             Param {
@@ -91,7 +95,11 @@ pub fn std_modules() -> HashMap<String, Module> {
                 span,
             },
         ],
-        ret_type: Some(tp("RawPtr<u8>", span)),
+        ret_type: Some(TypeExpr::App {
+                    base: Box::new(tp("RawPtr", span)),
+                    args: vec![tp("u8", span)],
+                    span,
+                }),
         link_name: Some("fopen".into()),
         span,
     };
@@ -117,7 +125,11 @@ pub fn std_modules() -> HashMap<String, Module> {
             },
             Param {
                 name: Ident("file".into()),
-                ty: Some(tp("RawPtr<u8>", span)),
+                ty: Some(TypeExpr::App {
+                    base: Box::new(tp("RawPtr", span)),
+                    args: vec![tp("u8", span)],
+                    span,
+                }),
                 span,
             },
         ],
@@ -137,7 +149,11 @@ pub fn std_modules() -> HashMap<String, Module> {
             },
             Param {
                 name: Ident("buf".into()),
-                ty: Some(tp("RawPtr<u8>", span)),
+                ty: Some(TypeExpr::App {
+                    base: Box::new(tp("RawPtr", span)),
+                    args: vec![tp("u8", span)],
+                    span,
+                }),
                 span,
             },
             Param {
@@ -156,7 +172,11 @@ pub fn std_modules() -> HashMap<String, Module> {
         name: Ident("fclose".into()),
         params: vec![Param {
             name: Ident("file".into()),
-            ty: Some(tp("RawPtr<u8>", span)),
+            ty: Some(TypeExpr::App {
+                    base: Box::new(tp("RawPtr", span)),
+                    args: vec![tp("u8", span)],
+                    span,
+                }),
             span,
         }],
         ret_type: Some(tp("i32", span)),
@@ -170,7 +190,11 @@ pub fn std_modules() -> HashMap<String, Module> {
         params: vec![
             Param {
                 name: Ident("buf".into()),
-                ty: Some(tp("RawPtr<u8>", span)),
+                ty: Some(TypeExpr::App {
+                    base: Box::new(tp("RawPtr", span)),
+                    args: vec![tp("u8", span)],
+                    span,
+                }),
                 span,
             },
             Param {
@@ -185,7 +209,11 @@ pub fn std_modules() -> HashMap<String, Module> {
             },
             Param {
                 name: Ident("file".into()),
-                ty: Some(tp("RawPtr<u8>", span)),
+                ty: Some(TypeExpr::App {
+                    base: Box::new(tp("RawPtr", span)),
+                    args: vec![tp("u8", span)],
+                    span,
+                }),
                 span,
             },
         ],
@@ -200,7 +228,11 @@ pub fn std_modules() -> HashMap<String, Module> {
         params: vec![
             Param {
                 name: Ident("file".into()),
-                ty: Some(tp("RawPtr<u8>", span)),
+                ty: Some(TypeExpr::App {
+                    base: Box::new(tp("RawPtr", span)),
+                    args: vec![tp("u8", span)],
+                    span,
+                }),
                 span,
             },
             Param {
@@ -224,7 +256,11 @@ pub fn std_modules() -> HashMap<String, Module> {
         name: Ident("ftell".into()),
         params: vec![Param {
             name: Ident("file".into()),
-            ty: Some(tp("RawPtr<u8>", span)),
+            ty: Some(TypeExpr::App {
+                    base: Box::new(tp("RawPtr", span)),
+                    args: vec![tp("u8", span)],
+                    span,
+                }),
             span,
         }],
         ret_type: Some(tp("i64", span)),
@@ -237,7 +273,11 @@ pub fn std_modules() -> HashMap<String, Module> {
         name: Ident("rewind".into()),
         params: vec![Param {
             name: Ident("file".into()),
-            ty: Some(tp("RawPtr<u8>", span)),
+            ty: Some(TypeExpr::App {
+                    base: Box::new(tp("RawPtr", span)),
+                    args: vec![tp("u8", span)],
+                    span,
+                }),
             span,
         }],
         ret_type: None,
@@ -364,6 +404,14 @@ pub fn std_modules() -> HashMap<String, Module> {
                 kind: ImportKind::Wildcard,
                 path: ImportPath {
                     segments: vec!["std/map".into()],
+                    span,
+                },
+                span,
+            },
+            Import {
+                kind: ImportKind::Wildcard,
+                path: ImportPath {
+                    segments: vec!["std/json".into()],
                     span,
                 },
                 span,
@@ -605,6 +653,65 @@ pub fn std_modules() -> HashMap<String, Module> {
         span,
     };
 
+    let atof_extern = ExternFunctionDecl {
+        abi: Some("C".into()),
+        name: Ident("atof".into()),
+        params: vec![Param {
+            name: Ident("s".into()),
+            ty: Some(tp("str", span)),
+            span,
+        }],
+        ret_type: Some(tp("f64", span)),
+        link_name: Some("atof".into()),
+        span,
+    };
+
+    let isdigit_extern = ExternFunctionDecl {
+        abi: Some("C".into()),
+        name: Ident("isdigit".into()),
+        params: vec![Param {
+            name: Ident("ch".into()),
+            ty: Some(tp("i32", span)),
+            span,
+        }],
+        ret_type: Some(tp("i32", span)),
+        link_name: Some("isdigit".into()),
+        span,
+    };
+
+    let atoi_extern = ExternFunctionDecl {
+        abi: Some("C".into()),
+        name: Ident("atoi".into()),
+        params: vec![Param {
+            name: Ident("s".into()),
+            ty: Some(tp("str", span)),
+            span,
+        }],
+        ret_type: Some(tp("i32", span)),
+        link_name: Some("atoi".into()),
+        span,
+    };
+
+    let byte_at_extern = ExternFunctionDecl {
+        abi: Some("C".into()),
+        name: Ident("byte_at".into()),
+        params: vec![
+            Param {
+                name: Ident("s".into()),
+                ty: Some(tp("str", span)),
+                span,
+            },
+            Param {
+                name: Ident("index".into()),
+                ty: Some(tp("usize", span)),
+                span,
+            },
+        ],
+        ret_type: Some(tp("u8", span)),
+        link_name: Some("glyph_byte_at".into()),
+        span,
+    };
+
     let std_string_module = Module {
         imports: vec![],
         items: vec![
@@ -614,6 +721,10 @@ pub fn std_modules() -> HashMap<String, Module> {
             glyph_core::ast::Item::ExternFunction(memcpy_extern),
             glyph_core::ast::Item::ExternFunction(strstr_extern),
             glyph_core::ast::Item::ExternFunction(isspace_extern),
+            glyph_core::ast::Item::ExternFunction(atof_extern),
+            glyph_core::ast::Item::ExternFunction(isdigit_extern),
+            glyph_core::ast::Item::ExternFunction(atoi_extern),
+            glyph_core::ast::Item::ExternFunction(byte_at_extern),
         ],
     };
     modules.insert("std/string".into(), std_string_module);
@@ -755,6 +866,111 @@ pub fn std_modules() -> HashMap<String, Module> {
         ],
     };
     modules.insert("std/map".into(), std_map_module);
+
+    // std/json - JSON parsing and manipulation
+    let json_value_enum = EnumDef {
+        name: Ident("JsonValue".into()),
+        generic_params: vec![],
+        variants: vec![
+            EnumVariantDef {
+                name: Ident("Null".into()),
+                payload: None,
+                span,
+            },
+            EnumVariantDef {
+                name: Ident("Bool".into()),
+                payload: Some(tp("bool", span)),
+                span,
+            },
+            EnumVariantDef {
+                name: Ident("Number".into()),
+                payload: Some(tp("f64", span)),
+                span,
+            },
+            EnumVariantDef {
+                name: Ident("String".into()),
+                payload: Some(tp("String", span)),
+                span,
+            },
+            EnumVariantDef {
+                name: Ident("Array".into()),
+                payload: Some(TypeExpr::App {
+                    base: Box::new(tp("Vec", span)),
+                    args: vec![tp("JsonValue", span)],
+                    span,
+                }),
+                span,
+            },
+            EnumVariantDef {
+                name: Ident("Object".into()),
+                // TODO: Implement proper object type when tuple types or String Hash is available
+                // For now, Object is a placeholder unit variant
+                payload: None,
+                span,
+            },
+        ],
+        span,
+    };
+
+    let parse_error_struct = StructDef {
+        name: Ident("ParseError".into()),
+        generic_params: vec![],
+        fields: vec![
+            glyph_core::ast::FieldDef {
+                name: Ident("message".into()),
+                ty: tp("String", span),
+                span,
+            },
+            glyph_core::ast::FieldDef {
+                name: Ident("position".into()),
+                ty: tp("usize", span),
+                span,
+            },
+        ],
+        interfaces: vec![],
+        methods: Vec::new(),
+        inline_impls: Vec::new(),
+        span,
+    };
+
+    // TODO: Add parse function implementation
+    // For now, std/json only provides the types (JsonValue, ParseError)
+    // A full parser implementation requires more advanced language features
+    let json_items = vec![
+        glyph_core::ast::Item::Enum(json_value_enum),
+        glyph_core::ast::Item::Struct(parse_error_struct),
+    ];
+
+    let std_json_module = Module {
+        imports: vec![
+            Import {
+                kind: ImportKind::Wildcard,
+                path: ImportPath {
+                    segments: vec!["std/enums".into()],
+                    span,
+                },
+                span,
+            },
+            Import {
+                kind: ImportKind::Wildcard,
+                path: ImportPath {
+                    segments: vec!["std/vec".into()],
+                    span,
+                },
+                span,
+            },
+            Import {
+                kind: ImportKind::Wildcard,
+                path: ImportPath {
+                    segments: vec!["std/string".into()],
+                    span,
+                },
+                span,
+            },
+        ],
+        items: json_items,
+    };
+    modules.insert("std/json".into(), std_json_module);
 
     modules
 }

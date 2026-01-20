@@ -93,6 +93,10 @@ pub mod ast {
             size: usize,
             span: Span,
         },
+        Tuple {
+            elements: Vec<TypeExpr>,
+            span: Span,
+        },
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -177,6 +181,10 @@ pub mod ast {
             arms: Vec<MatchArm>,
             span: Span,
         },
+        Tuple {
+            elements: Vec<Expr>,
+            span: Span,
+        },
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -233,6 +241,7 @@ pub mod ast {
         Ret(Option<Expr>, Span),
         Let {
             name: Ident,
+            mutable: bool,
             ty: Option<TypeExpr>,
             value: Option<Expr>,
             span: Span,
@@ -493,6 +502,7 @@ pub mod types {
         Own(Box<Type>),
         RawPtr(Box<Type>),
         Shared(Box<Type>),
+        Tuple(Vec<Type>),
     }
 
     impl Type {
@@ -646,6 +656,7 @@ pub mod mir {
     pub struct Local {
         pub name: Option<String>,
         pub ty: Option<Type>,
+        pub mutable: bool,
     }
 
     #[derive(Clone, PartialEq, Serialize, Deserialize, Default)]

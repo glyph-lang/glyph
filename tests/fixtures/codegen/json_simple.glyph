@@ -1,0 +1,6 @@
+from std import println
+
+fn main() -> i32 {
+  println($"JSON module loading test")
+  ret 0
+}

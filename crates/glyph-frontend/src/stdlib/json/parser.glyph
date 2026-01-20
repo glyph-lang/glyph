@@ -1,0 +1,91 @@
+// Minimal JSON Parser - Uses only basic Glyph syntax
+
+from std/string import byte_at, atof
+
+// Main parse function - currently just returns a placeholder
+fn parse(input: &str) -> Result<JsonValue, ParseError> {
+  let len = input.len()
+
+  // Handle empty string
+  if len == 0 {
+    ret Err(ParseError {
+      message: String::from_str("empty input"),
+      position: 0,
+    })
+  }
+
+  // Try to match "null"
+  if len == 4 {
+    let c0 = byte_at(input, 0)
+    let c1 = byte_at(input, 1)
+    let c2 = byte_at(input, 2)
+    let c3 = byte_at(input, 3)
+    if c0 == 110 && c1 == 117 && c2 == 108 && c3 == 108 {
+      ret Ok(JsonValue::Null)
+    }
+  }
+
+  // Try to match "true"
+  if len == 4 {
+    let c0 = byte_at(input, 0)
+    let c1 = byte_at(input, 1)
+    let c2 = byte_at(input, 2)
+    let c3 = byte_at(input, 3)
+    if c0 == 116 && c1 == 114 && c2 == 117 && c3 == 101 {
+      ret Ok(JsonValue::Bool(true))
+    }
+  }
+
+  // Try to match "false"
+  if len == 5 {
+    let c0 = byte_at(input, 0)
+    let c1 = byte_at(input, 1)
+    let c2 = byte_at(input, 2)
+    let c3 = byte_at(input, 3)
+    let c4 = byte_at(input, 4)
+    if c0 == 102 && c1 == 97 && c2 == 108 && c3 == 115 && c4 == 101 {
+      ret Ok(JsonValue::Bool(false))
+    }
+  }
+
+  // Try to match numbers (simplified - just use atof)
+  let first_ch = byte_at(input, 0)
+  if first_ch >= 48 && first_ch <= 57 || first_ch == 45 {  // digit or '-'
+    let num = atof(input)
+    ret Ok(JsonValue::Number(num))
+  }
+
+  // Try to match string
+  if first_ch == 34 {  // '"'
+    let last_ch = byte_at(input, len - 1)
+    if last_ch == 34 && len >= 2 {
+      let str_val = input.slice(1, len - 2)
+      ret Ok(JsonValue::String(str_val))
+    }
+  }
+
+  // Try to match empty array
+  if len == 2 {
+    let c0 = byte_at(input, 0)
+    let c1 = byte_at(input, 1)
+    if c0 == 91 && c1 == 93 {  // "[]"
+      let arr = Vec::new()
+      ret Ok(JsonValue::Array(arr))
+    }
+  }
+
+  // Try to match empty object
+  if len == 2 {
+    let c0 = byte_at(input, 0)
+    let c1 = byte_at(input, 1)
+    if c0 == 123 && c1 == 125 {  // "{}"
+      ret Ok(JsonValue::Object)
+    }
+  }
+
+  // Unrecognized input
+  ret Err(ParseError {
+    message: String::from_str("unexpected input"),
+    position: 0,
+  })
+}

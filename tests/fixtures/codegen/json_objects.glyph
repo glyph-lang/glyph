@@ -1,0 +1,10 @@
+from std/json import JsonValue
+from std import println
+
+fn main() -> i32 {
+  // Test JSON object type (placeholder)
+  let obj_val = JsonValue::Object
+
+  println($"JSON object type works")
+  ret 0
+}

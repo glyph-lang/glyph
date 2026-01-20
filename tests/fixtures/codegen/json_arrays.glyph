@@ -1,0 +1,11 @@
+from std/json import JsonValue
+from std import println
+
+fn main() -> i32 {
+  // Test JSON array type
+  let elements = Vec::new()
+  let array_val = JsonValue::Array(elements)
+
+  println($"JSON array type works")
+  ret 0
+}

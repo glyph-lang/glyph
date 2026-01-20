@@ -68,10 +68,14 @@ fn type_expr_to_string(ty: &TypeExpr) -> String {
             s
         }
         TypeExpr::Array { elem, size, .. } => format!("[{}; {}]", type_expr_to_string(elem), size),
+        TypeExpr::Tuple { elements, .. } => {
+            let elem_strs: Vec<String> = elements.iter().map(type_expr_to_string).collect();
+            format!("({})", elem_strs.join(", "))
+        }
     }
 }
 
-fn resolve_type_expr_to_type(ty: &TypeExpr, ctx: &ResolverContext) -> Option<Type> {
+pub fn resolve_type_expr_to_type(ty: &TypeExpr, ctx: &ResolverContext) -> Option<Type> {
     match ty {
         TypeExpr::Path { segments, .. } => {
             let ty_str = segments.join("::");
@@ -124,6 +128,17 @@ fn resolve_type_expr_to_type(ty: &TypeExpr, ctx: &ResolverContext) -> Option<Typ
             .map(|inner_ty| Type::Ref(Box::new(inner_ty), *mutability)),
         TypeExpr::Array { elem, size, .. } => resolve_type_expr_to_type(elem, ctx)
             .map(|elem_ty| Type::Array(Box::new(elem_ty), *size)),
+        TypeExpr::Tuple { elements, .. } => {
+            let mut elem_types = Vec::new();
+            for elem in elements {
+                if let Some(resolved) = resolve_type_expr_to_type(elem, ctx) {
+                    elem_types.push(resolved);
+                } else {
+                    return None;
+                }
+            }
+            Some(Type::Tuple(elem_types))
+        }
     }
 }
 
@@ -657,6 +672,11 @@ fn validate_map_type_expr(
         TypeExpr::Array { elem, .. } => {
             validate_map_type_expr(elem, ctx, generics, module, diagnostics);
         }
+        TypeExpr::Tuple { elements, .. } => {
+            for elem in elements {
+                validate_map_type_expr(elem, ctx, generics, module, diagnostics);
+            }
+        }
         TypeExpr::Path { .. } => {}
     }
 }
@@ -796,6 +816,18 @@ impl ResolverContext {
 
     /// Get the type and index of a field in a struct
     pub fn get_field(&self, struct_name: &str, field_name: &str) -> Option<(Type, usize)> {
+        // Handle tuple structs specially (e.g., "__Tuple2_i32_i32")
+        if struct_name.starts_with("__Tuple") {
+            // Parse the field index from field_name (should be "0", "1", "2", etc.)
+            if let Ok(idx) = field_name.parse::<usize>() {
+                // For now, we can't easily extract the exact element type from the struct name
+                // during resolution, so we'll just return i32 as a placeholder.
+                // The actual type will be properly handled during MIR lowering.
+                return Some((Type::I32, idx));
+            }
+            return None;
+        }
+
         let struct_type = self.get_struct(struct_name)?;
 
         for (i, (name, ty)) in struct_type.fields.iter().enumerate() {

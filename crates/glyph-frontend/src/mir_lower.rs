@@ -50,6 +50,10 @@ pub fn type_expr_to_string(ty: &TypeExpr) -> String {
             s
         }
         TypeExpr::Array { elem, size, .. } => format!("[{}; {}]", type_expr_to_string(elem), size),
+        TypeExpr::Tuple { elements, .. } => {
+            let elem_strs: Vec<String> = elements.iter().map(type_expr_to_string).collect();
+            format!("({})", elem_strs.join(", "))
+        }
     }
 }
 
@@ -148,10 +152,10 @@ fn collect_function_signatures(
         for param in params {
             let ty = match &param.ty {
                 Some(t) => {
-                    let ty_str = type_expr_to_string(t);
-                    match resolve_type_name(&ty_str, resolver) {
+                    match crate::resolver::resolve_type_expr_to_type(t, resolver) {
                         Some(resolved) => Some(resolved),
                         None => {
+                            let ty_str = type_expr_to_string(t);
                             diagnostics.push(Diagnostic::error(
                                 format!(
                                     "unknown type '{}' for parameter '{}'",
@@ -181,10 +185,10 @@ fn collect_function_signatures(
 
         let ret_type = match ret_type {
             Some(t) => {
-                let ty_str = type_expr_to_string(t);
-                match resolve_type_name(&ty_str, resolver) {
+                match crate::resolver::resolve_type_expr_to_type(t, resolver) {
                     Some(resolved) => Some(resolved),
                     None => {
+                        let ty_str = type_expr_to_string(t);
                         diagnostics.push(Diagnostic::error(
                             format!(
                                 "unknown return type '{}' for function '{}'",
@@ -545,6 +549,7 @@ impl<'a> LowerCtx<'a> {
         self.locals.push(Local {
             name: name.map(|s| s.to_string()),
             ty: None,
+            mutable: false,
         });
         self.local_states.push(LocalState::Uninitialized);
         if let Some(scope) = self.scope_stack.last_mut() {
@@ -697,7 +702,7 @@ fn lower_function(
     let ret_type = func
         .ret_type
         .as_ref()
-        .and_then(|t| resolve_type_name(&type_expr_to_string(t), resolver));
+        .and_then(|t| crate::resolver::resolve_type_expr_to_type(t, resolver));
 
     // Create locals for parameters and bind them
     let mut param_locals = Vec::new();
@@ -707,7 +712,7 @@ fn lower_function(
         if let Some(ty) = param
             .ty
             .as_ref()
-            .and_then(|t| resolve_type_name(&type_expr_to_string(t), resolver))
+            .and_then(|t| crate::resolver::resolve_type_expr_to_type(t, resolver))
         {
             ctx.locals[local.0 as usize].ty = Some(ty);
         }
@@ -764,10 +769,13 @@ fn lower_block<'a>(ctx: &mut LowerCtx<'a>, block: &'a Block) -> Option<MirValue>
 
         match stmt {
             Stmt::Let {
-                name, ty, value, ..
+                name, mutable, ty, value, ..
             } => {
                 let local = ctx.fresh_local(Some(&name.0));
                 ctx.bindings.insert(&name.0, local);
+
+                // Set mutability
+                ctx.locals[local.0 as usize].mutable = *mutable;
 
                 if let Some(annot_ty) = ty
                     .as_ref()
@@ -1306,6 +1314,7 @@ fn lower_expr<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr) -> Option<Rvalue> {
             args,
             span,
         } => lower_method_call(ctx, receiver, method, args, *span),
+        Expr::Tuple { elements, span } => lower_tuple_expr(ctx, elements, *span),
         _ => None,
     }
 }
@@ -2406,6 +2415,114 @@ fn lower_struct_lit<'a>(
     Some(Rvalue::Move(tmp))
 }
 
+fn lower_tuple_expr<'a>(
+    ctx: &mut LowerCtx<'a>,
+    elements: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    // Empty tuple is unit type
+    if elements.is_empty() {
+        return Some(Rvalue::ConstInt(0));
+    }
+
+    let mut elem_types = Vec::new();
+    let mut elem_values = Vec::new();
+
+    // Lower each element and infer its type
+    for elem_expr in elements {
+        let val = lower_value(ctx, elem_expr)?;
+
+        // Infer type from the element expression
+        let ty = match &val {
+            MirValue::Int(_) => Type::I32,
+            MirValue::Bool(_) => Type::Bool,
+            MirValue::Local(local_id) => {
+                ctx.locals.get(local_id.0 as usize)
+                    .and_then(|local| local.ty.clone())
+                    .ok_or_else(|| {
+                        ctx.error("cannot infer type of tuple element", Some(span));
+                    })
+                    .ok()?
+            }
+            MirValue::Unit => Type::Void,
+        };
+
+        elem_types.push(ty);
+        elem_values.push(val);
+    }
+
+    // Generate tuple struct name using monomorphize-style type_key
+    let struct_name = tuple_struct_name(&elem_types);
+
+    // Create field values with numbered fields (0, 1, 2, ...)
+    let field_values: Vec<(String, MirValue)> = elem_values
+        .into_iter()
+        .enumerate()
+        .map(|(idx, val)| (idx.to_string(), val))
+        .collect();
+
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::Tuple(elem_types));
+
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::StructLit {
+            struct_name,
+            field_values,
+        },
+    });
+
+    Some(Rvalue::Move(tmp))
+}
+
+fn tuple_struct_name(elem_types: &[Type]) -> String {
+    if elem_types.is_empty() {
+        return "unit".to_string();
+    }
+
+    let type_names: Vec<String> = elem_types.iter().map(type_key_simple).collect();
+    format!("__Tuple{}_{}", elem_types.len(), type_names.join("_"))
+}
+
+fn type_key_simple(ty: &Type) -> String {
+    match ty {
+        Type::I8 => "i8".into(),
+        Type::I32 => "i32".into(),
+        Type::I64 => "i64".into(),
+        Type::U8 => "u8".into(),
+        Type::U32 => "u32".into(),
+        Type::U64 => "u64".into(),
+        Type::Usize => "usize".into(),
+        Type::F32 => "f32".into(),
+        Type::F64 => "f64".into(),
+        Type::Bool => "bool".into(),
+        Type::Char => "char".into(),
+        Type::Str => "str".into(),
+        Type::String => "String".into(),
+        Type::Void => "void".into(),
+        Type::Named(n) => n.replace("::", "_"),
+        Type::Enum(n) => format!("enum_{}", n.replace("::", "_")),
+        Type::Param(p) => format!("P_{}", p),
+        Type::Ref(inner, _) => format!("ref_{}", type_key_simple(inner)),
+        Type::Array(inner, size) => format!("arr{}_{}", size, type_key_simple(inner)),
+        Type::Own(inner) => format!("own_{}", type_key_simple(inner)),
+        Type::RawPtr(inner) => format!("rawptr_{}", type_key_simple(inner)),
+        Type::Shared(inner) => format!("shared_{}", type_key_simple(inner)),
+        Type::App { base, args } => {
+            let args: Vec<String> = args.iter().map(type_key_simple).collect();
+            format!("app_{}_{}", base.replace("::", "_"), args.join("__"))
+        }
+        Type::Tuple(elem_types) => {
+            if elem_types.is_empty() {
+                "unit".into()
+            } else {
+                let type_names: Vec<String> = elem_types.iter().map(type_key_simple).collect();
+                format!("__Tuple{}_{}", elem_types.len(), type_names.join("_"))
+            }
+        }
+    }
+}
+
 fn lower_array_lit<'a>(ctx: &mut LowerCtx<'a>, elements: &'a [Expr], span: Span) -> Option<Rvalue> {
     // Check for empty array literal
     if elements.is_empty() {
@@ -3460,21 +3577,48 @@ fn lower_field_access<'a>(
         }
     };
 
-    let Some(struct_name) = local_struct_name(ctx, base_local) else {
-        ctx.error("field access base is not a struct", Some(span));
-        return None;
-    };
+    // Check if this is a tuple type
+    let base_type = ctx.locals.get(base_local.0 as usize).and_then(|l| l.ty.as_ref());
 
-    let Some((field_type, field_index)) = ctx.resolver.get_field(&struct_name, &field.0) else {
-        ctx.error(
-            format!("struct '{}' has no field named '{}'", struct_name, field.0),
-            Some(span),
-        );
-        return None;
+    let (field_type, field_index, struct_name) = if let Some(Type::Tuple(elem_types)) = base_type {
+        // Handle tuple field access
+        if let Ok(idx) = field.0.parse::<usize>() {
+            if idx < elem_types.len() {
+                (elem_types[idx].clone(), idx, tuple_struct_name(elem_types))
+            } else {
+                ctx.error(
+                    format!("tuple index {} out of bounds (len is {})", idx, elem_types.len()),
+                    Some(span),
+                );
+                return None;
+            }
+        } else {
+            ctx.error(
+                format!("tuple field access must use numeric index, got '{}'", field.0),
+                Some(span),
+            );
+            return None;
+        }
+    } else {
+        // Handle regular struct field access
+        let Some(struct_name) = local_struct_name(ctx, base_local) else {
+            ctx.error("field access base is not a struct", Some(span));
+            return None;
+        };
+
+        let Some((field_type, field_index)) = ctx.resolver.get_field(&struct_name, &field.0) else {
+            ctx.error(
+                format!("struct '{}' has no field named '{}'", struct_name, field.0),
+                Some(span),
+            );
+            return None;
+        };
+
+        (field_type, field_index, struct_name)
     };
 
     let tmp = ctx.fresh_local(None);
-    ctx.locals[tmp.0 as usize].ty = Some(field_type.clone());
+    ctx.locals[tmp.0 as usize].ty = Some(field_type);
 
     ctx.push_inst(MirInst::Assign {
         local: tmp,
@@ -3813,10 +3957,25 @@ fn is_keyword_boundary(next: Option<char>) -> bool {
 
 fn lower_assignment_target<'a>(ctx: &mut LowerCtx<'a>, target: &'a Expr) -> Option<LocalId> {
     match target {
-        Expr::Ident(ident, span) => ctx.bindings.get(ident.0.as_str()).copied().or_else(|| {
-            ctx.error(format!("unknown identifier '{}'", ident.0), Some(*span));
-            None
-        }),
+        Expr::Ident(ident, span) => {
+            let local_id = ctx.bindings.get(ident.0.as_str()).copied().or_else(|| {
+                ctx.error(format!("unknown identifier '{}'", ident.0), Some(*span));
+                None
+            })?;
+
+            // Check mutability
+            if let Some(local) = ctx.locals.get(local_id.0 as usize) {
+                if !local.mutable {
+                    ctx.error(
+                        format!("cannot assign to immutable variable '{}'", ident.0),
+                        Some(*span),
+                    );
+                    return None;
+                }
+            }
+
+            Some(local_id)
+        }
         Expr::FieldAccess { span, .. } => {
             ctx.error("assignment to fields is not supported yet", Some(*span));
             None
@@ -3923,6 +4082,7 @@ fn struct_name_from_type(ty: &Type) -> Option<String> {
         Type::Own(inner) => struct_name_from_type(inner),
         Type::RawPtr(inner) => struct_name_from_type(inner),
         Type::Shared(inner) => struct_name_from_type(inner),
+        Type::Tuple(elem_types) => Some(tuple_struct_name(elem_types)),
         _ => None,
     }
 }
@@ -3945,6 +4105,7 @@ fn expr_span(expr: &Expr) -> Option<Span> {
         Expr::MethodCall { span, .. } => Some(*span),
         Expr::Match { span, .. } => Some(*span),
         Expr::InterpString { span, .. } => Some(*span),
+        Expr::Tuple { span, .. } => Some(*span),
     }
 }
 

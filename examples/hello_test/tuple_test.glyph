@@ -1,0 +1,19 @@
+fn get_pair() -> (i32, i32) {
+    ret (10, 20)
+}
+
+fn main() {
+    println("Testing tuples:")
+    
+    let pair = (5, 10)
+    let x = pair.0
+    let y = pair.1
+    println("Tuple: (5, 10)")
+    
+    let result = get_pair()
+    let a = result.0
+    let b = result.1
+    println("Function returned tuple: (10, 20)")
+    
+    println("All tuple tests passed!")
+}

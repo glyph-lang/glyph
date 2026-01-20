@@ -188,6 +188,14 @@ impl CodegenContext {
                 let args: Vec<String> = args.iter().map(|a| self.type_key(a)).collect();
                 format!("app_{}_{}", self.sanitize(base), args.join("__"))
             }
+            Type::Tuple(elem_types) => {
+                if elem_types.is_empty() {
+                    "unit".into()
+                } else {
+                    let type_names: Vec<String> = elem_types.iter().map(|t| self.type_key(t)).collect();
+                    format!("__Tuple{}_{}", elem_types.len(), type_names.join("_"))
+                }
+            }
         }
     }
 
@@ -780,7 +788,14 @@ impl CodegenContext {
                 Type::Str => LLVMPointerType(LLVMInt8TypeInContext(self.context), 0),
                 Type::String => LLVMPointerType(LLVMInt8TypeInContext(self.context), 0),
                 Type::Void => LLVMVoidTypeInContext(self.context),
-                Type::Named(name) => self.get_struct_type(&name)?,
+                Type::Named(name) => {
+                    // Check enum_types first, then struct_types
+                    self.enum_types
+                        .get(&name)
+                        .copied()
+                        .or_else(|| self.struct_types.get(&name).copied())
+                        .ok_or_else(|| anyhow!("unknown type {} (not found in enum or struct types)", name))?
+                },
                 Type::Enum(name) => self.get_enum_type(&name)?,
                 Type::Ref(inner, _) => {
                     let inner_ty = self.get_llvm_type(&inner)?;
@@ -793,6 +808,19 @@ impl CodegenContext {
                 Type::Own(inner) | Type::RawPtr(inner) | Type::Shared(inner) => {
                     let elem_ty = self.get_llvm_type(&inner)?;
                     LLVMPointerType(elem_ty, 0)
+                }
+                Type::Tuple(elem_types) => {
+                    if elem_types.is_empty() {
+                        // Empty tuple is void/unit type
+                        LLVMVoidTypeInContext(self.context)
+                    } else {
+                        // Generate tuple struct name and look it up
+                        let struct_name = tuple_struct_name_codegen(&elem_types);
+                        self.struct_types
+                            .get(&struct_name)
+                            .copied()
+                            .ok_or_else(|| anyhow!("tuple type {} not found in struct_types", struct_name))?
+                    }
                 }
                 Type::Param(_) | Type::App { .. } => {
                     anyhow::bail!("generic types must be monomorphized before codegen")
@@ -8484,6 +8512,10 @@ impl CodegenContext {
         loop {
             match ty.clone() {
                 Type::Named(name) => return Ok((name, ptr)),
+                Type::Tuple(elem_types) => {
+                    let name = tuple_struct_name_codegen(&elem_types);
+                    return Ok((name, ptr));
+                }
                 Type::Ref(inner, mutability) => {
                     let ref_ty = Type::Ref(inner.clone(), mutability);
                     let load_ty = self.get_llvm_type(&ref_ty)?;
@@ -8693,6 +8725,54 @@ impl Drop for CodegenContext {
             LLVMDisposeBuilder(self.builder);
             LLVMDisposeModule(self.module);
             LLVMContextDispose(self.context);
+        }
+    }
+}
+
+fn tuple_struct_name_codegen(elem_types: &[Type]) -> String {
+    if elem_types.is_empty() {
+        return "unit".to_string();
+    }
+
+    let type_names: Vec<String> = elem_types.iter().map(type_key_simple_codegen).collect();
+    format!("__Tuple{}_{}", elem_types.len(), type_names.join("_"))
+}
+
+fn type_key_simple_codegen(ty: &Type) -> String {
+    match ty {
+        Type::I8 => "i8".into(),
+        Type::I32 => "i32".into(),
+        Type::I64 => "i64".into(),
+        Type::U8 => "u8".into(),
+        Type::U32 => "u32".into(),
+        Type::U64 => "u64".into(),
+        Type::Usize => "usize".into(),
+        Type::F32 => "f32".into(),
+        Type::F64 => "f64".into(),
+        Type::Bool => "bool".into(),
+        Type::Char => "char".into(),
+        Type::Str => "str".into(),
+        Type::String => "String".into(),
+        Type::Void => "void".into(),
+        Type::Named(n) => n.replace("::", "_"),
+        Type::Enum(n) => format!("enum_{}", n.replace("::", "_")),
+        Type::Param(p) => format!("P_{}", p),
+        Type::Ref(inner, _) => format!("ref_{}", type_key_simple_codegen(inner)),
+        Type::Array(inner, size) => format!("arr{}_{}", size, type_key_simple_codegen(inner)),
+        Type::Own(inner) => format!("own_{}", type_key_simple_codegen(inner)),
+        Type::RawPtr(inner) => format!("rawptr_{}", type_key_simple_codegen(inner)),
+        Type::Shared(inner) => format!("shared_{}", type_key_simple_codegen(inner)),
+        Type::App { base, args } => {
+            let args: Vec<String> = args.iter().map(type_key_simple_codegen).collect();
+            format!("app_{}_{}", base.replace("::", "_"), args.join("__"))
+        }
+        Type::Tuple(elem_types) => {
+            if elem_types.is_empty() {
+                "unit".into()
+            } else {
+                let type_names: Vec<String> = elem_types.iter().map(type_key_simple_codegen).collect();
+                format!("__Tuple{}_{}", elem_types.len(), type_names.join("_"))
+            }
         }
     }
 }
