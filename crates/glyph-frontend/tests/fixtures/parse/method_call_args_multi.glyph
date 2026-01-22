@@ -1,0 +1,21 @@
+// Ensure method calls with multiple arguments separated by commas parse correctly
+// and that chained calls/blocks after them do not require spurious `{`.
+
+struct Accumulator {
+  total: i32
+
+  fn add(self: &Accumulator, value: i32, weight: i32) -> i32 {
+    ret self.total + value * weight
+  }
+}
+
+fn main() -> i32 {
+  let acc = Accumulator { total: 10 }
+  // This call previously hit "expected `{` to start block" in the parser around
+  // the comma-separated args when followed by more expressions.
+  let result = acc.add(2, 3)
+
+  // Additional expressions after the call to ensure parser can continue.
+  let extra = result + 1
+  ret extra
+}

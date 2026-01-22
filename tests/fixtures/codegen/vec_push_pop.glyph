@@ -1,7 +1,9 @@
 fn main() -> i32 {
-  let v: Vec<i32> = Vec::new()
+  let mut v: Vec<i32> = Vec::new()
   v.push(1)
   let _popped = v.pop()
-  let _len = v.len()
+  let _len: usize = v.len()
+  // keep v alive so borrow checker isn't confused
+  let _dummy = v;
   ret 0
 }

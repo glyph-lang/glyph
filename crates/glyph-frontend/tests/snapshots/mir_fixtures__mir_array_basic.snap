@@ -1,5 +1,6 @@
 ---
 source: crates/glyph-frontend/tests/mir_fixtures.rs
+assertion_line: 410
 expression: out.mir
 ---
 MirModule {
@@ -22,6 +23,7 @@ MirModule {
                             3,
                         ),
                     ),
+                    mutable: false,
                 },
                 Local {
                     name: None,
@@ -31,6 +33,7 @@ MirModule {
                             3,
                         ),
                     ),
+                    mutable: false,
                 },
                 Local {
                     name: Some(
@@ -39,12 +42,14 @@ MirModule {
                     ty: Some(
                         I32,
                     ),
+                    mutable: false,
                 },
                 Local {
                     name: None,
                     ty: Some(
                         I32,
                     ),
+                    mutable: false,
                 },
             ],
             blocks: [

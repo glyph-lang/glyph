@@ -1,0 +1,15 @@
+// Minimal stub to keep std/json/parser module parsable while frontend parser is fixed.
+
+from std/json import JsonValue, ParseError
+from std/string import byte_at
+from std/enums import Result
+
+fn make_parse_error(message: String, position: usize) -> ParseError {
+    ret ParseError { message: message, position: position }
+}
+
+// Trivial parse function: always returns an error.
+fn parse(input: &str) -> Result<JsonValue, ParseError> {
+    let pos = input.len()
+    ret Err(make_parse_error(String::from_str("parser stub"), pos))
+}

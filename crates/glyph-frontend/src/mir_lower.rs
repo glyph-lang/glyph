@@ -151,22 +151,17 @@ fn collect_function_signatures(
         let mut param_types = Vec::new();
         for param in params {
             let ty = match &param.ty {
-                Some(t) => {
-                    match crate::resolver::resolve_type_expr_to_type(t, resolver) {
-                        Some(resolved) => Some(resolved),
-                        None => {
-                            let ty_str = type_expr_to_string(t);
-                            diagnostics.push(Diagnostic::error(
-                                format!(
-                                    "unknown type '{}' for parameter '{}'",
-                                    ty_str, param.name.0
-                                ),
-                                Some(param.span),
-                            ));
-                            None
-                        }
+                Some(t) => match crate::resolver::resolve_type_expr_to_type(t, resolver) {
+                    Some(resolved) => Some(resolved),
+                    None => {
+                        let ty_str = type_expr_to_string(t);
+                        diagnostics.push(Diagnostic::error(
+                            format!("unknown type '{}' for parameter '{}'", ty_str, param.name.0),
+                            Some(param.span),
+                        ));
+                        None
                     }
-                }
+                },
                 None => {
                     if is_extern {
                         diagnostics.push(Diagnostic::error(
@@ -184,22 +179,20 @@ fn collect_function_signatures(
         }
 
         let ret_type = match ret_type {
-            Some(t) => {
-                match crate::resolver::resolve_type_expr_to_type(t, resolver) {
-                    Some(resolved) => Some(resolved),
-                    None => {
-                        let ty_str = type_expr_to_string(t);
-                        diagnostics.push(Diagnostic::error(
-                            format!(
-                                "unknown return type '{}' for function '{}'",
-                                ty_str, key_name
-                            ),
-                            Some(span),
-                        ));
-                        None
-                    }
+            Some(t) => match crate::resolver::resolve_type_expr_to_type(t, resolver) {
+                Some(resolved) => Some(resolved),
+                None => {
+                    let ty_str = type_expr_to_string(t);
+                    diagnostics.push(Diagnostic::error(
+                        format!(
+                            "unknown return type '{}' for function '{}'",
+                            ty_str, key_name
+                        ),
+                        Some(span),
+                    ));
+                    None
                 }
-            }
+            },
             None => None,
         };
 
@@ -769,7 +762,11 @@ fn lower_block<'a>(ctx: &mut LowerCtx<'a>, block: &'a Block) -> Option<MirValue>
 
         match stmt {
             Stmt::Let {
-                name, mutable, ty, value, ..
+                name,
+                mutable,
+                ty,
+                value,
+                ..
             } => {
                 let local = ctx.fresh_local(Some(&name.0));
                 ctx.bindings.insert(&name.0, local);
@@ -1876,10 +1873,10 @@ fn lower_method_call<'a>(
                 ctx.error(".len() does not take arguments", Some(span));
                 return None;
             }
-            if let Some(rv) = lower_string_len(ctx, receiver, args, span) {
+            if let Some(rv) = lower_vec_len(ctx, receiver, span) {
                 return Some(rv);
             }
-            if let Some(rv) = lower_vec_len(ctx, receiver, span) {
+            if let Some(rv) = lower_string_len(ctx, receiver, args, span) {
                 return Some(rv);
             }
             return lower_array_len(ctx, receiver, span);
@@ -2436,14 +2433,14 @@ fn lower_tuple_expr<'a>(
         let ty = match &val {
             MirValue::Int(_) => Type::I32,
             MirValue::Bool(_) => Type::Bool,
-            MirValue::Local(local_id) => {
-                ctx.locals.get(local_id.0 as usize)
-                    .and_then(|local| local.ty.clone())
-                    .ok_or_else(|| {
-                        ctx.error("cannot infer type of tuple element", Some(span));
-                    })
-                    .ok()?
-            }
+            MirValue::Local(local_id) => ctx
+                .locals
+                .get(local_id.0 as usize)
+                .and_then(|local| local.ty.clone())
+                .ok_or_else(|| {
+                    ctx.error("cannot infer type of tuple element", Some(span));
+                })
+                .ok()?,
             MirValue::Unit => Type::Void,
         };
 
@@ -3578,23 +3575,33 @@ fn lower_field_access<'a>(
     };
 
     // Check if this is a tuple type
-    let base_type = ctx.locals.get(base_local.0 as usize).and_then(|l| l.ty.as_ref());
+    let base_type = ctx
+        .locals
+        .get(base_local.0 as usize)
+        .and_then(|l| l.ty.as_ref());
 
-    let (field_type, field_index, struct_name) = if let Some(Type::Tuple(elem_types)) = base_type {
+    let (field_type, field_index, _struct_name) = if let Some(Type::Tuple(elem_types)) = base_type {
         // Handle tuple field access
         if let Ok(idx) = field.0.parse::<usize>() {
             if idx < elem_types.len() {
                 (elem_types[idx].clone(), idx, tuple_struct_name(elem_types))
             } else {
                 ctx.error(
-                    format!("tuple index {} out of bounds (len is {})", idx, elem_types.len()),
+                    format!(
+                        "tuple index {} out of bounds (len is {})",
+                        idx,
+                        elem_types.len()
+                    ),
                     Some(span),
                 );
                 return None;
             }
         } else {
             ctx.error(
-                format!("tuple field access must use numeric index, got '{}'", field.0),
+                format!(
+                    "tuple field access must use numeric index, got '{}'",
+                    field.0
+                ),
                 Some(span),
             );
             return None;
@@ -4241,7 +4248,7 @@ fn lower_value<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr) -> Option<MirValue> {
     }
 }
 
-#[cfg(all(test, feature = "mir_lower_tests"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::resolver::{ResolverContext, resolve_types};
@@ -4251,7 +4258,7 @@ mod tests {
         StructDef, TypeExpr,
     };
     use glyph_core::span::Span;
-    use glyph_core::types::{EnumType, Mutability, StructType, Type};
+    use glyph_core::types::{Mutability, Type};
 
     fn path_ty(name: &str, span: Span) -> TypeExpr {
         TypeExpr::Path {
@@ -4274,6 +4281,7 @@ mod tests {
                     Stmt::Let {
                         name: Ident("p".into()),
                         ty: Some(path_ty("Point", span)),
+                        mutable: false,
                         value: Some(Expr::StructLit {
                             name: Ident("Point".into()),
                             fields: vec![
@@ -4287,6 +4295,7 @@ mod tests {
                     Stmt::Let {
                         name: Ident("pref".into()),
                         ty: None,
+                        mutable: false,
                         value: Some(Expr::Ref {
                             expr: Box::new(Expr::Ident(Ident("p".into()), span)),
                             mutability: Mutability::Immutable,
@@ -4304,6 +4313,7 @@ mod tests {
                     ),
                 ],
             },
+
             span,
         };
 
@@ -4328,9 +4338,9 @@ mod tests {
             span,
         });
 
-        let module = Module {
+        let _module = Module {
             imports: vec![],
-            items: vec![point_struct, Item::Function(func)],
+            items: vec![point_struct.clone(), Item::Function(func.clone())],
         };
 
         let module = Module {
@@ -4444,6 +4454,7 @@ mod tests {
                     Stmt::Let {
                         name: Ident("p".into()),
                         ty: Some(path_ty("Point", span)),
+                        mutable: false,
                         value: Some(Expr::StructLit {
                             name: Ident("Point".into()),
                             fields: vec![
@@ -4572,7 +4583,8 @@ mod tests {
                 stmts: vec![
                     Stmt::Let {
                         name: Ident("x".into()),
-                        ty: Some(path_ty("i32", Span::new(0, 0))),
+                        ty: Some(path_ty("i32", span)),
+                        mutable: true,
                         value: Some(Expr::Lit(Literal::Int(1), span)),
                         span,
                     },

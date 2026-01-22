@@ -192,7 +192,8 @@ impl CodegenContext {
                 if elem_types.is_empty() {
                     "unit".into()
                 } else {
-                    let type_names: Vec<String> = elem_types.iter().map(|t| self.type_key(t)).collect();
+                    let type_names: Vec<String> =
+                        elem_types.iter().map(|t| self.type_key(t)).collect();
                     format!("__Tuple{}_{}", elem_types.len(), type_names.join("_"))
                 }
             }
@@ -794,8 +795,10 @@ impl CodegenContext {
                         .get(&name)
                         .copied()
                         .or_else(|| self.struct_types.get(&name).copied())
-                        .ok_or_else(|| anyhow!("unknown type {} (not found in enum or struct types)", name))?
-                },
+                        .ok_or_else(|| {
+                            anyhow!("unknown type {} (not found in enum or struct types)", name)
+                        })?
+                }
                 Type::Enum(name) => self.get_enum_type(&name)?,
                 Type::Ref(inner, _) => {
                     let inner_ty = self.get_llvm_type(&inner)?;
@@ -819,7 +822,9 @@ impl CodegenContext {
                         self.struct_types
                             .get(&struct_name)
                             .copied()
-                            .ok_or_else(|| anyhow!("tuple type {} not found in struct_types", struct_name))?
+                            .ok_or_else(|| {
+                                anyhow!("tuple type {} not found in struct_types", struct_name)
+                            })?
                     }
                 }
                 Type::Param(_) | Type::App { .. } => {
@@ -8583,6 +8588,11 @@ impl CodegenContext {
             // Clone the module so the execution engine can take ownership
             let module_clone = LLVMCloneModule(self.module);
 
+            // Set explicit target triple to avoid ambiguities (e.g., aarch64 variants)
+            let target_triple = LLVMGetDefaultTargetTriple();
+            LLVMSetTarget(module_clone, target_triple);
+            LLVMDisposeMessage(target_triple);
+
             // Create MCJIT execution engine
             let mut ee = std::ptr::null_mut();
             let mut error = std::ptr::null_mut();
@@ -8770,7 +8780,8 @@ fn type_key_simple_codegen(ty: &Type) -> String {
             if elem_types.is_empty() {
                 "unit".into()
             } else {
-                let type_names: Vec<String> = elem_types.iter().map(type_key_simple_codegen).collect();
+                let type_names: Vec<String> =
+                    elem_types.iter().map(type_key_simple_codegen).collect();
                 format!("__Tuple{}_{}", elem_types.len(), type_names.join("_"))
             }
         }
@@ -8860,10 +8871,12 @@ mod tests {
                     Local {
                         name: Some("p".into()),
                         ty: Some(Type::Named("Point".into())),
+                        mutable: false,
                     },
                     Local {
                         name: None,
                         ty: Some(Type::Named("Point".into())),
+                        mutable: false,
                     },
                 ],
                 blocks: vec![MirBlock {
@@ -8915,6 +8928,7 @@ mod tests {
                 locals: vec![Local {
                     name: None,
                     ty: Some(Type::I32),
+                    mutable: false,
                 }],
                 blocks: vec![MirBlock {
                     insts: vec![
@@ -8960,14 +8974,17 @@ mod tests {
                     Local {
                         name: Some("p".into()),
                         ty: Some(Type::Named("Point".into())),
+                        mutable: false,
                     },
                     Local {
                         name: None,
                         ty: Some(Type::Named("Point".into())),
+                        mutable: false,
                     },
                     Local {
                         name: None,
                         ty: Some(Type::I32),
+                        mutable: false,
                     },
                 ],
                 blocks: vec![MirBlock {
@@ -9032,6 +9049,7 @@ mod tests {
                 locals: vec![Local {
                     name: None,
                     ty: Some(Type::I32),
+                    mutable: false,
                 }],
                 blocks: vec![MirBlock {
                     insts: vec![
@@ -9081,6 +9099,7 @@ mod tests {
                 locals: vec![Local {
                     name: None,
                     ty: Some(Type::I32),
+                    mutable: false,
                 }],
                 blocks: vec![MirBlock {
                     insts: vec![
@@ -9135,6 +9154,7 @@ mod tests {
                 locals: vec![Local {
                     name: None,
                     ty: Some(Type::I32),
+                    mutable: false,
                 }],
                 blocks: vec![MirBlock {
                     insts: vec![
@@ -9188,10 +9208,12 @@ mod tests {
                     Local {
                         name: None,
                         ty: Some(Type::Str),
+                        mutable: false,
                     },
                     Local {
                         name: None,
                         ty: Some(Type::I32),
+                        mutable: false,
                     },
                 ],
                 blocks: vec![MirBlock {

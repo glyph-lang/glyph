@@ -96,10 +96,10 @@ pub fn std_modules() -> HashMap<String, Module> {
             },
         ],
         ret_type: Some(TypeExpr::App {
-                    base: Box::new(tp("RawPtr", span)),
-                    args: vec![tp("u8", span)],
-                    span,
-                }),
+            base: Box::new(tp("RawPtr", span)),
+            args: vec![tp("u8", span)],
+            span,
+        }),
         link_name: Some("fopen".into()),
         span,
     };
@@ -173,10 +173,10 @@ pub fn std_modules() -> HashMap<String, Module> {
         params: vec![Param {
             name: Ident("file".into()),
             ty: Some(TypeExpr::App {
-                    base: Box::new(tp("RawPtr", span)),
-                    args: vec![tp("u8", span)],
-                    span,
-                }),
+                base: Box::new(tp("RawPtr", span)),
+                args: vec![tp("u8", span)],
+                span,
+            }),
             span,
         }],
         ret_type: Some(tp("i32", span)),
@@ -257,10 +257,10 @@ pub fn std_modules() -> HashMap<String, Module> {
         params: vec![Param {
             name: Ident("file".into()),
             ty: Some(TypeExpr::App {
-                    base: Box::new(tp("RawPtr", span)),
-                    args: vec![tp("u8", span)],
-                    span,
-                }),
+                base: Box::new(tp("RawPtr", span)),
+                args: vec![tp("u8", span)],
+                span,
+            }),
             span,
         }],
         ret_type: Some(tp("i64", span)),
@@ -274,10 +274,10 @@ pub fn std_modules() -> HashMap<String, Module> {
         params: vec![Param {
             name: Ident("file".into()),
             ty: Some(TypeExpr::App {
-                    base: Box::new(tp("RawPtr", span)),
-                    args: vec![tp("u8", span)],
-                    span,
-                }),
+                base: Box::new(tp("RawPtr", span)),
+                args: vec![tp("u8", span)],
+                span,
+            }),
             span,
         }],
         ret_type: None,

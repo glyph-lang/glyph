@@ -811,6 +811,7 @@ mod tests {
                     base: "Box".into(),
                     args: vec![Type::I32],
                 }),
+                mutable: false,
             }],
             blocks: vec![glyph_core::mir::MirBlock { insts: vec![] }],
         });
@@ -874,6 +875,7 @@ mod tests {
                     base: "Option".into(),
                     args: vec![Type::I32],
                 }),
+                mutable: false,
             }],
             blocks: vec![glyph_core::mir::MirBlock { insts: vec![] }],
         });
@@ -943,6 +945,7 @@ mod tests {
                     base: "Error".into(),
                     args: vec![Type::I32, Type::String],
                 }),
+                mutable: false,
             }],
             blocks: vec![glyph_core::mir::MirBlock { insts: vec![] }],
         });

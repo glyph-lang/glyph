@@ -1,8 +1,10 @@
 fn main() -> i32 {
   let cap: usize = 4
-  let v: Vec<i32> = Vec::with_capacity(cap)
+  let mut v: Vec<i32> = Vec::with_capacity(cap)
   let len: usize = v.len()
   // prevent unused warnings
   if len == cap { ret 0 }
+  // keep v alive so borrow checker isn't confused
+  let _dummy = v;
   ret 1
 }

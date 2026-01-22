@@ -19,7 +19,7 @@ fn compile_ir(name: &str) -> String {
         &src,
         FrontendOptions {
             emit_mir: true,
-            include_std: true,  // JSON requires stdlib
+            include_std: true, // JSON requires stdlib
         },
     );
     assert!(
@@ -54,7 +54,10 @@ fn codegen_json_simple() {
     let ir = compile_ir("json_simple.glyph");
 
     // Verify the IR compiles successfully (JSON types infrastructure works)
-    assert!(ir.contains("define"), "IR should contain function definitions");
+    assert!(
+        ir.contains("define"),
+        "IR should contain function definitions"
+    );
     assert!(ir.contains("main"), "IR should contain main function");
 }
 
@@ -63,7 +66,10 @@ fn codegen_json_primitives() {
     let ir = compile_ir("json_primitives.glyph");
 
     // Verify the IR compiles successfully with JSON primitive types
-    assert!(ir.contains("define"), "IR should contain function definitions");
+    assert!(
+        ir.contains("define"),
+        "IR should contain function definitions"
+    );
     assert!(ir.contains("main"), "IR should contain main function");
 }
 
@@ -72,7 +78,10 @@ fn codegen_json_arrays() {
     let ir = compile_ir("json_arrays.glyph");
 
     // Verify the IR compiles successfully with JSON array types
-    assert!(ir.contains("define"), "IR should contain function definitions");
+    assert!(
+        ir.contains("define"),
+        "IR should contain function definitions"
+    );
     assert!(ir.contains("main"), "IR should contain main function");
 }
 
@@ -81,6 +90,9 @@ fn codegen_json_objects() {
     let ir = compile_ir("json_objects.glyph");
 
     // Verify the IR compiles successfully with JSON object types
-    assert!(ir.contains("define"), "IR should contain function definitions");
+    assert!(
+        ir.contains("define"),
+        "IR should contain function definitions"
+    );
     assert!(ir.contains("main"), "IR should contain main function");
 }

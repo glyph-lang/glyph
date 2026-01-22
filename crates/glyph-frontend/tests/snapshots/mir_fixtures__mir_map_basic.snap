@@ -1,5 +1,6 @@
 ---
 source: crates/glyph-frontend/tests/mir_fixtures.rs
+assertion_line: 527
 expression: out.mir
 ---
 MirModule {
@@ -10,6 +11,17 @@ MirModule {
                 (
                     "msg",
                     String,
+                ),
+            ],
+        },
+        "File": StructType {
+            name: "File",
+            fields: [
+                (
+                    "handle",
+                    RawPtr(
+                        U8,
+                    ),
                 ),
             ],
         },
@@ -57,12 +69,46 @@ MirModule {
                 ),
             ],
         },
+        "ParseError": StructType {
+            name: "ParseError",
+            fields: [
+                (
+                    "message",
+                    String,
+                ),
+                (
+                    "position",
+                    Usize,
+                ),
+            ],
+        },
         "Stdout": StructType {
             name: "Stdout",
             fields: [
                 (
                     "fd",
                     I32,
+                ),
+            ],
+        },
+        "Vec$JsonValue": StructType {
+            name: "Vec$JsonValue",
+            fields: [
+                (
+                    "data",
+                    RawPtr(
+                        Named(
+                            "JsonValue",
+                        ),
+                    ),
+                ),
+                (
+                    "len",
+                    Usize,
+                ),
+                (
+                    "cap",
+                    Usize,
                 ),
             ],
         },
@@ -106,6 +152,45 @@ MirModule {
         },
     },
     enum_types: {
+        "JsonValue": EnumType {
+            name: "JsonValue",
+            variants: [
+                EnumVariant {
+                    name: "Null",
+                    payload: None,
+                },
+                EnumVariant {
+                    name: "Bool",
+                    payload: Some(
+                        Bool,
+                    ),
+                },
+                EnumVariant {
+                    name: "Number",
+                    payload: Some(
+                        F64,
+                    ),
+                },
+                EnumVariant {
+                    name: "String",
+                    payload: Some(
+                        String,
+                    ),
+                },
+                EnumVariant {
+                    name: "Array",
+                    payload: Some(
+                        Named(
+                            "Vec$JsonValue",
+                        ),
+                    ),
+                },
+                EnumVariant {
+                    name: "Object",
+                    payload: None,
+                },
+            ],
+        },
         "Option$i32": EnumType {
             name: "Option$i32",
             variants: [
@@ -175,6 +260,7 @@ MirModule {
                             "Map$i32__i32",
                         ),
                     ),
+                    mutable: false,
                 },
                 Local {
                     name: None,
@@ -183,6 +269,7 @@ MirModule {
                             "Map$i32__i32",
                         ),
                     ),
+                    mutable: false,
                 },
                 Local {
                     name: Some(
@@ -193,6 +280,7 @@ MirModule {
                             "Result$void__Err",
                         ),
                     ),
+                    mutable: false,
                 },
                 Local {
                     name: None,
@@ -201,6 +289,7 @@ MirModule {
                             "Result$void__Err",
                         ),
                     ),
+                    mutable: false,
                 },
                 Local {
                     name: Some(
@@ -211,6 +300,7 @@ MirModule {
                             "Result$void__Err",
                         ),
                     ),
+                    mutable: false,
                 },
                 Local {
                     name: None,
@@ -219,6 +309,7 @@ MirModule {
                             "Result$void__Err",
                         ),
                     ),
+                    mutable: false,
                 },
                 Local {
                     name: Some(
@@ -229,6 +320,7 @@ MirModule {
                             "Option$i32",
                         ),
                     ),
+                    mutable: false,
                 },
                 Local {
                     name: None,
@@ -237,6 +329,7 @@ MirModule {
                             "Option$i32",
                         ),
                     ),
+                    mutable: false,
                 },
                 Local {
                     name: Some(
@@ -245,12 +338,14 @@ MirModule {
                     ty: Some(
                         Bool,
                     ),
+                    mutable: false,
                 },
                 Local {
                     name: None,
                     ty: Some(
                         Bool,
                     ),
+                    mutable: false,
                 },
                 Local {
                     name: Some(
@@ -261,6 +356,7 @@ MirModule {
                             "Result$i32__Err",
                         ),
                     ),
+                    mutable: false,
                 },
                 Local {
                     name: None,
@@ -269,6 +365,7 @@ MirModule {
                             "Result$i32__Err",
                         ),
                     ),
+                    mutable: false,
                 },
                 Local {
                     name: Some(
@@ -279,6 +376,7 @@ MirModule {
                             "Vec$i32",
                         ),
                     ),
+                    mutable: false,
                 },
                 Local {
                     name: None,
@@ -287,6 +385,7 @@ MirModule {
                             "Vec$i32",
                         ),
                     ),
+                    mutable: false,
                 },
                 Local {
                     name: Some(
@@ -297,6 +396,7 @@ MirModule {
                             "Vec$i32",
                         ),
                     ),
+                    mutable: false,
                 },
                 Local {
                     name: None,
@@ -305,6 +405,7 @@ MirModule {
                             "Vec$i32",
                         ),
                     ),
+                    mutable: false,
                 },
             ],
             blocks: [
@@ -513,6 +614,185 @@ MirModule {
     ],
     extern_functions: [
         MirExternFunction {
+            name: "strdup",
+            ret_type: Some(
+                String,
+            ),
+            params: [
+                Str,
+            ],
+            abi: Some(
+                "C",
+            ),
+            link_name: Some(
+                "strdup",
+            ),
+        },
+        MirExternFunction {
+            name: "strlen",
+            ret_type: Some(
+                Usize,
+            ),
+            params: [
+                Str,
+            ],
+            abi: Some(
+                "C",
+            ),
+            link_name: Some(
+                "strlen",
+            ),
+        },
+        MirExternFunction {
+            name: "memcmp",
+            ret_type: Some(
+                I32,
+            ),
+            params: [
+                RawPtr(
+                    U8,
+                ),
+                RawPtr(
+                    U8,
+                ),
+                Usize,
+            ],
+            abi: Some(
+                "C",
+            ),
+            link_name: Some(
+                "memcmp",
+            ),
+        },
+        MirExternFunction {
+            name: "memcpy",
+            ret_type: Some(
+                RawPtr(
+                    U8,
+                ),
+            ),
+            params: [
+                RawPtr(
+                    U8,
+                ),
+                RawPtr(
+                    U8,
+                ),
+                Usize,
+            ],
+            abi: Some(
+                "C",
+            ),
+            link_name: Some(
+                "memcpy",
+            ),
+        },
+        MirExternFunction {
+            name: "strstr",
+            ret_type: Some(
+                RawPtr(
+                    U8,
+                ),
+            ),
+            params: [
+                Str,
+                Str,
+            ],
+            abi: Some(
+                "C",
+            ),
+            link_name: Some(
+                "strstr",
+            ),
+        },
+        MirExternFunction {
+            name: "isspace",
+            ret_type: Some(
+                I32,
+            ),
+            params: [
+                I32,
+            ],
+            abi: Some(
+                "C",
+            ),
+            link_name: Some(
+                "isspace",
+            ),
+        },
+        MirExternFunction {
+            name: "atof",
+            ret_type: Some(
+                F64,
+            ),
+            params: [
+                Str,
+            ],
+            abi: Some(
+                "C",
+            ),
+            link_name: Some(
+                "atof",
+            ),
+        },
+        MirExternFunction {
+            name: "isdigit",
+            ret_type: Some(
+                I32,
+            ),
+            params: [
+                I32,
+            ],
+            abi: Some(
+                "C",
+            ),
+            link_name: Some(
+                "isdigit",
+            ),
+        },
+        MirExternFunction {
+            name: "atoi",
+            ret_type: Some(
+                I32,
+            ),
+            params: [
+                Str,
+            ],
+            abi: Some(
+                "C",
+            ),
+            link_name: Some(
+                "atoi",
+            ),
+        },
+        MirExternFunction {
+            name: "byte_at",
+            ret_type: Some(
+                U8,
+            ),
+            params: [
+                Str,
+                Usize,
+            ],
+            abi: Some(
+                "C",
+            ),
+            link_name: Some(
+                "glyph_byte_at",
+            ),
+        },
+        MirExternFunction {
+            name: "argv",
+            ret_type: Some(
+                Named(
+                    "Vec$String",
+                ),
+            ),
+            params: [],
+            abi: None,
+            link_name: None,
+        },
+        MirExternFunction {
             name: "puts",
             ret_type: Some(
                 I32,
@@ -641,6 +921,57 @@ MirModule {
             ),
         },
         MirExternFunction {
+            name: "fseek",
+            ret_type: Some(
+                I32,
+            ),
+            params: [
+                RawPtr(
+                    U8,
+                ),
+                I64,
+                I32,
+            ],
+            abi: Some(
+                "C",
+            ),
+            link_name: Some(
+                "fseek",
+            ),
+        },
+        MirExternFunction {
+            name: "ftell",
+            ret_type: Some(
+                I64,
+            ),
+            params: [
+                RawPtr(
+                    U8,
+                ),
+            ],
+            abi: Some(
+                "C",
+            ),
+            link_name: Some(
+                "ftell",
+            ),
+        },
+        MirExternFunction {
+            name: "rewind",
+            ret_type: None,
+            params: [
+                RawPtr(
+                    U8,
+                ),
+            ],
+            abi: Some(
+                "C",
+            ),
+            link_name: Some(
+                "rewind",
+            ),
+        },
+        MirExternFunction {
             name: "println",
             ret_type: Some(
                 I32,
@@ -651,32 +982,6 @@ MirModule {
             abi: Some(
                 "C",
             ),
-            link_name: None,
-        },
-        MirExternFunction {
-            name: "strdup",
-            ret_type: Some(
-                String,
-            ),
-            params: [
-                Str,
-            ],
-            abi: Some(
-                "C",
-            ),
-            link_name: Some(
-                "strdup",
-            ),
-        },
-        MirExternFunction {
-            name: "argv",
-            ret_type: Some(
-                Named(
-                    "Vec$String",
-                ),
-            ),
-            params: [],
-            abi: None,
             link_name: None,
         },
     ],

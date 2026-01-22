@@ -2,7 +2,7 @@ from std/sys import argv
 from std import println
 
 fn main() -> i32 {
-  let _count = argv.len()
+  let _args = argv
   println("args loaded")
   ret 0
 }

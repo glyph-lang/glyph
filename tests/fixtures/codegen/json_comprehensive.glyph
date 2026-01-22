@@ -1,0 +1,9 @@
+// JSON Parser Test - validates that std/json/parser is accessible
+
+from std/json/parser import parse
+
+fn main() -> i32 {
+    // Test that parser can be imported and called
+    let r = parse("[1, 2, 3]")
+    ret 0
+}

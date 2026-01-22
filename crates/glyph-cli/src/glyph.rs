@@ -154,8 +154,7 @@ path = "src/main.glyph"
         project_name, project_name
     );
 
-    fs::write(&manifest_path, toml_content)
-        .map_err(internal_err("failed to write glyph.toml"))?;
+    fs::write(&manifest_path, toml_content).map_err(internal_err("failed to write glyph.toml"))?;
 
     println!("Created glyph.toml");
 
