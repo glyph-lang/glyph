@@ -3,20 +3,22 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use glyph_backend::{Backend, CodegenOptions, EmitKind};
 use glyph_core::ast::Module;
 use glyph_frontend::{
-    FrontendOptions, ResolverContext, compile_source, lex, parse, resolve_multi_module,
-    resolve_types,
+    compile_source, lex, parse, resolve_multi_module, resolve_types, FrontendOptions,
+    ResolverContext,
 };
 use walkdir::WalkDir;
 
-#[cfg(not(feature = "codegen"))]
-use glyph_backend::NullBackend;
+mod build_version;
+
 #[cfg(feature = "codegen")]
 use glyph_backend::llvm::LlvmBackend;
+#[cfg(not(feature = "codegen"))]
+use glyph_backend::NullBackend;
 #[cfg(feature = "codegen")]
 use glyph_backend::{
     codegen::CodegenContext,
@@ -24,7 +26,11 @@ use glyph_backend::{
 };
 
 #[derive(Parser, Debug)]
-#[command(name = "glyph", version, about = "Glyph language toolchain")]
+#[command(
+    name = "glyph",
+    version = crate::build_version::BUILD_VERSION,
+    about = "Glyph language toolchain"
+)]
 pub struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -299,28 +305,70 @@ fn build(
 }
 
 fn run(path: &PathBuf) -> Result<()> {
-    // Build the executable
-    build(path, EmitTarget::Exe, Vec::new(), Vec::new())?;
-
-    // Determine the executable name from the source file
-    let stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .ok_or_else(|| anyhow!("Invalid input file path"))?;
-    let exe_path = PathBuf::from(stem);
-
-    // Execute the program
-    let status = Command::new(format!("./{}", exe_path.display()))
-        .status()
-        .map_err(|e| anyhow!("Failed to execute program: {}", e))?;
-
-    // Check exit status
-    if !status.success() {
-        let code = status.code().unwrap_or(-1);
-        return Err(anyhow!("Program exited with status code: {}", code));
+    let source = load_source(path)?;
+    let output = compile_source(
+        &source,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: true,
+        },
+    );
+    if !output.diagnostics.is_empty() {
+        for diag in output.diagnostics {
+            eprintln!("{:?}", diag);
+        }
+        return Err(anyhow!("build failed"));
     }
 
-    Ok(())
+    #[cfg(feature = "codegen")]
+    {
+        // Prefer JIT execution for `run` to avoid platform-specific AOT linker/toolchain
+        // issues and to keep the feedback loop fast.
+        let mut ctx = CodegenContext::new("glyph_module")?;
+        ctx.codegen_module(&output.mir)?;
+
+        // Provide runtime symbols that are normally supplied by the AOT runtime library.
+        // When running via JIT, we need to make them available in-process.
+        let mut symbols = HashMap::new();
+        symbols.insert("glyph_byte_at".to_string(), glyph_byte_at as usize as u64);
+
+        let exit = ctx.jit_execute_i32_with_symbols("main", &symbols)?;
+        if exit != 0 {
+            return Err(anyhow!("Program exited with status code: {}", exit));
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "codegen"))]
+    {
+        let _ = output;
+        Err(anyhow!("running programs requires the 'codegen' feature"))
+    }
+}
+
+// Runtime helper used by std/string::byte_at (link_name = "glyph_byte_at").
+// This mirrors runtime/glyph_json.c so JIT execution can resolve the symbol.
+#[cfg(feature = "codegen")]
+#[unsafe(no_mangle)]
+pub extern "C" fn glyph_byte_at(s: *const std::ffi::c_char, index: usize) -> u8 {
+    if s.is_null() {
+        return 0;
+    }
+    unsafe {
+        let mut p = s as *const u8;
+        let mut i: usize = 0;
+        loop {
+            let b = *p;
+            if b == 0 {
+                return 0;
+            }
+            if i == index {
+                return b;
+            }
+            i += 1;
+            p = p.add(1);
+        }
+    }
 }
 
 #[cfg(test)]

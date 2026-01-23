@@ -962,12 +962,34 @@ pub fn std_modules() -> HashMap<String, Module> {
         span,
     };
 
+    // std/json ParseResult<T> = Ok(T) | Err(ParseError)
+    // We keep this as a single-parameter result type because multi-parameter enum
+    // monomorphization is still evolving in the compiler.
+    let parse_result_enum = EnumDef {
+        name: Ident("ParseResult".into()),
+        generic_params: vec![Ident("T".into())],
+        variants: vec![
+            EnumVariantDef {
+                name: Ident("Ok".into()),
+                payload: Some(tp("T", span)),
+                span,
+            },
+            EnumVariantDef {
+                name: Ident("Err".into()),
+                payload: Some(tp("ParseError", span)),
+                span,
+            },
+        ],
+        span,
+    };
+
     // TODO: Add parse function implementation
     // For now, std/json only provides the types (JsonValue, ParseError)
     // A full parser implementation requires more advanced language features
     let json_items = vec![
         glyph_core::ast::Item::Enum(json_value_enum),
         glyph_core::ast::Item::Struct(parse_error_struct),
+        glyph_core::ast::Item::Enum(parse_result_enum),
     ];
 
     let std_json_module = Module {

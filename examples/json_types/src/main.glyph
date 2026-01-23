@@ -32,10 +32,11 @@ fn main() -> i32 {
 
   println($"")
 
-  // Demonstrate creating JSON object (placeholder)
+  // Demonstrate creating JSON object
   println($"Creating a JSON object:")
-  let obj_val = JsonValue::Object
-  println($"  - Object (placeholder)")
+  let obj: Map<String, JsonValue> = Map::new()
+  let obj_val = JsonValue::Object(obj)
+  println($"  - Object")
 
   println($"")
   println($"=== Example Complete ===")

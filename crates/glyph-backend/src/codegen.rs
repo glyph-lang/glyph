@@ -2,12 +2,13 @@ use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::path::Path;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use glyph_core::mir::{
     BlockId, LocalId, MirBlock, MirExternFunction, MirFunction, MirInst, MirModule, MirValue,
     Rvalue,
 };
 use glyph_core::types::{EnumType, Mutability, StructType, Type};
+use llvm_sys::analysis::*;
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
 use llvm_sys::target::*;
@@ -104,8 +105,11 @@ impl CodegenContext {
                 .ok_or_else(|| anyhow!("missing llvm type for struct {}", name))?;
 
             let mut field_tys: Vec<LLVMTypeRef> = Vec::new();
-            for (_, field_ty) in &layout.fields {
-                field_tys.push(self.get_llvm_type(field_ty)?);
+            for (field_name, field_ty) in &layout.fields {
+                field_tys.push(
+                    self.get_llvm_type(field_ty)
+                        .with_context(|| format!("in struct {} field {}", name, field_name))?,
+                );
             }
 
             unsafe {
@@ -801,7 +805,9 @@ impl CodegenContext {
                 let ty = if let Some(payload) = &variant.payload {
                     match payload {
                         Type::Void => unsafe { LLVMInt8TypeInContext(self.context) },
-                        _ => self.get_llvm_type(payload)?,
+                        _ => self.get_llvm_type(payload).with_context(|| {
+                            format!("in enum {} variant {}", name, variant.name)
+                        })?,
                     }
                 } else {
                     unsafe { LLVMInt8TypeInContext(self.context) }
@@ -887,8 +893,18 @@ impl CodegenContext {
                             })?
                     }
                 }
-                Type::Param(_) | Type::App { .. } => {
-                    anyhow::bail!("generic types must be monomorphized before codegen")
+                Type::Param(p) => {
+                    anyhow::bail!(
+                        "generic types must be monomorphized before codegen (param: {})",
+                        p
+                    )
+                }
+                Type::App { base, args } => {
+                    anyhow::bail!(
+                        "generic types must be monomorphized before codegen (app: {}<{:?}>)",
+                        base,
+                        args
+                    )
                 }
             })
         }
@@ -8704,6 +8720,24 @@ impl CodegenContext {
             // Clone the module so the execution engine can take ownership
             let module_clone = LLVMCloneModule(self.module);
 
+            // Verify the cloned module before JIT execution.
+            let mut verify_err = std::ptr::null_mut();
+            if LLVMVerifyModule(
+                module_clone,
+                LLVMVerifierFailureAction::LLVMReturnStatusAction,
+                &mut verify_err,
+            ) != 0
+            {
+                let msg = if verify_err.is_null() {
+                    "unknown verification error".to_string()
+                } else {
+                    let s = CStr::from_ptr(verify_err).to_string_lossy().into_owned();
+                    LLVMDisposeMessage(verify_err);
+                    s
+                };
+                return Err(anyhow!("LLVM module verification failed: {}", msg));
+            }
+
             // Set explicit target triple to avoid ambiguities (e.g., aarch64 variants)
             let target_triple = LLVMGetDefaultTargetTriple();
             LLVMSetTarget(module_clone, target_triple);
@@ -8765,6 +8799,24 @@ impl CodegenContext {
     /// Emit an object file (.o) to disk using LLVM's target machine API
     pub fn emit_object_file(&self, output_path: &Path) -> Result<()> {
         unsafe {
+            // Verify module before attempting emission.
+            let mut verify_err = std::ptr::null_mut();
+            if LLVMVerifyModule(
+                self.module,
+                LLVMVerifierFailureAction::LLVMReturnStatusAction,
+                &mut verify_err,
+            ) != 0
+            {
+                let msg = if verify_err.is_null() {
+                    "unknown verification error".to_string()
+                } else {
+                    let s = CStr::from_ptr(verify_err).to_string_lossy().into_owned();
+                    LLVMDisposeMessage(verify_err);
+                    s
+                };
+                return Err(anyhow!("LLVM module verification failed: {}", msg));
+            }
+
             // Initialize all LLVM targets (x86, ARM, etc.)
             LLVM_InitializeAllTargetInfos();
             LLVM_InitializeAllTargets();

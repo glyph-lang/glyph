@@ -4,7 +4,9 @@ use std::path::PathBuf;
 
 fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    let parser_path = PathBuf::from(&manifest_dir).join("src/stdlib/json/parser.glyph");
+    // Use the minimal parser for now; the full parser exercises language/codegen
+    // features that are still under active development.
+    let parser_path = PathBuf::from(&manifest_dir).join("src/stdlib/json/parser_inline.glyph");
 
     // Read the parser source
     let source = fs::read_to_string(&parser_path).expect("Failed to read parser.glyph");
@@ -22,6 +24,6 @@ fn main() {
     let output_path = PathBuf::from(out_dir).join("json_parser_source.txt");
     fs::write(&output_path, source).expect("Failed to write parser source");
 
-    // Tell cargo to rerun if parser.glyph changes
+    // Tell cargo to rerun if parser source changes
     println!("cargo:rerun-if-changed={}", parser_path.display());
 }

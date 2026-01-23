@@ -6,12 +6,14 @@ use std::process::Command as ProcessCommand;
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
 
+mod build_version;
+
 #[cfg(feature = "codegen")]
 use glyph_backend::{
     codegen::CodegenContext,
     linker::{Linker, LinkerOptions},
 };
-use glyph_frontend::{FrontendOptions, compile_source};
+use glyph_frontend::{compile_source, FrontendOptions};
 
 const EXIT_SUCCESS: i32 = 0;
 const EXIT_USAGE: i32 = 1;
@@ -19,7 +21,11 @@ const EXIT_COMPILER: i32 = 2;
 const EXIT_INTERNAL: i32 = 3;
 
 #[derive(Parser, Debug)]
-#[command(name = "glyph", version, about = "Glyph workflow utility (v0)")]
+#[command(
+    name = "glyph",
+    version = crate::build_version::BUILD_VERSION,
+    about = crate::build_version::WORKFLOW_ABOUT
+)]
 struct Cli {
     #[command(subcommand)]
     command: GlyphCommand,

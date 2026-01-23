@@ -200,6 +200,40 @@ fn substitute(ty: &Type, subst: &HashMap<String, Type>) -> Type {
     }
 }
 
+fn normalize_enum_named_types(ty: &Type, enum_names: &HashSet<String>) -> Type {
+    match ty {
+        Type::Named(n) if enum_names.contains(n) => Type::Enum(n.clone()),
+        Type::Ref(inner, m) => {
+            Type::Ref(Box::new(normalize_enum_named_types(inner, enum_names)), *m)
+        }
+        Type::Array(inner, size) => Type::Array(
+            Box::new(normalize_enum_named_types(inner, enum_names)),
+            *size,
+        ),
+        Type::Own(inner) => Type::Own(Box::new(normalize_enum_named_types(inner, enum_names))),
+        Type::RawPtr(inner) => {
+            Type::RawPtr(Box::new(normalize_enum_named_types(inner, enum_names)))
+        }
+        Type::Shared(inner) => {
+            Type::Shared(Box::new(normalize_enum_named_types(inner, enum_names)))
+        }
+        Type::App { base, args } => Type::App {
+            base: base.clone(),
+            args: args
+                .iter()
+                .map(|a| normalize_enum_named_types(a, enum_names))
+                .collect(),
+        },
+        Type::Tuple(elems) => Type::Tuple(
+            elems
+                .iter()
+                .map(|e| normalize_enum_named_types(e, enum_names))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
 fn rewrite_type(
     ty: &Type,
     templates: &HashMap<String, Template>,
@@ -536,6 +570,11 @@ fn instantiate_all(
 pub fn monomorphize_mir(mir: &mut MirModule, modules: &HashMap<String, Module>) -> Vec<Diagnostic> {
     let templates = collect_templates(modules);
 
+    // Normalize enum references: some lowering paths may record an enum type as `Named`,
+    // which can lead to duplicate monomorphizations (e.g. ParseResult$JsonValue vs
+    // ParseResult$enum_JsonValue) and ABI mismatches.
+    let enum_names: HashSet<String> = mir.enum_types.keys().cloned().collect();
+
     let mut diagnostics = Vec::new();
     let mut instantiations: HashMap<(String, Vec<Type>), String> = HashMap::new();
     let mut worklist = VecDeque::new();
@@ -546,6 +585,7 @@ pub fn monomorphize_mir(mir: &mut MirModule, modules: &HashMap<String, Module>) 
             continue;
         }
         for (_n, ty) in &mut st.fields {
+            *ty = normalize_enum_named_types(ty, &enum_names);
             *ty = rewrite_type(
                 ty,
                 &templates,
@@ -562,6 +602,7 @@ pub fn monomorphize_mir(mir: &mut MirModule, modules: &HashMap<String, Module>) 
         }
         for v in &mut et.variants {
             if let Some(payload) = &mut v.payload {
+                *payload = normalize_enum_named_types(payload, &enum_names);
                 *payload = rewrite_type(
                     payload,
                     &templates,
@@ -575,6 +616,7 @@ pub fn monomorphize_mir(mir: &mut MirModule, modules: &HashMap<String, Module>) 
 
     for func in &mut mir.functions {
         if let Some(ret) = &mut func.ret_type {
+            *ret = normalize_enum_named_types(ret, &enum_names);
             *ret = rewrite_type(
                 ret,
                 &templates,
@@ -585,6 +627,7 @@ pub fn monomorphize_mir(mir: &mut MirModule, modules: &HashMap<String, Module>) 
         }
         for local in &mut func.locals {
             if let Some(ty) = &mut local.ty {
+                *ty = normalize_enum_named_types(ty, &enum_names);
                 *ty = rewrite_type(
                     ty,
                     &templates,
@@ -617,6 +660,7 @@ pub fn monomorphize_mir(mir: &mut MirModule, modules: &HashMap<String, Module>) 
 
     for ex in &mut mir.extern_functions {
         if let Some(ret) = &mut ex.ret_type {
+            *ret = normalize_enum_named_types(ret, &enum_names);
             *ret = rewrite_type(
                 ret,
                 &templates,
@@ -626,6 +670,7 @@ pub fn monomorphize_mir(mir: &mut MirModule, modules: &HashMap<String, Module>) 
             );
         }
         for p in &mut ex.params {
+            *p = normalize_enum_named_types(p, &enum_names);
             *p = rewrite_type(
                 p,
                 &templates,

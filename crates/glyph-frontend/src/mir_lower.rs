@@ -920,9 +920,9 @@ fn lower_match<'a>(
         }
     };
 
-    let enum_name = match ctx.locals[scrut_local.0 as usize].ty.clone() {
-        Some(Type::Enum(name)) => name,
-        Some(Type::App { base, .. }) => base,
+    let (enum_name, enum_args) = match ctx.locals[scrut_local.0 as usize].ty.clone() {
+        Some(Type::Enum(name)) => (name, None),
+        Some(Type::App { base, args }) => (base, Some(args)),
         _ => {
             ctx.error("match scrutinee must be an enum value", Some(span));
             return None;
@@ -936,6 +936,43 @@ fn lower_match<'a>(
             return None;
         }
     };
+
+    fn substitute_match_params(ty: &Type, args: Option<&[Type]>) -> Type {
+        let Some(args) = args else {
+            return ty.clone();
+        };
+        match ty {
+            Type::Param(p) if p == "T" => args.get(0).cloned().unwrap_or_else(|| ty.clone()),
+            Type::Param(p) if p == "E" => args.get(1).cloned().unwrap_or_else(|| ty.clone()),
+            Type::Ref(inner, m) => {
+                Type::Ref(Box::new(substitute_match_params(inner, Some(args))), *m)
+            }
+            Type::Array(inner, size) => {
+                Type::Array(Box::new(substitute_match_params(inner, Some(args))), *size)
+            }
+            Type::Own(inner) => Type::Own(Box::new(substitute_match_params(inner, Some(args)))),
+            Type::RawPtr(inner) => {
+                Type::RawPtr(Box::new(substitute_match_params(inner, Some(args))))
+            }
+            Type::Shared(inner) => {
+                Type::Shared(Box::new(substitute_match_params(inner, Some(args))))
+            }
+            Type::App { base, args: targs } => Type::App {
+                base: base.clone(),
+                args: targs
+                    .iter()
+                    .map(|a| substitute_match_params(a, Some(args)))
+                    .collect(),
+            },
+            Type::Tuple(elems) => Type::Tuple(
+                elems
+                    .iter()
+                    .map(|e| substitute_match_params(e, Some(args)))
+                    .collect(),
+            ),
+            other => other.clone(),
+        }
+    }
 
     // Exhaustiveness check
     let mut seen_variants = std::collections::HashSet::new();
@@ -1056,6 +1093,7 @@ fn lower_match<'a>(
             if let Some(bind_ident) = binding {
                 if let Some(variant) = enum_def.variants.iter().find(|v| v.name == name.0) {
                     if let Some(payload_ty) = variant.payload.clone() {
+                        let payload_ty = substitute_match_params(&payload_ty, enum_args.as_deref());
                         let binding_local = ctx.fresh_local(Some(&bind_ident.0));
                         ctx.locals[binding_local.0 as usize].ty = Some(payload_ty.clone());
                         ctx.bindings.insert(&bind_ident.0, binding_local);

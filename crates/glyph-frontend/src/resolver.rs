@@ -986,12 +986,28 @@ pub fn populate_imported_types(ctx: &mut ResolverContext) {
             for item in &module.items {
                 match item {
                     Item::Struct(s) if s.name.0 == *original_name => {
+                        // Pre-register to support self/recursive references during resolution.
+                        ctx.struct_types.insert(
+                            local_name.clone(),
+                            StructType {
+                                name: local_name.clone(),
+                                fields: Vec::new(),
+                            },
+                        );
                         let mut st = struct_type_from_def(s, ctx);
                         st.name = local_name.clone();
                         ctx.struct_types.insert(local_name.clone(), st);
                         break;
                     }
                     Item::Enum(e) if e.name.0 == *original_name => {
+                        // Pre-register to support self/recursive references during resolution.
+                        ctx.enum_types.insert(
+                            local_name.clone(),
+                            EnumType {
+                                name: local_name.clone(),
+                                variants: Vec::new(),
+                            },
+                        );
                         let mut et = enum_type_from_def(e, ctx);
                         et.name = local_name.clone();
                         ctx.enum_types.insert(local_name.clone(), et);
@@ -1015,6 +1031,14 @@ pub fn populate_imported_types(ctx: &mut ResolverContext) {
                         if ctx.struct_types.contains_key(&s.name.0) {
                             continue;
                         }
+                        // Pre-register to support self/recursive references during resolution.
+                        ctx.struct_types.insert(
+                            s.name.0.clone(),
+                            StructType {
+                                name: s.name.0.clone(),
+                                fields: Vec::new(),
+                            },
+                        );
                         let st = struct_type_from_def(s, ctx);
                         ctx.struct_types.insert(st.name.clone(), st);
                     }
@@ -1022,6 +1046,14 @@ pub fn populate_imported_types(ctx: &mut ResolverContext) {
                         if ctx.enum_types.contains_key(&e.name.0) {
                             continue;
                         }
+                        // Pre-register to support self/recursive references during resolution.
+                        ctx.enum_types.insert(
+                            e.name.0.clone(),
+                            EnumType {
+                                name: e.name.0.clone(),
+                                variants: Vec::new(),
+                            },
+                        );
                         let et = enum_type_from_def(e, ctx);
                         ctx.enum_types.insert(et.name.clone(), et);
                     }

@@ -1,7 +1,6 @@
 // Minimal JSON Parser - Uses only basic Glyph syntax
 
-from std/enums import Result
-from std/json import JsonValue, ParseError
+from std/json import JsonValue, ParseError, ParseResult
 from std/map import Map
 from std/string import byte_at, atof
 from std/vec import Vec
@@ -62,7 +61,7 @@ fn parse_literal_loop(input: &str, pos: usize, lit: &str, lit_len: usize, i: usi
   ret parse_literal_loop(input, pos, lit, lit_len, i + 1)
 }
 
-fn parse_number(input: &str, pos: usize) -> Result<ParsedValue, ParseError> {
+fn parse_number(input: &str, pos: usize) -> ParseResult<ParsedValue> {
   let len = input.len()
   let mut i = pos
   if i < len && byte_at(input, i) == 45 {
@@ -134,7 +133,7 @@ fn parse_digits(input: &str, len: usize, i0: usize) -> usize {
   ret parse_digits(input, len, i0 + 1)
 }
 
-fn parse_string(input: &str, pos: usize) -> Result<ParsedString, ParseError> {
+fn parse_string(input: &str, pos: usize) -> ParseResult<ParsedString> {
   let len = input.len()
   if pos >= len || byte_at(input, pos) != 34 {
     ret Err(ParseError { message: String::from_str("expected string"), position: pos })
@@ -142,7 +141,7 @@ fn parse_string(input: &str, pos: usize) -> Result<ParsedString, ParseError> {
   ret parse_string_scan(input, len, pos, pos + 1)
 }
 
-fn parse_string_scan(input: &str, len: usize, start: usize, i: usize) -> Result<ParsedString, ParseError> {
+fn parse_string_scan(input: &str, len: usize, start: usize, i: usize) -> ParseResult<ParsedString> {
   if i >= len {
     ret Err(ParseError { message: String::from_str("unterminated string"), position: start })
   }
@@ -168,7 +167,7 @@ fn parse_string_scan(input: &str, len: usize, start: usize, i: usize) -> Result<
   ret parse_string_scan(input, len, start, i + 1)
 }
 
-fn parse_array(input: &str, pos: usize) -> Result<ParsedValue, ParseError> {
+fn parse_array(input: &str, pos: usize) -> ParseResult<ParsedValue> {
   let len = input.len()
   if pos >= len || byte_at(input, pos) != 91 {
     ret Err(ParseError { message: String::from_str("expected '['"), position: pos })
@@ -184,7 +183,7 @@ fn parse_array(input: &str, pos: usize) -> Result<ParsedValue, ParseError> {
   ret parse_array_elems(input, len, i, arr)
 }
 
-fn parse_array_elems(input: &str, len: usize, i0: usize, arr0: Vec<JsonValue>) -> Result<ParsedValue, ParseError> {
+fn parse_array_elems(input: &str, len: usize, i0: usize, arr0: Vec<JsonValue>) -> ParseResult<ParsedValue> {
   let pv = parse_value(input, i0)
   ret match pv {
     Ok(p) => parse_array_after_value(input, len, p, arr0),
@@ -197,7 +196,7 @@ fn parse_array_after_value(
   len: usize,
   parsed: ParsedValue,
   arr0: Vec<JsonValue>,
-) -> Result<ParsedValue, ParseError> {
+) -> ParseResult<ParsedValue> {
   let mut arr = arr0
   let next = parsed.next
   arr.push(parsed.value)
@@ -220,7 +219,7 @@ fn parse_array_after_value(
   ret Err(ParseError { message: String::from_str("expected ',' or ']'"), position: i })
 }
 
-fn parse_object(input: &str, pos: usize) -> Result<ParsedValue, ParseError> {
+fn parse_object(input: &str, pos: usize) -> ParseResult<ParsedValue> {
   let len = input.len()
   if pos >= len || byte_at(input, pos) != 123 {
     ret Err(ParseError { message: String::from_str("expected '{'"), position: pos })
@@ -236,7 +235,7 @@ fn parse_object(input: &str, pos: usize) -> Result<ParsedValue, ParseError> {
   ret parse_object_pairs(input, len, i, obj)
 }
 
-fn parse_object_pairs(input: &str, len: usize, i0: usize, obj0: Map<String, JsonValue>) -> Result<ParsedValue, ParseError> {
+fn parse_object_pairs(input: &str, len: usize, i0: usize, obj0: Map<String, JsonValue>) -> ParseResult<ParsedValue> {
   let pk = parse_string(input, i0)
   ret match pk {
     Ok(kparsed) => parse_object_after_key(input, len, kparsed, obj0),
@@ -249,7 +248,7 @@ fn parse_object_after_key(
   len: usize,
   kparsed: ParsedString,
   obj0: Map<String, JsonValue>,
-) -> Result<ParsedValue, ParseError> {
+) -> ParseResult<ParsedValue> {
   let mut i = skip_ws(input, kparsed.next)
 
   if i >= len || byte_at(input, i) != 58 {
@@ -270,7 +269,7 @@ fn parse_object_after_value(
   k: String,
   vparsed: ParsedValue,
   obj0: Map<String, JsonValue>,
-) -> Result<ParsedValue, ParseError> {
+) -> ParseResult<ParsedValue> {
   let mut obj = obj0
   let next_v = vparsed.next
   let _ = obj.update(k, vparsed.value)
@@ -293,7 +292,7 @@ fn parse_object_after_value(
   ret Err(ParseError { message: String::from_str("expected ',' or '}'"), position: i })
 }
 
-fn parse_value(input: &str, pos0: usize) -> Result<ParsedValue, ParseError> {
+fn parse_value(input: &str, pos0: usize) -> ParseResult<ParsedValue> {
   let pos = skip_ws(input, pos0)
   let len = input.len()
   if pos >= len {
@@ -334,7 +333,7 @@ fn parse_value(input: &str, pos0: usize) -> Result<ParsedValue, ParseError> {
   ret Err(ParseError { message: String::from_str("unexpected token"), position: pos })
 }
 
-fn parse(input: &str) -> Result<JsonValue, ParseError> {
+fn parse(input: &str) -> ParseResult<JsonValue> {
   let pv = parse_value(input, 0)
   ret match pv {
     Ok(p) => parse_finish(input, p),
@@ -342,7 +341,7 @@ fn parse(input: &str) -> Result<JsonValue, ParseError> {
   }
 }
 
-fn parse_finish(input: &str, parsed: ParsedValue) -> Result<JsonValue, ParseError> {
+fn parse_finish(input: &str, parsed: ParsedValue) -> ParseResult<JsonValue> {
   let end = skip_ws(input, parsed.next)
   if end != input.len() {
     ret Err(ParseError { message: String::from_str("trailing characters"), position: end })
