@@ -1028,8 +1028,27 @@ fn lower_match<'a>(
     }
 
     // Lower arms
+    //
+    // IMPORTANT: lowering arms can move locals. We must not let moves in one arm
+    // affect the move-state seen by subsequent arms, otherwise we can get false
+    // "use of moved value" diagnostics when a value is moved in only some arms.
+    //
+    // We snapshot the local state for the locals that exist before the arms,
+    // restore that snapshot at the start of each arm, and then conservatively
+    // merge the resulting states (Moved wins, then Uninitialized, then Initialized)
+    // for the join point.
+    let base_len = ctx.local_states.len();
+    let base_states = ctx.local_states.clone();
+    let mut merged_states = base_states.clone();
+
     for (idx, arm) in arms.iter().enumerate() {
         let arm_block = arm_blocks[idx];
+
+        // Reset pre-existing locals to their pre-arm state.
+        for i in 0..base_len {
+            ctx.local_states[i] = base_states[i];
+        }
+
         ctx.switch_to(arm_block);
         ctx.enter_scope();
 
@@ -1085,6 +1104,22 @@ fn lower_match<'a>(
             ctx.push_inst(MirInst::Goto(join_block));
         }
         ctx.exit_scope();
+
+        // Merge move-state back into the join state.
+        for i in 0..base_len {
+            merged_states[i] = match (merged_states[i], ctx.local_states[i]) {
+                (LocalState::Moved, _) | (_, LocalState::Moved) => LocalState::Moved,
+                (LocalState::Uninitialized, _) | (_, LocalState::Uninitialized) => {
+                    LocalState::Uninitialized
+                }
+                _ => LocalState::Initialized,
+            };
+        }
+    }
+
+    // Apply merged local state for the join point.
+    for i in 0..base_len {
+        ctx.local_states[i] = merged_states[i];
     }
 
     ctx.switch_to(join_block);
@@ -4251,8 +4286,8 @@ fn lower_value<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr) -> Option<MirValue> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::resolver::{ResolverContext, resolve_types};
-    use crate::{FrontendOptions, compile_source};
+    use crate::resolver::{resolve_types, ResolverContext};
+    use crate::{compile_source, FrontendOptions};
     use glyph_core::ast::{
         BinaryOp, Block, Expr, FieldDef, Function, Ident, Item, Literal, Module, Param, Stmt,
         StructDef, TypeExpr,
@@ -4378,12 +4413,10 @@ mod tests {
         let (mir, diags) = lower_module(&module, &ResolverContext::default());
         assert!(diags.is_empty(), "unexpected diagnostics: {:?}", diags);
         assert_eq!(mir.functions.len(), 1);
-        assert!(
-            mir.functions[0]
-                .blocks
-                .iter()
-                .any(|b| matches!(b.insts.last(), Some(MirInst::Return(_))))
-        );
+        assert!(mir.functions[0]
+            .blocks
+            .iter()
+            .any(|b| matches!(b.insts.last(), Some(MirInst::Return(_)))));
     }
 
     #[test]
@@ -4616,11 +4649,9 @@ mod tests {
             })
             .collect();
 
-        assert!(
-            assigns
-                .iter()
-                .any(|(local, value)| { local.0 == 0 && matches!(value, Rvalue::ConstInt(2)) })
-        );
+        assert!(assigns
+            .iter()
+            .any(|(local, value)| { local.0 == 0 && matches!(value, Rvalue::ConstInt(2)) }));
     }
 
     #[test]

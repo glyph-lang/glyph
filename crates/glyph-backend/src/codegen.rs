@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::path::Path;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{anyhow, bail, Result};
 use glyph_core::mir::{
     BlockId, LocalId, MirBlock, MirExternFunction, MirFunction, MirInst, MirModule, MirValue,
     Rvalue,
@@ -150,7 +150,67 @@ impl CodegenContext {
         self.function_types
             .get(name)
             .copied()
+            .or_else(|| self.builtin_extern_function_type(name))
             .ok_or_else(|| anyhow!("missing function type for {}", name))
+    }
+
+    fn builtin_extern_function_type(&self, name: &str) -> Option<LLVMTypeRef> {
+        unsafe {
+            let i8_ptr = LLVMPointerType(LLVMInt8TypeInContext(self.context), 0);
+            let usize_ty = LLVMInt64TypeInContext(self.context);
+            Some(match name {
+                // size_t strlen(const char*)
+                "strlen" => {
+                    let mut params = vec![i8_ptr];
+                    LLVMFunctionType(usize_ty, params.as_mut_ptr(), params.len() as u32, 0)
+                }
+                // void* memcpy(void*, const void*, size_t)
+                "memcpy" => {
+                    let mut params = vec![i8_ptr, i8_ptr, usize_ty];
+                    LLVMFunctionType(i8_ptr, params.as_mut_ptr(), params.len() as u32, 0)
+                }
+                // int memcmp(const void*, const void*, size_t)
+                "memcmp" => {
+                    let mut params = vec![i8_ptr, i8_ptr, usize_ty];
+                    LLVMFunctionType(
+                        LLVMInt32TypeInContext(self.context),
+                        params.as_mut_ptr(),
+                        params.len() as u32,
+                        0,
+                    )
+                }
+                // char* strstr(const char*, const char*)
+                "strstr" => {
+                    let mut params = vec![i8_ptr, i8_ptr];
+                    LLVMFunctionType(i8_ptr, params.as_mut_ptr(), params.len() as u32, 0)
+                }
+                // int isspace(int)
+                "isspace" => {
+                    let mut params = vec![LLVMInt32TypeInContext(self.context)];
+                    LLVMFunctionType(
+                        LLVMInt32TypeInContext(self.context),
+                        params.as_mut_ptr(),
+                        params.len() as u32,
+                        0,
+                    )
+                }
+                _ => return None,
+            })
+        }
+    }
+
+    fn get_or_declare_extern_function(&self, name: &str) -> Result<LLVMValueRef> {
+        unsafe {
+            let name_c = CString::new(name)?;
+            let existing = LLVMGetNamedFunction(self.module, name_c.as_ptr());
+            if !existing.is_null() {
+                return Ok(existing);
+            }
+            if let Some(fn_ty) = self.builtin_extern_function_type(name) {
+                return Ok(LLVMAddFunction(self.module, name_c.as_ptr(), fn_ty));
+            }
+            Err(anyhow!("missing extern function {}", name))
+        }
     }
 
     fn type_key(&self, ty: &Type) -> String {
@@ -1721,10 +1781,21 @@ impl CodegenContext {
                         return self.codegen_sys_argv_value();
                     }
 
-                    let callee = functions
-                        .get(name)
-                        .copied()
-                        .ok_or_else(|| anyhow!("unknown function {}", name))?;
+                    // Some low-level libc helpers may be referenced by stdlib lowering even
+                    // when they aren't explicitly declared in the MIR module.
+                    let callee = if let Some(callee) = functions.get(name).copied() {
+                        callee
+                    } else {
+                        match name.as_str() {
+                            "malloc" => self.ensure_malloc_fn()?,
+                            "free" => self.ensure_free_fn()?,
+                            "strdup" => self.ensure_strdup_fn()?,
+                            "strlen" | "memcpy" | "memcmp" | "strstr" | "isspace" => {
+                                self.get_or_declare_extern_function(name)?
+                            }
+                            _ => return Err(anyhow!("unknown function {}", name)),
+                        }
+                    };
 
                     // Find the MIR function to get its type signature
                     let fn_ty = if let Some(target_func) =
@@ -1736,10 +1807,38 @@ impl CodegenContext {
                     {
                         self.llvm_extern_function_type(extern_func)?
                     } else {
-                        bail!("function {} not found in MIR module", name);
+                        match name.as_str() {
+                            "malloc" => self.malloc_function_type(),
+                            "free" => self.free_function_type(),
+                            "strdup" => self.strdup_function_type(),
+                            "strlen" | "memcpy" | "memcmp" | "strstr" | "isspace" => {
+                                self.function_type_for(name)?
+                            }
+                            _ => bail!("function {} not found in MIR module", name),
+                        }
                     };
 
-                    let (param_types, is_extern) = self.call_param_types(name, mir_module);
+                    let (mut param_types, mut is_extern) = self.call_param_types(name, mir_module);
+                    if param_types.is_empty() {
+                        match name.as_str() {
+                            "malloc" => {
+                                // usize -> ptr
+                                param_types = vec![Some(Type::Usize)];
+                                is_extern = true;
+                            }
+                            "free" => {
+                                // ptr -> void
+                                param_types = vec![Some(Type::RawPtr(Box::new(Type::I8)))];
+                                is_extern = true;
+                            }
+                            "strdup" => {
+                                // str -> String
+                                param_types = vec![Some(Type::Str)];
+                                is_extern = true;
+                            }
+                            _ => {}
+                        }
+                    }
 
                     // Codegen arguments
                     let mut llvm_args: Vec<LLVMValueRef> = Vec::new();
@@ -2332,6 +2431,11 @@ impl CodegenContext {
                 let val = self.codegen_value(key, func, local_map)?;
                 self.cast_int_to_u64(val, false)
             }
+            Type::String | Type::Str => {
+                let val = self.codegen_value(key, func, local_map)?;
+                let len = self.codegen_string_len_value(val, functions)?;
+                self.cast_int_to_u64(len, false)
+            }
             Type::Ref(_, _) | Type::RawPtr(_) | Type::Own(_) | Type::Shared(_) => {
                 let val = self.codegen_value(key, func, local_map)?;
                 let u64_ty = unsafe { LLVMInt64TypeInContext(self.context) };
@@ -2420,6 +2524,18 @@ impl CodegenContext {
                     )
                 };
                 self.cast_int_to_u64(val, false)
+            }
+            Type::String | Type::Str => {
+                let val = unsafe {
+                    LLVMBuildLoad2(
+                        self.builder,
+                        self.get_llvm_type(key_type)?,
+                        key_ptr,
+                        CString::new("hash.str.load")?.as_ptr(),
+                    )
+                };
+                let len = self.codegen_string_len_value(val, functions)?;
+                self.cast_int_to_u64(len, false)
             }
             Type::Ref(_, _) | Type::RawPtr(_) | Type::Own(_) | Type::Shared(_) => {
                 let raw_val = unsafe {
@@ -5023,10 +5139,10 @@ impl CodegenContext {
         functions: &HashMap<String, LLVMValueRef>,
         name: &str,
     ) -> Result<LLVMValueRef> {
-        functions
-            .get(name)
-            .copied()
-            .ok_or_else(|| anyhow!("missing extern function {}", name))
+        if let Some(func) = functions.get(name).copied() {
+            return Ok(func);
+        }
+        self.get_or_declare_extern_function(name)
     }
 
     fn file_handle_ptr(

@@ -377,6 +377,26 @@ pub fn resolve_multi_module(
         )]
     })?;
 
+    // Only compile modules reachable from `main`. This prevents unused std modules
+    // (and their generic definitions) from being lowered into MIR and sent to codegen.
+    let mut reachable: HashSet<String> = HashSet::new();
+    let mut queue: VecDeque<String> = VecDeque::new();
+    queue.push_back("main".to_string());
+    while let Some(node) = queue.pop_front() {
+        if !reachable.insert(node.clone()) {
+            continue;
+        }
+        if let Some(deps) = dep_graph.edges.get(&node) {
+            for dep in deps {
+                queue.push_back(dep.clone());
+            }
+        }
+    }
+    let compile_order: Vec<String> = compile_order
+        .into_iter()
+        .filter(|m| reachable.contains(m))
+        .collect();
+
     // Step 4: Collect symbols from all modules
     let module_symbols = collect_module_symbols(&modules);
 

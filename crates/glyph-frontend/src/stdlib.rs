@@ -7,11 +7,31 @@ use glyph_core::ast::{
 use glyph_core::span::Span;
 use glyph_core::types::Mutability;
 
+use crate::{lexer, parser};
+
 fn tp(name: &str, span: Span) -> TypeExpr {
     TypeExpr::Path {
         segments: vec![name.to_string()],
         span,
     }
+}
+
+fn parse_std_source(module_id: &str, source: &str) -> Module {
+    let lex_out = lexer::lex(source);
+    if !lex_out.diagnostics.is_empty() {
+        panic!(
+            "failed to lex std module {}: {:?}",
+            module_id, lex_out.diagnostics
+        );
+    }
+    let parse_out = parser::parse(&lex_out.tokens, source);
+    if !parse_out.diagnostics.is_empty() {
+        panic!(
+            "failed to parse std module {}: {:?}",
+            module_id, parse_out.diagnostics
+        );
+    }
+    parse_out.module
 }
 
 /// Return the built-in std modules shipped with the compiler.
@@ -859,7 +879,14 @@ pub fn std_modules() -> HashMap<String, Module> {
     };
 
     let std_map_module = Module {
-        imports: vec![],
+        imports: vec![Import {
+            kind: ImportKind::Wildcard,
+            path: ImportPath {
+                segments: vec!["std/enums".into()],
+                span,
+            },
+            span,
+        }],
         items: vec![
             glyph_core::ast::Item::Struct(map_bucket_struct),
             glyph_core::ast::Item::Struct(map_struct),
@@ -903,9 +930,11 @@ pub fn std_modules() -> HashMap<String, Module> {
             },
             EnumVariantDef {
                 name: Ident("Object".into()),
-                // TODO: Implement proper object type when tuple types or String Hash is available
-                // For now, Object is a placeholder unit variant
-                payload: None,
+                payload: Some(TypeExpr::App {
+                    base: Box::new(tp("Map", span)),
+                    args: vec![tp("String", span), tp("JsonValue", span)],
+                    span,
+                }),
                 span,
             },
         ],
@@ -967,10 +996,25 @@ pub fn std_modules() -> HashMap<String, Module> {
                 },
                 span,
             },
+            Import {
+                kind: ImportKind::Wildcard,
+                path: ImportPath {
+                    segments: vec!["std/map".into()],
+                    span,
+                },
+                span,
+            },
         ],
         items: json_items,
     };
     modules.insert("std/json".into(), std_json_module);
+
+    // std/json/parser (embedded Glyph source)
+    // We embed the parser source at compile time so the compiler can ship std as one unit.
+    const STD_JSON_PARSER_SRC: &str =
+        include_str!(concat!(env!("OUT_DIR"), "/json_parser_source.txt"));
+    let std_json_parser_module = parse_std_source("std/json/parser", STD_JSON_PARSER_SRC);
+    modules.insert("std/json/parser".into(), std_json_parser_module);
 
     modules
 }

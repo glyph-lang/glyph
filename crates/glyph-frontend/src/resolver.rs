@@ -351,64 +351,6 @@ pub fn resolve_types(module: &Module) -> (ResolverContext, Vec<Diagnostic>) {
         }
     }
 
-    // Second pass: validate that all Named types reference actual structs
-    let struct_names: std::collections::HashSet<_> = ctx.struct_types.keys().cloned().collect();
-    let enum_names: std::collections::HashSet<_> = ctx.enum_types.keys().cloned().collect();
-
-    for item in &module.items {
-        if let Item::Struct(s) = item {
-            let struct_name = &s.name.0;
-            let generic_params: std::collections::HashSet<String> =
-                s.generic_params.iter().map(|p| p.0.clone()).collect();
-
-            if let Some(struct_type) = ctx.struct_types.get(struct_name) {
-                for (field_name, field_type) in &struct_type.fields {
-                    if let Type::Named(type_name) = field_type {
-                        let is_generic = generic_params.contains(type_name);
-                        let is_known =
-                            struct_names.contains(type_name) || enum_names.contains(type_name);
-                        if !is_generic && !is_known {
-                            diagnostics.push(Diagnostic::error(
-                                format!(
-                                    "undefined type '{}' used in field '{}' of struct '{}'",
-                                    type_name, field_name, struct_name
-                                ),
-                                Some(s.span),
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Validate enum payload types
-    for item in &module.items {
-        if let Item::Enum(e) = item {
-            if let Some(enum_type) = ctx.enum_types.get(&e.name.0) {
-                // Allow payload types that are enum generic params, known structs, or known enums.
-                let generic_params: std::collections::HashSet<String> =
-                    e.generic_params.iter().map(|p| p.0.clone()).collect();
-                for variant in &enum_type.variants {
-                    if let Some(Type::Named(type_name)) = &variant.payload {
-                        let is_generic = generic_params.contains(type_name);
-                        let is_known =
-                            struct_names.contains(type_name) || enum_names.contains(type_name);
-                        if !is_generic && !is_known {
-                            diagnostics.push(Diagnostic::error(
-                                format!(
-                                    "undefined type '{}' used in variant '{}' of enum '{}'",
-                                    type_name, variant.name, e.name.0
-                                ),
-                                Some(e.span),
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     // Third pass: collect extern function signatures (FFI subset)
     for item in &module.items {
         if let Item::ExternFunction(f) = item {
@@ -525,10 +467,80 @@ pub fn resolve_types(module: &Module) -> (ResolverContext, Vec<Diagnostic>) {
         }
     }
 
+    // Local struct name set for interface validation.
+    let struct_names: std::collections::HashSet<_> = ctx.struct_types.keys().cloned().collect();
+
     validate_interface_signatures(&ctx, &struct_names, &mut diagnostics);
     collect_interface_impls(module, &mut ctx, &mut diagnostics);
 
     (ctx, diagnostics)
+}
+
+/// Validate that all Named types referenced in struct fields / enum payloads
+/// exist in the resolver context.
+///
+/// Note: this must run *after* `populate_imported_types()` for multi-module
+/// compilation, otherwise references to imported types will be flagged as
+/// undefined.
+pub fn validate_named_types(
+    module: &Module,
+    ctx: &ResolverContext,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let struct_names: std::collections::HashSet<_> = ctx.struct_types.keys().cloned().collect();
+    let enum_names: std::collections::HashSet<_> = ctx.enum_types.keys().cloned().collect();
+
+    for item in &module.items {
+        if let Item::Struct(s) = item {
+            let struct_name = &s.name.0;
+            let generic_params: std::collections::HashSet<String> =
+                s.generic_params.iter().map(|p| p.0.clone()).collect();
+
+            if let Some(struct_type) = ctx.struct_types.get(struct_name) {
+                for (field_name, field_type) in &struct_type.fields {
+                    if let Type::Named(type_name) = field_type {
+                        let is_generic = generic_params.contains(type_name);
+                        let is_known =
+                            struct_names.contains(type_name) || enum_names.contains(type_name);
+                        if !is_generic && !is_known {
+                            diagnostics.push(Diagnostic::error(
+                                format!(
+                                    "undefined type '{}' used in field '{}' of struct '{}'",
+                                    type_name, field_name, struct_name
+                                ),
+                                Some(s.span),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for item in &module.items {
+        if let Item::Enum(e) = item {
+            if let Some(enum_type) = ctx.enum_types.get(&e.name.0) {
+                let generic_params: std::collections::HashSet<String> =
+                    e.generic_params.iter().map(|p| p.0.clone()).collect();
+                for variant in &enum_type.variants {
+                    if let Some(Type::Named(type_name)) = &variant.payload {
+                        let is_generic = generic_params.contains(type_name);
+                        let is_known =
+                            struct_names.contains(type_name) || enum_names.contains(type_name);
+                        if !is_generic && !is_known {
+                            diagnostics.push(Diagnostic::error(
+                                format!(
+                                    "undefined type '{}' used in variant '{}' of enum '{}'",
+                                    type_name, variant.name, e.name.0
+                                ),
+                                Some(e.span),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 const HASH_INTERFACE: &str = "Hash";
@@ -720,6 +732,8 @@ fn is_hashable_scalar(ty: &Type) -> bool {
             | Type::Char
             | Type::RawPtr(_)
             | Type::Ref(_, _)
+            | Type::String
+            | Type::Str
     )
 }
 
@@ -1830,11 +1844,9 @@ mod tests {
 
         let (ctx, mut diags) = resolve_types(&module);
         validate_map_usage(&module, &ctx, &mut diags);
-        assert!(
-            diags
-                .iter()
-                .any(|d| d.message.contains("Map expects 2 type arguments"))
-        );
+        assert!(diags
+            .iter()
+            .any(|d| d.message.contains("Map expects 2 type arguments")));
     }
 
     #[test]

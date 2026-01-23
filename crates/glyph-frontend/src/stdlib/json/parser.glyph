@@ -1,91 +1,351 @@
 // Minimal JSON Parser - Uses only basic Glyph syntax
 
+from std/enums import Result
+from std/json import JsonValue, ParseError
+from std/map import Map
 from std/string import byte_at, atof
+from std/vec import Vec
 
-// Main parse function - currently just returns a placeholder
-fn parse(input: &str) -> Result<JsonValue, ParseError> {
+struct ParsedValue {
+  value: JsonValue,
+  next: usize,
+}
+
+struct ParsedString {
+  value: String,
+  next: usize,
+}
+
+fn parsed_string_to_json_value(p: ParsedString) -> ParsedValue {
+  let next = p.next
+  let s = p.value
+  ret ParsedValue { value: JsonValue::String(s), next: next }
+}
+
+fn skip_ws(input: &str, pos0: usize) -> usize {
+  let mut pos = pos0
   let len = input.len()
+  while pos < len {
+    let ch = byte_at(input, pos)
+    // space, tab, CR, LF
+    if ch == 32 || ch == 9 || ch == 13 || ch == 10 {
+      pos = pos + 1
+    } else {
+      ret pos
+    }
+  }
+  ret pos
+}
 
-  // Handle empty string
-  if len == 0 {
-    ret Err(ParseError {
-      message: String::from_str("empty input"),
-      position: 0,
-    })
+fn is_digit(ch: u8) -> bool {
+  ret ch >= 48 && ch <= 57
+}
+
+fn parse_literal(input: &str, pos: usize, lit: &str) -> bool {
+  let lit_len = lit.len()
+  let in_len = input.len()
+  if pos + lit_len > in_len {
+    ret false
   }
 
-  // Try to match "null"
-  if len == 4 {
-    let c0 = byte_at(input, 0)
-    let c1 = byte_at(input, 1)
-    let c2 = byte_at(input, 2)
-    let c3 = byte_at(input, 3)
-    if c0 == 110 && c1 == 117 && c2 == 108 && c3 == 108 {
-      ret Ok(JsonValue::Null)
+  let i0 = 0
+  ret parse_literal_loop(input, pos, lit, lit_len, i0)
+}
+
+fn parse_literal_loop(input: &str, pos: usize, lit: &str, lit_len: usize, i: usize) -> bool {
+  if i >= lit_len {
+    ret true
+  }
+  if byte_at(input, pos + i) != byte_at(lit, i) {
+    ret false
+  }
+  ret parse_literal_loop(input, pos, lit, lit_len, i + 1)
+}
+
+fn parse_number(input: &str, pos: usize) -> Result<ParsedValue, ParseError> {
+  let len = input.len()
+  let mut i = pos
+  if i < len && byte_at(input, i) == 45 {
+    i = i + 1
+  }
+
+  if i >= len {
+    ret Err(ParseError { message: String::from_str("expected digit"), position: i })
+  }
+  if is_digit(byte_at(input, i)) {
+    // ok
+  } else {
+    ret Err(ParseError { message: String::from_str("expected digit"), position: i })
+  }
+
+  i = parse_digits(input, len, i)
+
+  // fraction
+  if i < len && byte_at(input, i) == 46 {
+    i = i + 1
+    if i >= len {
+      ret Err(ParseError { message: String::from_str("expected digit after '.'"), position: i })
+    }
+    if is_digit(byte_at(input, i)) {
+      // ok
+    } else {
+      ret Err(ParseError { message: String::from_str("expected digit after '.'"), position: i })
+    }
+    i = parse_digits(input, len, i)
+  }
+
+  // exponent (subset)
+  if i < len {
+    let e = byte_at(input, i)
+    if e == 101 || e == 69 {
+      i = i + 1
+      if i < len {
+        let s = byte_at(input, i)
+        if s == 43 || s == 45 {
+          i = i + 1
+        }
+      }
+      if i >= len {
+        ret Err(ParseError { message: String::from_str("expected digit in exponent"), position: i })
+      }
+      if is_digit(byte_at(input, i)) {
+        // ok
+      } else {
+        ret Err(ParseError { message: String::from_str("expected digit in exponent"), position: i })
+      }
+      i = parse_digits(input, len, i)
     }
   }
 
-  // Try to match "true"
-  if len == 4 {
-    let c0 = byte_at(input, 0)
-    let c1 = byte_at(input, 1)
-    let c2 = byte_at(input, 2)
-    let c3 = byte_at(input, 3)
-    if c0 == 116 && c1 == 114 && c2 == 117 && c3 == 101 {
-      ret Ok(JsonValue::Bool(true))
+  let slice = input.slice(pos, i - pos)
+  let n = atof(slice)
+  ret Ok(ParsedValue { value: JsonValue::Number(n), next: i })
+}
+
+fn parse_digits(input: &str, len: usize, i0: usize) -> usize {
+  if i0 >= len {
+    ret i0
+  }
+  if is_digit(byte_at(input, i0)) {
+    // ok
+  } else {
+    ret i0
+  }
+  ret parse_digits(input, len, i0 + 1)
+}
+
+fn parse_string(input: &str, pos: usize) -> Result<ParsedString, ParseError> {
+  let len = input.len()
+  if pos >= len || byte_at(input, pos) != 34 {
+    ret Err(ParseError { message: String::from_str("expected string"), position: pos })
+  }
+  ret parse_string_scan(input, len, pos, pos + 1)
+}
+
+fn parse_string_scan(input: &str, len: usize, start: usize, i: usize) -> Result<ParsedString, ParseError> {
+  if i >= len {
+    ret Err(ParseError { message: String::from_str("unterminated string"), position: start })
+  }
+
+  let ch = byte_at(input, i)
+  if ch == 34 {
+    let s = input.slice(start + 1, i - (start + 1))
+    ret Ok(ParsedString { value: s, next: i + 1 })
+  }
+
+  if ch == 92 {
+    if i + 1 >= len {
+      ret Err(ParseError { message: String::from_str("unterminated escape"), position: i })
+    }
+    // subset: allow \" only
+    let next = byte_at(input, i + 1)
+    if next != 34 {
+      ret Err(ParseError { message: String::from_str("unsupported escape"), position: i })
+    }
+    ret parse_string_scan(input, len, start, i + 2)
+  }
+
+  ret parse_string_scan(input, len, start, i + 1)
+}
+
+fn parse_array(input: &str, pos: usize) -> Result<ParsedValue, ParseError> {
+  let len = input.len()
+  if pos >= len || byte_at(input, pos) != 91 {
+    ret Err(ParseError { message: String::from_str("expected '['"), position: pos })
+  }
+
+  let mut i = skip_ws(input, pos + 1)
+  let mut arr: Vec<JsonValue> = Vec::new()
+
+  if i < len && byte_at(input, i) == 93 {
+    ret Ok(ParsedValue { value: JsonValue::Array(arr), next: i + 1 })
+  }
+
+  ret parse_array_elems(input, len, i, arr)
+}
+
+fn parse_array_elems(input: &str, len: usize, i0: usize, arr0: Vec<JsonValue>) -> Result<ParsedValue, ParseError> {
+  let pv = parse_value(input, i0)
+  ret match pv {
+    Ok(p) => parse_array_after_value(input, len, p, arr0),
+    Err(e) => Err(e),
+  }
+}
+
+fn parse_array_after_value(
+  input: &str,
+  len: usize,
+  parsed: ParsedValue,
+  arr0: Vec<JsonValue>,
+) -> Result<ParsedValue, ParseError> {
+  let mut arr = arr0
+  let next = parsed.next
+  arr.push(parsed.value)
+  let mut i = skip_ws(input, next)
+
+  if i >= len {
+    ret Err(ParseError { message: String::from_str("unterminated array"), position: i })
+  }
+
+  let ch = byte_at(input, i)
+  if ch == 44 {
+    i = skip_ws(input, i + 1)
+    ret parse_array_elems(input, len, i, arr)
+  }
+
+  if ch == 93 {
+    ret Ok(ParsedValue { value: JsonValue::Array(arr), next: i + 1 })
+  }
+
+  ret Err(ParseError { message: String::from_str("expected ',' or ']'"), position: i })
+}
+
+fn parse_object(input: &str, pos: usize) -> Result<ParsedValue, ParseError> {
+  let len = input.len()
+  if pos >= len || byte_at(input, pos) != 123 {
+    ret Err(ParseError { message: String::from_str("expected '{'"), position: pos })
+  }
+
+  let mut i = skip_ws(input, pos + 1)
+  let mut obj: Map<String, JsonValue> = Map::new()
+
+  if i < len && byte_at(input, i) == 125 {
+    ret Ok(ParsedValue { value: JsonValue::Object(obj), next: i + 1 })
+  }
+
+  ret parse_object_pairs(input, len, i, obj)
+}
+
+fn parse_object_pairs(input: &str, len: usize, i0: usize, obj0: Map<String, JsonValue>) -> Result<ParsedValue, ParseError> {
+  let pk = parse_string(input, i0)
+  ret match pk {
+    Ok(kparsed) => parse_object_after_key(input, len, kparsed, obj0),
+    Err(e) => Err(e),
+  }
+}
+
+fn parse_object_after_key(
+  input: &str,
+  len: usize,
+  kparsed: ParsedString,
+  obj0: Map<String, JsonValue>,
+) -> Result<ParsedValue, ParseError> {
+  let mut i = skip_ws(input, kparsed.next)
+
+  if i >= len || byte_at(input, i) != 58 {
+    ret Err(ParseError { message: String::from_str("expected ':'"), position: i })
+  }
+  i = skip_ws(input, i + 1)
+
+  let pv = parse_value(input, i)
+  ret match pv {
+    Ok(vparsed) => parse_object_after_value(input, len, kparsed.value, vparsed, obj0),
+    Err(e) => Err(e),
+  }
+}
+
+fn parse_object_after_value(
+  input: &str,
+  len: usize,
+  k: String,
+  vparsed: ParsedValue,
+  obj0: Map<String, JsonValue>,
+) -> Result<ParsedValue, ParseError> {
+  let mut obj = obj0
+  let next_v = vparsed.next
+  let _ = obj.update(k, vparsed.value)
+
+  let mut i = skip_ws(input, next_v)
+  if i >= len {
+    ret Err(ParseError { message: String::from_str("unterminated object"), position: i })
+  }
+
+  let ch = byte_at(input, i)
+  if ch == 44 {
+    i = skip_ws(input, i + 1)
+    ret parse_object_pairs(input, len, i, obj)
+  }
+
+  if ch == 125 {
+    ret Ok(ParsedValue { value: JsonValue::Object(obj), next: i + 1 })
+  }
+
+  ret Err(ParseError { message: String::from_str("expected ',' or '}'"), position: i })
+}
+
+fn parse_value(input: &str, pos0: usize) -> Result<ParsedValue, ParseError> {
+  let pos = skip_ws(input, pos0)
+  let len = input.len()
+  if pos >= len {
+    ret Err(ParseError { message: String::from_str("unexpected end of input"), position: pos })
+  }
+
+  if parse_literal(input, pos, "null") {
+    ret Ok(ParsedValue { value: JsonValue::Null(), next: pos + 4 })
+  }
+  if parse_literal(input, pos, "true") {
+    ret Ok(ParsedValue { value: JsonValue::Bool(true), next: pos + 4 })
+  }
+  if parse_literal(input, pos, "false") {
+    ret Ok(ParsedValue { value: JsonValue::Bool(false), next: pos + 5 })
+  }
+
+  let ch = byte_at(input, pos)
+  if ch == 34 {
+    let ps = parse_string(input, pos)
+    ret match ps {
+      Ok(p) => Ok(parsed_string_to_json_value(p)),
+      Err(e) => Err(e),
     }
   }
 
-  // Try to match "false"
-  if len == 5 {
-    let c0 = byte_at(input, 0)
-    let c1 = byte_at(input, 1)
-    let c2 = byte_at(input, 2)
-    let c3 = byte_at(input, 3)
-    let c4 = byte_at(input, 4)
-    if c0 == 102 && c1 == 97 && c2 == 108 && c3 == 115 && c4 == 101 {
-      ret Ok(JsonValue::Bool(false))
-    }
+  if ch == 91 {
+    ret parse_array(input, pos)
   }
 
-  // Try to match numbers (simplified - just use atof)
-  let first_ch = byte_at(input, 0)
-  if first_ch >= 48 && first_ch <= 57 || first_ch == 45 {  // digit or '-'
-    let num = atof(input)
-    ret Ok(JsonValue::Number(num))
+  if ch == 123 {
+    ret parse_object(input, pos)
   }
 
-  // Try to match string
-  if first_ch == 34 {  // '"'
-    let last_ch = byte_at(input, len - 1)
-    if last_ch == 34 && len >= 2 {
-      let str_val = input.slice(1, len - 2)
-      ret Ok(JsonValue::String(str_val))
-    }
+  if ch == 45 || is_digit(ch) {
+    ret parse_number(input, pos)
   }
 
-  // Try to match empty array
-  if len == 2 {
-    let c0 = byte_at(input, 0)
-    let c1 = byte_at(input, 1)
-    if c0 == 91 && c1 == 93 {  // "[]"
-      let arr = Vec::new()
-      ret Ok(JsonValue::Array(arr))
-    }
-  }
+  ret Err(ParseError { message: String::from_str("unexpected token"), position: pos })
+}
 
-  // Try to match empty object
-  if len == 2 {
-    let c0 = byte_at(input, 0)
-    let c1 = byte_at(input, 1)
-    if c0 == 123 && c1 == 125 {  // "{}"
-      ret Ok(JsonValue::Object)
-    }
+fn parse(input: &str) -> Result<JsonValue, ParseError> {
+  let pv = parse_value(input, 0)
+  ret match pv {
+    Ok(p) => parse_finish(input, p),
+    Err(e) => Err(e),
   }
+}
 
-  // Unrecognized input
-  ret Err(ParseError {
-    message: String::from_str("unexpected input"),
-    position: 0,
-  })
+fn parse_finish(input: &str, parsed: ParsedValue) -> Result<JsonValue, ParseError> {
+  let end = skip_ws(input, parsed.next)
+  if end != input.len() {
+    ret Err(ParseError { message: String::from_str("trailing characters"), position: end })
+  }
+  ret Ok(parsed.value)
 }

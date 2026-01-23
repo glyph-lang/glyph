@@ -14,14 +14,14 @@ mod parser;
 mod resolver;
 mod stdlib;
 
-pub use lexer::{LexOutput, lex};
+pub use lexer::{lex, LexOutput};
 pub use mir_lower::lower_module;
 pub use module_resolver::{
-    DependencyGraph, ImportScope, ModuleSymbols, MultiModuleContext, build_dependency_graph,
-    resolve_multi_module,
+    build_dependency_graph, resolve_multi_module, DependencyGraph, ImportScope, ModuleSymbols,
+    MultiModuleContext,
 };
-pub use parser::{ParseOutput, parse};
-pub use resolver::{ResolverContext, resolve_types};
+pub use parser::{parse, ParseOutput};
+pub use resolver::{resolve_types, ResolverContext};
 pub use stdlib::std_modules;
 
 #[derive(Debug, Clone, Default)]
@@ -85,6 +85,7 @@ pub fn compile_source(source: &str, opts: FrontendOptions) -> FrontendOutput {
                             ctx.import_scope = multi_ctx.import_scopes.get(&module_id).cloned();
                             ctx.all_modules = Some(multi_ctx.clone());
                             resolver::populate_imported_types(&mut ctx);
+                            resolver::validate_named_types(module, &ctx, &mut diagnostics);
                             resolver::validate_map_usage(module, &ctx, &mut diagnostics);
                             if !diagnostics.is_empty() {
                                 break;
@@ -123,6 +124,14 @@ pub fn compile_source(source: &str, opts: FrontendOptions) -> FrontendOutput {
                 let (ctx, resolve_diags) = resolver::resolve_types(m);
                 diagnostics.extend(resolve_diags);
                 if diagnostics.is_empty() {
+                    resolver::validate_named_types(m, &ctx, &mut diagnostics);
+                    if !diagnostics.is_empty() {
+                        return FrontendOutput {
+                            module,
+                            mir,
+                            diagnostics,
+                        };
+                    }
                     resolver::validate_map_usage(m, &ctx, &mut diagnostics);
                     if !diagnostics.is_empty() {
                         return FrontendOutput {

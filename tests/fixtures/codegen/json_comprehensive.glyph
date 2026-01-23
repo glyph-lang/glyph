@@ -3,7 +3,13 @@
 from std/json/parser import parse
 
 fn main() -> i32 {
-    // Test that parser can be imported and called
+    // Basic coverage: arrays + objects + duplicate keys
     let r = parse("[1, 2, 3]")
+    let r2 = parse("{\"a\": 1, \"a\": 2}")
+
+    // keep values alive
+    let _x = r
+    let _y = r2
+
     ret 0
 }
