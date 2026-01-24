@@ -1,0 +1,10 @@
+[package]
+name = "process_run"
+version = "0.1.0"
+
+[dependencies]
+# none yet
+
+[[bin]]
+name = "process_run"
+path = "src/main.glyph"

@@ -1146,6 +1146,16 @@ fn resolve_ffi_type(name: &str) -> Option<Type> {
         return Some(Type::RawPtr(Box::new(inner_ty)));
     }
 
+    // Allow Vec<T> for supported T (monomorphized later)
+    if trimmed.starts_with("Vec<") && trimmed.ends_with('>') {
+        let inner = trimmed.trim_start_matches("Vec<").trim_end_matches('>');
+        let inner_ty = resolve_ffi_type(inner)?;
+        return Some(Type::App {
+            base: "Vec".to_string(),
+            args: vec![inner_ty],
+        });
+    }
+
     None
 }
 

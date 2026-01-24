@@ -330,6 +330,7 @@ dependencies = [
  "glyph-backend",
  "glyph-core",
  "glyph-frontend",
+ "libc",
  "miette",
  "serde",
  "tempfile",

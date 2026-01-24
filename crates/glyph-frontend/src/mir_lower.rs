@@ -781,8 +781,8 @@ fn lower_block<'a>(ctx: &mut LowerCtx<'a>, block: &'a Block) -> Option<MirValue>
                     ctx.locals[local.0 as usize].ty = Some(annot_ty);
                 }
 
-                if let Some(rv) = value.as_ref().and_then(|e| lower_expr(ctx, e)) {
-                    update_local_type_from_rvalue(ctx, local, &rv);
+                if let Some(mut rv) = value.as_ref().and_then(|e| lower_expr(ctx, e)) {
+                    update_local_type_from_rvalue(ctx, local, &mut rv);
                     ctx.push_inst(MirInst::Assign { local, value: rv });
                 } else {
                     ctx.push_inst(MirInst::Nop);
@@ -870,8 +870,8 @@ fn lower_block<'a>(ctx: &mut LowerCtx<'a>, block: &'a Block) -> Option<MirValue>
                 span: _,
             } => {
                 if let Some(local) = lower_assignment_target(ctx, target) {
-                    if let Some(rv) = lower_expr(ctx, value) {
-                        update_local_type_from_rvalue(ctx, local, &rv);
+                    if let Some(mut rv) = lower_expr(ctx, value) {
+                        update_local_type_from_rvalue(ctx, local, &mut rv);
                         ctx.push_inst(MirInst::Assign { local, value: rv });
                     } else {
                         ctx.push_inst(MirInst::Nop);
@@ -1245,8 +1245,8 @@ fn lower_for<'a>(
     let var_local = ctx.fresh_local(Some(&var.0));
     ctx.bindings.insert(&var.0, var_local);
 
-    if let Some(rv) = lower_expr(ctx, start) {
-        update_local_type_from_rvalue(ctx, var_local, &rv);
+    if let Some(mut rv) = lower_expr(ctx, start) {
+        update_local_type_from_rvalue(ctx, var_local, &mut rv);
         ctx.push_inst(MirInst::Assign {
             local: var_local,
             value: rv,
@@ -4091,7 +4091,42 @@ fn lower_ref_expr<'a>(
     }
 }
 
-fn update_local_type_from_rvalue(ctx: &mut LowerCtx, local: LocalId, rv: &Rvalue) {
+fn update_local_type_from_rvalue(ctx: &mut LowerCtx, local: LocalId, rv: &mut Rvalue) {
+    let existing = ctx.locals[local.0 as usize].ty.clone();
+
+    // If the local is already typed (e.g. from an annotation), keep that type and
+    // adjust builtin container constructors to match it.
+    if let Some(existing_ty) = &existing {
+        match (existing_ty, rv) {
+            (
+                Type::App { base, args },
+                Rvalue::VecNew { elem_type }
+                | Rvalue::VecWithCapacity { elem_type, .. }
+                | Rvalue::VecPush { elem_type, .. },
+            ) if base == "Vec" && args.len() == 1 => {
+                *elem_type = args[0].clone();
+            }
+            (
+                Type::App { base, args },
+                Rvalue::MapNew {
+                    key_type,
+                    value_type,
+                }
+                | Rvalue::MapWithCapacity {
+                    key_type,
+                    value_type,
+                    ..
+                },
+            ) if base == "Map" && args.len() == 2 => {
+                *key_type = args[0].clone();
+                *value_type = args[1].clone();
+            }
+            _ => {}
+        }
+
+        return;
+    }
+
     if let Some(inferred) = infer_rvalue_type(rv, ctx) {
         ctx.locals[local.0 as usize].ty = Some(inferred);
     }
@@ -4302,9 +4337,9 @@ fn lower_value<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr) -> Option<MirValue> {
             mutability,
             span,
         } => {
-            let rv = lower_ref_expr(ctx, expr, *mutability, *span)?;
+            let mut rv = lower_ref_expr(ctx, expr, *mutability, *span)?;
             let tmp = ctx.fresh_local(None);
-            update_local_type_from_rvalue(ctx, tmp, &rv);
+            update_local_type_from_rvalue(ctx, tmp, &mut rv);
             ctx.push_inst(MirInst::Assign {
                 local: tmp,
                 value: rv,

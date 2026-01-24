@@ -1,0 +1,22 @@
+from std/json import JsonValue, ParseError
+from std/enums import Result
+from std/string import byte_at
+
+fn test_simple() -> i32 {
+    let input = "hello"
+    let len = input.len()
+    let ch = byte_at(input, 0)
+
+    if ch == 104 {  // 'h'
+        ret 0
+    } else {
+        ret 1
+    }
+}
+
+fn main() -> i32 {
+    println("Testing byte_at...")
+    let result = test_simple()
+    println("Done!")
+    ret result
+}

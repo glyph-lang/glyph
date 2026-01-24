@@ -415,6 +415,14 @@ pub fn std_modules() -> HashMap<String, Module> {
             Import {
                 kind: ImportKind::Wildcard,
                 path: ImportPath {
+                    segments: vec!["std/process".into()],
+                    span,
+                },
+                span,
+            },
+            Import {
+                kind: ImportKind::Wildcard,
+                path: ImportPath {
                     segments: vec!["std/hashing".into()],
                     span,
                 },
@@ -768,6 +776,37 @@ pub fn std_modules() -> HashMap<String, Module> {
         items: vec![glyph_core::ast::Item::ExternFunction(argv_extern)],
     };
     modules.insert("std/sys".into(), std_sys_module);
+
+    // std/process
+    let run_extern = ExternFunctionDecl {
+        abi: Some("C".into()),
+        name: Ident("run".into()),
+        params: vec![
+            Param {
+                name: Ident("cmd".into()),
+                ty: Some(tp("str", span)),
+                span,
+            },
+            Param {
+                name: Ident("args".into()),
+                ty: Some(TypeExpr::App {
+                    base: Box::new(tp("Vec", span)),
+                    args: vec![tp("String", span)],
+                    span,
+                }),
+                span,
+            },
+        ],
+        ret_type: Some(tp("i32", span)),
+        link_name: Some("glyph_process_run".into()),
+        span,
+    };
+
+    let std_process_module = Module {
+        imports: vec![],
+        items: vec![glyph_core::ast::Item::ExternFunction(run_extern)],
+    };
+    modules.insert("std/process".into(), std_process_module);
 
     // std/hashing with Hash interface placeholder
     let hash_interface = InterfaceDef {

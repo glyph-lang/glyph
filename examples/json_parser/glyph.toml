@@ -1,0 +1,10 @@
+[package]
+name = "json_parser"
+version = "0.1.0"
+
+[dependencies]
+# none yet
+
+[[bin]]
+name = "json_parser"
+path = "src/main.glyph"

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -331,6 +330,10 @@ fn run(path: &PathBuf) -> Result<()> {
         // When running via JIT, we need to make them available in-process.
         let mut symbols = HashMap::new();
         symbols.insert("glyph_byte_at".to_string(), glyph_byte_at as usize as u64);
+        symbols.insert(
+            "glyph_process_run".to_string(),
+            glyph_process_run as usize as u64,
+        );
 
         let exit = ctx.jit_execute_i32_with_symbols("main", &symbols)?;
         if exit != 0 {
@@ -369,6 +372,67 @@ pub extern "C" fn glyph_byte_at(s: *const std::ffi::c_char, index: usize) -> u8 
             p = p.add(1);
         }
     }
+}
+
+#[cfg(feature = "codegen")]
+#[repr(C)]
+pub struct GlyphVec {
+    pub data: *mut std::ffi::c_void,
+    pub len: i64,
+    pub cap: i64,
+}
+
+// Runtime helper used by std/process::run (link_name = "glyph_process_run").
+// The AOT path provides this via runtime/glyph_process.c; the JIT path needs an
+// in-process implementation.
+#[cfg(all(feature = "codegen", unix))]
+#[unsafe(no_mangle)]
+pub extern "C" fn glyph_process_run(cmd: *const std::ffi::c_char, args: GlyphVec) -> i32 {
+    use std::ffi::CStr;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::Command;
+
+    if cmd.is_null() {
+        return -(libc::EINVAL as i32);
+    }
+    if args.len < 0 {
+        return -(libc::EINVAL as i32);
+    }
+
+    let cmd_bytes = unsafe { CStr::from_ptr(cmd) }.to_bytes();
+    let cmd_os = std::ffi::OsStr::from_bytes(cmd_bytes);
+
+    let mut child = Command::new(cmd_os);
+
+    let arg_ptrs = args.data as *const *const std::ffi::c_char;
+    for i in 0..args.len {
+        let p = unsafe { *arg_ptrs.offset(i as isize) };
+        if p.is_null() {
+            continue;
+        }
+        let bytes = unsafe { CStr::from_ptr(p) }.to_bytes();
+        child.arg(std::ffi::OsStr::from_bytes(bytes));
+    }
+
+    match child.status() {
+        Ok(status) => {
+            if let Some(code) = status.code() {
+                code as i32
+            } else if let Some(sig) = status.signal() {
+                128 + sig
+            } else {
+                -(libc::EINVAL as i32)
+            }
+        }
+        Err(e) => -(e.raw_os_error().unwrap_or(1) as i32),
+    }
+}
+
+#[cfg(all(feature = "codegen", not(unix)))]
+#[unsafe(no_mangle)]
+pub extern "C" fn glyph_process_run(_cmd: *const std::ffi::c_char, _args: GlyphVec) -> i32 {
+    -(libc::ENOSYS as i32)
 }
 
 #[cfg(test)]

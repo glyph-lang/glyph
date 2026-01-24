@@ -1,0 +1,12 @@
+from std/process import run
+from std/vec import Vec
+from std import println
+
+fn main() -> i32 {
+  println("process_run example")
+
+  let mut args: Vec<String> = Vec::new()
+  args.push(String::from_str("x"))
+  let _ = args.pop()
+  ret run("true", args)
+}
