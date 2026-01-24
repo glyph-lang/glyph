@@ -9,7 +9,7 @@
 
 **The programming language designed for the LLM era.**
 
-[![CI](https://github.com/svenkratz/glyph/actions/workflows/ci.yml/badge.svg)](https://github.com/svenkratz/glyph/actions/workflows/ci.yml) ![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue) ![Rust Edition 2024](https://img.shields.io/badge/rust-edition%202024-orange)
+[![CI](https://github.com/glyph-lang/glyph/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/glyph-lang/glyph/actions/workflows/ci.yml) ![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue) ![Rust Edition 2024](https://img.shields.io/badge/rust-edition%202024-orange)
 
 Glyph is an experimental compiled systems language with a **small, predictable syntax** that LLMs can generate correctly and humans can read effortlessly. Powered by Rust and LLVM, it produces native binaries with zero runtime overhead.
 
