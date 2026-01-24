@@ -1,91 +1,164 @@
 // JSON Parser Demo - Using the std library JSON parser
+//
+// This example validates that parsing returns the expected *shape* for nested
+// JSON (arrays/objects). It will fail if the parser is stubbed/broken.
 
 from std/io import puts
+from std/enums import Option
+from std/json import JsonValue, ParseResult
+from std/map import Map
+from std/vec import Vec
 
 from std/json/parser import parse
 
 
+fn check_null() -> i32 {
+  let r = parse("null")
+  ret match r {
+    Ok(v) => match v {
+      Null => 0,
+      _ => 1,
+    },
+    Err(_e) => 1,
+  }
+}
+
+fn check_nested_array() -> i32 {
+  let r = parse("[[1, 2], [3, 4]]")
+  ret match r {
+    Ok(v) => match v {
+      Array(arr) => check_outer_array(arr),
+      _ => 1,
+    },
+    Err(_e) => 1,
+  }
+}
+
+fn check_outer_array(arr0: Vec<JsonValue>) -> i32 {
+  let mut arr = arr0
+  let right = arr.pop()
+  let left = arr.pop()
+  let extra = arr.pop()
+
+  ret match extra {
+    Some(_v) => 1,
+    None => match left {
+      Some(lv) => match lv {
+        Array(inner) => match right {
+          Some(rv) => match rv {
+            Array(inner2) => {
+              let s0 = check_pair_numbers(inner)
+              let s1 = check_pair_numbers(inner2)
+              if s0 == 0 {
+                s1
+              } else {
+                1
+              }
+            }
+            _ => 1,
+          },
+          None => 1,
+        },
+        _ => 1,
+      },
+      None => 1,
+    },
+  }
+}
+
+fn check_pair_numbers(arr0: Vec<JsonValue>) -> i32 {
+  let mut arr = arr0
+  let b = arr.pop()
+  let a = arr.pop()
+  let extra = arr.pop()
+
+  ret match extra {
+    Some(_v) => 1,
+    None => match a {
+      Some(av) => match av {
+        Number(_) => match b {
+          Some(bv) => match bv {
+            Number(_) => 0,
+            _ => 1,
+          },
+          None => 1,
+        },
+        _ => 1,
+      },
+      None => 1,
+    },
+  }
+}
+
+fn check_nested_object() -> i32 {
+  let r = parse("{\"a\": {\"b\": 3}}")
+  ret match r {
+    Ok(v) => match v {
+      Object(obj) => check_object_a_b(obj),
+      _ => 1,
+    },
+    Err(_e) => 1,
+  }
+}
+
+fn check_object_a_b(obj: Map<String, JsonValue>) -> i32 {
+  let a_opt = obj.get(String::from_str("a"))
+  ret match a_opt {
+    Some(a_val) => match a_val {
+      Object(inner) => {
+        let b_opt = inner.get(String::from_str("b"))
+        match b_opt {
+          Some(b_val) => match b_val {
+            Number(_) => 0,
+            _ => 1,
+          },
+          None => 1,
+        }
+      }
+      _ => 1,
+    },
+    None => 1,
+  }
+}
+
+fn check_trailing_rejected() -> i32 {
+  let r = parse("null x")
+  ret match r {
+    Ok(_v) => 1,
+    Err(_e) => 0,
+  }
+}
+
 fn main() -> i32 {
-    puts("=== Glyph JSON Parser Demo ===")
-    puts("")
+  puts("=== Glyph JSON Parser Demo ===")
+  puts("")
 
-    // Test primitives
-    puts("Testing: null")
-    let _r0 = parse("null")
-    let _ = _r0
-    puts("  OK")
+  let mut failures = 0
 
-    puts("Testing: true")
-    let _r1 = parse("true")
-    let _ = _r1
-    puts("  OK")
+  let s0 = check_null()
+  if s0 != 0 { puts("FAIL: null") }
+  failures = failures + s0
 
-    puts("Testing: false")
-    let _r2 = parse("false")
-    let _ = _r2
-    puts("  OK")
+  let s1 = check_nested_array()
+  if s1 != 0 { puts("FAIL: nested array") }
+  failures = failures + s1
 
-    puts("Testing: number 42")
-    let _r3 = parse("42")
-    let _ = _r3
-    puts("  OK")
+  let s2 = check_nested_object()
+  if s2 != 0 { puts("FAIL: nested object") }
+  failures = failures + s2
 
-    puts("Testing: negative number -10")
-    let _r4 = parse("-10")
-    let _ = _r4
-    puts("  OK")
+  let s3 = check_trailing_rejected()
+  if s3 != 0 { puts("FAIL: trailing") }
+  failures = failures + s3
 
-    puts("Testing: float 3.14")
-    let _r5 = parse("3.14")
-    let _ = _r5
-    puts("  OK")
-
-    puts("Testing: string hello")
-    let _r6 = parse("\"hello\"")
-    let _ = _r6
-    puts("  OK")
-
-    puts("Testing: empty string")
-    let _r7 = parse("\"\"")
-    let _ = _r7
-    puts("  OK")
-
-    puts("Testing: empty array")
-    let _r8 = parse("[]")
-    let _ = _r8
-    puts("  OK")
-
-    puts("Testing: simple array [1, 2, 3]")
-    let _r9 = parse("[1, 2, 3]")
-    let _ = _r9
-    puts("  OK")
-
-    puts("Testing: nested array [[1, 2], [3, 4]]")
-    let _r10 = parse("[[1, 2], [3, 4]]")
-    let _ = _r10
-    puts("  OK")
-
-    puts("Testing: empty object")
-    let _r11 = parse("{}")
-    let _ = _r11
-    puts("  OK")
-
-    puts("Testing: object {\"a\": 1}")
-    let _r12 = parse("{\"a\": {\"b\":3}}")
-    let _ = _r12
-    puts("  OK")
-
-    puts("")
-    puts("=== All Tests Complete ===")
-    puts("")
-    puts("SUCCESS: Parser loaded from std library")
-    puts("")
-    puts("Features demonstrated:")
-    puts("  - Importing pure Glyph modules from std library")
-    puts("  - Result-based error handling")
-    puts("  - Recursive descent parsing")
-    puts("  - Recursive arrays and objects")
-    puts("  - Pattern matching")
-
-    ret 0
+  puts("")
+  let mut rc = 1
+  if failures == 0 {
+    puts("SUCCESS")
+    rc = 0
+  } else {
+    puts("FAILED")
+    rc = 1
+  }
+  ret rc
 }

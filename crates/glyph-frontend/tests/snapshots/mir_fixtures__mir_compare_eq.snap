@@ -13,7 +13,9 @@ MirModule {
             locals: [
                 Local {
                     name: None,
-                    ty: None,
+                    ty: Some(
+                        Bool,
+                    ),
                     mutable: false,
                 },
             ],

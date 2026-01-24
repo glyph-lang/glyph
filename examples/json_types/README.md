@@ -11,14 +11,14 @@ The `std/json` module provides:
   - `Number(f64)` - JSON number
   - `String(String)` - JSON string
   - `Array(Vec<JsonValue>)` - JSON array
-  - `Object` - JSON object (placeholder)
+  - `Object(Map<String, JsonValue>)` - JSON object
 - **`ParseError`** struct: Error information for parsing failures
 
 ## What This Example Shows
 
 1. **Creating JSON values** of all primitive types (Null, Bool, Number, String)
 2. **Creating JSON arrays** using the Array variant
-3. **Creating JSON objects** using the Object placeholder variant
+3. **Creating JSON objects** using `Map<String, JsonValue>`
 4. **Type safety** - all JSON values are statically typed and checked at compile time
 
 ## Build and Run
@@ -44,7 +44,7 @@ Creating a JSON array:
   - Empty array created
 
 Creating a JSON object:
-  - Object (placeholder)
+  - Object
 
 === Example Complete ===
 
@@ -52,15 +52,9 @@ The JSON type system is working!
 All JsonValue variants can be created.
 ```
 
-## Current Limitations
+## Parsing
 
-This example demonstrates the JSON **type system** only. A full JSON parser implementation is planned but not yet available. The current infrastructure includes:
-
-- ✅ Complete `JsonValue` enum type
-- ✅ Recursive types (arrays of JSON values)
-- ✅ Pattern matching support
-- ✅ Generic container support (`Vec<JsonValue>`)
-- ⏳ Parser function (future enhancement)
+`std/json/parser::parse` exists and returns `ParseResult<JsonValue>`. Depending on your Glyph build, it may be a real parser or a temporary stub.
 
 ## Use Cases
 

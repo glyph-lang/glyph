@@ -1,5 +1,7 @@
 from std/json import JsonValue, ParseError
 from std import println
+from std/vec import Vec
+from std/map import Map
 
 fn main() -> i32 {
   println($"=== JSON Types Example ===")

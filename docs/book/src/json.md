@@ -45,4 +45,8 @@ fn main() -> i32 {
 }
 ```
 
-Note: the current parser is a minimal stub (it currently returns `Ok(JsonValue::Null)` as a placeholder).
+## Status
+
+`std/json` always provides the JSON types.
+
+`std/json/parser::parse` is intended to be a real parser, but some builds may ship a minimal stub while the compiler/runtime evolves. If you observe `parse(...)` always returning `Ok(JsonValue::Null)`, you're on a stubbed build.

@@ -38,6 +38,40 @@ pub struct CodegenContext {
 }
 
 impl CodegenContext {
+    fn coerce_int_binop(
+        &mut self,
+        lhs: LLVMValueRef,
+        rhs: LLVMValueRef,
+    ) -> (LLVMValueRef, LLVMValueRef) {
+        unsafe {
+            let lhs_ty = LLVMTypeOf(lhs);
+            let rhs_ty = LLVMTypeOf(rhs);
+
+            if LLVMGetTypeKind(lhs_ty) != llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind {
+                return (lhs, rhs);
+            }
+            if LLVMGetTypeKind(rhs_ty) != llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind {
+                return (lhs, rhs);
+            }
+
+            let lw = LLVMGetIntTypeWidth(lhs_ty);
+            let rw = LLVMGetIntTypeWidth(rhs_ty);
+            if lw == rw {
+                return (lhs, rhs);
+            }
+
+            let name = CString::new("int.coerce").unwrap();
+
+            if lw > rw {
+                let rhs2 = LLVMBuildSExt(self.builder, rhs, lhs_ty, name.as_ptr());
+                (lhs, rhs2)
+            } else {
+                let lhs2 = LLVMBuildSExt(self.builder, lhs, rhs_ty, name.as_ptr());
+                (lhs2, rhs)
+            }
+        }
+    }
+
     pub fn new(module_name: &str) -> Result<Self> {
         unsafe {
             let context = LLVMContextCreate();
@@ -1570,9 +1604,13 @@ impl CodegenContext {
                     }
                 }
                 Rvalue::Binary { op, lhs, rhs } => {
-                    let lhs_val = self.codegen_value(lhs, func, local_map)?;
-                    let rhs_val = self.codegen_value(rhs, func, local_map)?;
+                    let lhs_val0 = self.codegen_value(lhs, func, local_map)?;
+                    let rhs_val0 = self.codegen_value(rhs, func, local_map)?;
                     let name = CString::new("binop")?;
+
+                    // Integer literals in MIR are currently untyped and codegen as i32.
+                    // Coerce integer widths so operations like `usize + 1` work.
+                    let (lhs_val, rhs_val) = self.coerce_int_binop(lhs_val0, rhs_val0);
 
                     use glyph_core::ast::BinaryOp;
                     let result = match op {

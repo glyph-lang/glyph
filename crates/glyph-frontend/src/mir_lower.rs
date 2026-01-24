@@ -1009,15 +1009,22 @@ fn lower_match<'a>(
         arm_blocks.push(ctx.new_block());
     }
 
-    // Build chain of comparisons
+    // Build chain of comparisons.
+    //
+    // NOTE: we must emit the tag compare + branch into the *current* block of
+    // the chain. Previously we were appending `Assign`s via `ctx.push_inst`
+    // (which always targets `ctx.current`) while writing the `If` terminator
+    // into a different block (`current`). That could leave blocks without a
+    // terminator and also append instructions after a terminator.
     let mut current = ctx.current;
     for (idx, arm) in arms.iter().enumerate() {
+        // Ensure subsequent `push_inst`s land in the right block.
+        ctx.switch_to(current);
+
         let arm_block = arm_blocks[idx];
         match &arm.pattern {
             glyph_core::ast::MatchPattern::Wildcard => {
-                ctx.blocks[current.0 as usize]
-                    .insts
-                    .push(MirInst::Goto(arm_block));
+                ctx.push_inst(MirInst::Goto(arm_block));
                 break;
             }
             glyph_core::ast::MatchPattern::Variant { name, .. } => {
@@ -1053,7 +1060,7 @@ fn lower_match<'a>(
                     ctx.new_block()
                 };
 
-                ctx.blocks[current.0 as usize].insts.push(MirInst::If {
+                ctx.push_inst(MirInst::If {
                     cond: MirValue::Local(cond_local),
                     then_bb: arm_block,
                     else_bb: else_block,
@@ -1398,6 +1405,23 @@ fn lower_binary<'a>(
     let lhs_val = lower_value(ctx, lhs)?;
     let rhs_val = lower_value(ctx, rhs)?;
     let tmp = ctx.fresh_local(None);
+
+    // Comparisons always produce bool.
+    //
+    // If we leave the type unset, codegen will default the local slot to i32,
+    // but LLVM ICmp returns i1; that mismatch later breaks `if`/`while` lowering
+    // (branch conditions become i32).
+    match op {
+        glyph_core::ast::BinaryOp::Eq
+        | glyph_core::ast::BinaryOp::Ne
+        | glyph_core::ast::BinaryOp::Lt
+        | glyph_core::ast::BinaryOp::Le
+        | glyph_core::ast::BinaryOp::Gt
+        | glyph_core::ast::BinaryOp::Ge => {
+            ctx.locals[tmp.0 as usize].ty = Some(Type::Bool);
+        }
+        _ => {}
+    }
     ctx.push_inst(MirInst::Assign {
         local: tmp,
         value: Rvalue::Binary {
