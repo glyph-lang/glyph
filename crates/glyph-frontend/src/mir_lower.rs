@@ -521,10 +521,15 @@ impl<'a> LowerCtx<'a> {
     }
 
     fn push_inst(&mut self, inst: MirInst) {
-        if let MirInst::Assign { local, .. } = &inst {
+        if let MirInst::Assign { local, value } = &inst {
             self.handle_reassign(*local);
             if let Some(state) = self.local_states.get_mut(local.0 as usize) {
                 *state = LocalState::Initialized;
+            }
+            if let Rvalue::Move(src) = value {
+                if let Some(state) = self.local_states.get_mut(src.0 as usize) {
+                    *state = LocalState::Moved;
+                }
             }
         }
         self.current_block_mut().insts.push(inst);
@@ -631,7 +636,25 @@ impl<'a> LowerCtx<'a> {
     }
 
     fn emit_drop(&mut self, local: LocalId) {
-        self.current_block_mut().insts.push(MirInst::Drop(local));
+        let insert_before_terminator = self
+            .current_block_mut()
+            .insts
+            .last()
+            .map(|inst| {
+                matches!(
+                    inst,
+                    MirInst::Return(_) | MirInst::Goto(_) | MirInst::If { .. }
+                )
+            })
+            .unwrap_or(false);
+        if insert_before_terminator {
+            let idx = self.current_block_mut().insts.len() - 1;
+            self.current_block_mut()
+                .insts
+                .insert(idx, MirInst::Drop(local));
+        } else {
+            self.current_block_mut().insts.push(MirInst::Drop(local));
+        }
         if let Some(state) = self.local_states.get_mut(local.0 as usize) {
             *state = LocalState::Moved;
         }
@@ -743,7 +766,8 @@ fn lower_function(
         });
     }
 
-    let implicit_return = lower_block(&mut ctx, &func.body);
+    let implicit_return =
+        lower_block_with_expected(&mut ctx, &func.body, ret_type.as_ref(), false, true);
     if !ctx.terminated() {
         // If block returned a value, use it; otherwise return void
         ctx.drop_all_active_locals();
@@ -762,6 +786,16 @@ fn lower_function(
 }
 
 fn lower_block<'a>(ctx: &mut LowerCtx<'a>, block: &'a Block) -> Option<MirValue> {
+    lower_block_with_expected(ctx, block, None, false, false)
+}
+
+fn lower_block_with_expected<'a>(
+    ctx: &mut LowerCtx<'a>,
+    block: &'a Block,
+    expected: Option<&Type>,
+    control_value_context: bool,
+    move_returned_local: bool,
+) -> Option<MirValue> {
     ctx.enter_scope();
     let mut last_value = None;
 
@@ -836,24 +870,44 @@ fn lower_block<'a>(ctx: &mut LowerCtx<'a>, block: &'a Block) -> Option<MirValue>
                             else_block,
                             ..
                         } => {
-                            lower_if(ctx, cond, then_block, else_block.as_ref());
-                            // If expressions can return values, but we need to handle this
-                            // For now, treat as statement
+                            if control_value_context {
+                                last_value = lower_if_value(
+                                    ctx,
+                                    cond,
+                                    then_block,
+                                    else_block.as_ref(),
+                                    expected,
+                                );
+                            } else {
+                                lower_if(ctx, cond, then_block, else_block.as_ref());
+                            }
                         }
-                        Expr::While { cond, body, .. } => {
+                        Expr::While { cond, body, span } => {
                             lower_while(ctx, cond, body);
+                            if control_value_context {
+                                if !matches!(expected, Some(Type::Void)) {
+                                    ctx.error("while expression produces unit", Some(*span));
+                                }
+                                last_value = Some(MirValue::Unit);
+                            }
                         }
                         Expr::For {
                             var,
                             start,
                             end,
                             body,
-                            ..
+                            span,
                         } => {
                             lower_for(ctx, var, start, end, body);
+                            if control_value_context {
+                                if !matches!(expected, Some(Type::Void)) {
+                                    ctx.error("for expression produces unit", Some(*span));
+                                }
+                                last_value = Some(MirValue::Unit);
+                            }
                         }
                         _ => {
-                            last_value = lower_value(ctx, expr);
+                            last_value = lower_value_with_expected(ctx, expr, expected);
                         }
                     }
                 } else {
@@ -872,6 +926,10 @@ fn lower_block<'a>(ctx: &mut LowerCtx<'a>, block: &'a Block) -> Option<MirValue>
                             body,
                             ..
                         } => lower_for(ctx, var, start, end, body),
+                        Expr::Block(block) => {
+                            let _ = lower_block_with_expected(ctx, block, None, false, false);
+                            ctx.push_inst(MirInst::Nop);
+                        }
                         _ => {
                             let _ = lower_expr(ctx, expr);
                             ctx.push_inst(MirInst::Nop);
@@ -895,6 +953,14 @@ fn lower_block<'a>(ctx: &mut LowerCtx<'a>, block: &'a Block) -> Option<MirValue>
                 } else {
                     ctx.push_inst(MirInst::Nop);
                 }
+            }
+        }
+    }
+
+    if move_returned_local {
+        if let Some(MirValue::Local(local)) = last_value {
+            if let Some(state) = ctx.local_states.get_mut(local.0 as usize) {
+                *state = LocalState::Moved;
             }
         }
     }
@@ -1290,14 +1356,14 @@ fn lower_if_value<'a>(
     };
 
     ctx.switch_to(then_id);
-    let then_val = lower_block(ctx, then_blk);
+    let then_val = lower_block_with_expected(ctx, then_blk, expected, true, true);
     assign_result(ctx, then_val, then_blk.span);
     if !ctx.terminated() {
         ctx.push_inst(MirInst::Goto(join_id));
     }
 
     ctx.switch_to(else_id);
-    let else_val = lower_block(ctx, else_block);
+    let else_val = lower_block_with_expected(ctx, else_block, expected, true, true);
     assign_result(ctx, else_val, else_block.span);
     if !ctx.terminated() {
         ctx.push_inst(MirInst::Goto(join_id));
@@ -1510,6 +1576,9 @@ fn lower_expr_with_expected<'a>(
         } => {
             let value = lower_if_value(ctx, cond, then_block, else_block.as_ref(), expected);
             value.and_then(rvalue_from_value)
+        }
+        Expr::Block(block) => {
+            lower_block_with_expected(ctx, block, expected, true, true).and_then(rvalue_from_value)
         }
         Expr::While { cond, body, .. } => {
             lower_while(ctx, cond, body);
@@ -4600,6 +4669,7 @@ fn lower_value_with_expected<'a>(
             else_block,
             ..
         } => lower_if_value(ctx, cond, then_block, else_block.as_ref(), expected),
+        Expr::Block(block) => lower_block_with_expected(ctx, block, expected, true, true),
         Expr::StructLit { name, fields, span } => {
             lower_struct_lit(ctx, name, fields, *span).and_then(rvalue_to_value)
         }
@@ -4636,8 +4706,8 @@ mod tests {
     use crate::resolver::{resolve_types, ResolverContext};
     use crate::{compile_source, FrontendOptions};
     use glyph_core::ast::{
-        BinaryOp, Block, Expr, FieldDef, Function, Ident, Item, Literal, Module, Param, Stmt,
-        StructDef, TypeExpr,
+        BinaryOp, Block, EnumDef, EnumVariantDef, Expr, FieldDef, Function, Ident, Item, Literal,
+        MatchArm, MatchPattern, Module, Param, Stmt, StructDef, TypeExpr,
     };
     use glyph_core::span::Span;
     use glyph_core::types::{Mutability, Type};
@@ -4889,6 +4959,121 @@ mod tests {
                 ..
             } if field_name == "x"
         )));
+    }
+
+    #[test]
+    fn lowers_match_arm_block_expression_values() {
+        let span = Span::new(0, 5);
+
+        let enum_def = Item::Enum(EnumDef {
+            name: Ident("Maybe".into()),
+            generic_params: Vec::new(),
+            variants: vec![
+                EnumVariantDef {
+                    name: Ident("Some".into()),
+                    payload: Some(path_ty("i32", span)),
+                    span,
+                },
+                EnumVariantDef {
+                    name: Ident("None".into()),
+                    payload: None,
+                    span,
+                },
+            ],
+            span,
+        });
+
+        let match_expr = Expr::Match {
+            scrutinee: Box::new(Expr::Ident(Ident("v".into()), span)),
+            arms: vec![
+                MatchArm {
+                    pattern: MatchPattern::Variant {
+                        name: Ident("Some".into()),
+                        binding: Some(Ident("n".into())),
+                    },
+                    expr: Expr::Block(Block {
+                        span,
+                        stmts: vec![Stmt::Expr(Expr::Ident(Ident("n".into()), span), span)],
+                    }),
+                    span,
+                },
+                MatchArm {
+                    pattern: MatchPattern::Variant {
+                        name: Ident("None".into()),
+                        binding: None,
+                    },
+                    expr: Expr::Block(Block {
+                        span,
+                        stmts: vec![Stmt::Expr(Expr::Lit(Literal::Int(0), span), span)],
+                    }),
+                    span,
+                },
+            ],
+            span,
+        };
+
+        let func = Function {
+            name: Ident("main".into()),
+            params: vec![],
+            ret_type: Some(path_ty("i32", span)),
+            body: Block {
+                span,
+                stmts: vec![
+                    Stmt::Let {
+                        name: Ident("v".into()),
+                        ty: None,
+                        mutable: false,
+                        value: Some(Expr::Call {
+                            callee: Box::new(Expr::Ident(Ident("Some".into()), span)),
+                            args: vec![Expr::Lit(Literal::Int(1), span)],
+                            span,
+                        }),
+                        span,
+                    },
+                    Stmt::Ret(Some(match_expr), span),
+                ],
+            },
+            span,
+        };
+
+        let module = Module {
+            imports: vec![],
+            items: vec![enum_def, Item::Function(func)],
+        };
+
+        let (resolver, diags) = resolve_types(&module);
+        assert!(diags.is_empty());
+
+        let (mir, lower_diags) = lower_module(&module, &resolver);
+        assert!(
+            lower_diags.is_empty(),
+            "unexpected diagnostics: {:?}",
+            lower_diags
+        );
+
+        let main = mir
+            .functions
+            .iter()
+            .find(|f| f.name == "main")
+            .expect("main exists");
+
+        let ret_local = main
+            .blocks
+            .iter()
+            .flat_map(|b| &b.insts)
+            .find_map(|inst| match inst {
+                MirInst::Return(Some(MirValue::Local(id))) => Some(*id),
+                _ => None,
+            })
+            .expect("return local");
+
+        let has_assign = main
+            .blocks
+            .iter()
+            .flat_map(|b| &b.insts)
+            .any(|inst| matches!(inst, MirInst::Assign { local, .. } if *local == ret_local));
+
+        assert!(has_assign, "expected match arms to assign to result local");
     }
 
     #[test]

@@ -126,6 +126,14 @@ If you are unsure whether you have full context:
 - Say so explicitly
 - Ask to read more rather than guessing
 
+8. Using Agentic resources
+
+Use agentic resources at your disposal, specifically subagents and skills.
+
+Useful subagents:
+- wiggum : will tell you if the task is complete
+- MIR Expert: will help you thoroughly examine MIR-related code
+
 
 Summary Checklist for Agents
 ----------------------------

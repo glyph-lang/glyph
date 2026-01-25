@@ -72,6 +72,39 @@ impl CodegenContext {
         }
     }
 
+    fn coerce_int_value(
+        &mut self,
+        val: LLVMValueRef,
+        target_ty: LLVMTypeRef,
+        signed: bool,
+    ) -> LLVMValueRef {
+        unsafe {
+            let val_ty = LLVMTypeOf(val);
+            if val_ty == target_ty {
+                return val;
+            }
+            if LLVMGetTypeKind(val_ty) != llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind {
+                return val;
+            }
+            if LLVMGetTypeKind(target_ty) != llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind {
+                return val;
+            }
+
+            let val_bits = LLVMGetIntTypeWidth(val_ty);
+            let target_bits = LLVMGetIntTypeWidth(target_ty);
+            let name = CString::new("int.cast").unwrap();
+            if target_bits > val_bits {
+                if signed {
+                    LLVMBuildSExt(self.builder, val, target_ty, name.as_ptr())
+                } else {
+                    LLVMBuildZExt(self.builder, val, target_ty, name.as_ptr())
+                }
+            } else {
+                LLVMBuildTrunc(self.builder, val, target_ty, name.as_ptr())
+            }
+        }
+    }
+
     pub fn new(module_name: &str) -> Result<Self> {
         unsafe {
             let context = LLVMContextCreate();
@@ -117,6 +150,410 @@ impl CodegenContext {
         if std::env::var("GLYPH_DEBUG_CODEGEN").is_ok() {
             eprintln!("[codegen] {}", msg);
         }
+    }
+
+    fn debug_map_log(
+        &mut self,
+        label: &str,
+        cap: LLVMValueRef,
+        len: LLVMValueRef,
+        head: LLVMValueRef,
+    ) -> Result<()> {
+        if std::env::var("GLYPH_DEBUG_MAP").is_err() {
+            return Ok(());
+        }
+
+        let printf_fn = self.ensure_printf_fn()?;
+        let printf_ty = self.printf_function_type();
+        let fmt_name = format!(".str.map.debug.{}", label);
+        let fmt = format!("[map:{}] cap=%llu len=%llu head=%p\n", label);
+        let fmt_ptr = self.codegen_string_literal(&fmt, &fmt_name)?;
+
+        let i8_ty = unsafe { LLVMInt8TypeInContext(self.context) };
+        let i8_ptr_ty = unsafe { LLVMPointerType(i8_ty, 0) };
+        let head_ptr = unsafe {
+            LLVMBuildBitCast(
+                self.builder,
+                head,
+                i8_ptr_ty,
+                CString::new("map.head.cast")?.as_ptr(),
+            )
+        };
+
+        let u64_ty = unsafe { LLVMInt64TypeInContext(self.context) };
+        let cap_val = self.ensure_usize(cap, u64_ty)?;
+        let len_val = self.ensure_usize(len, u64_ty)?;
+        let mut args = vec![fmt_ptr, cap_val, len_val, head_ptr];
+        unsafe {
+            LLVMBuildCall2(
+                self.builder,
+                printf_ty,
+                printf_fn,
+                args.as_mut_ptr(),
+                args.len() as u32,
+                CString::new("map.debug")?.as_ptr(),
+            );
+        }
+        Ok(())
+    }
+
+    fn debug_map_log_index(
+        &mut self,
+        label: &str,
+        cap: LLVMValueRef,
+        len: LLVMValueRef,
+        buckets: LLVMValueRef,
+        head: LLVMValueRef,
+        idx: LLVMValueRef,
+        hash: LLVMValueRef,
+        key_len: LLVMValueRef,
+    ) -> Result<()> {
+        if std::env::var("GLYPH_DEBUG_MAP").is_err() {
+            return Ok(());
+        }
+
+        let printf_fn = self.ensure_printf_fn()?;
+        let printf_ty = self.printf_function_type();
+        let fmt_name = format!(".str.map.debug.idx.{}", label);
+        let fmt = format!(
+            "[map:{}] cap=%llu len=%llu buckets=%p head=%p idx=%llu hash=%llu key_len=%llu\n",
+            label
+        );
+        let fmt_ptr = self.codegen_string_literal(&fmt, &fmt_name)?;
+
+        let i8_ty = unsafe { LLVMInt8TypeInContext(self.context) };
+        let i8_ptr_ty = unsafe { LLVMPointerType(i8_ty, 0) };
+        let buckets_ptr = unsafe {
+            LLVMBuildBitCast(
+                self.builder,
+                buckets,
+                i8_ptr_ty,
+                CString::new("map.buckets.cast")?.as_ptr(),
+            )
+        };
+        let head_ptr = unsafe {
+            LLVMBuildBitCast(
+                self.builder,
+                head,
+                i8_ptr_ty,
+                CString::new("map.head.cast")?.as_ptr(),
+            )
+        };
+
+        let u64_ty = unsafe { LLVMInt64TypeInContext(self.context) };
+        let cap_val = self.ensure_usize(cap, u64_ty)?;
+        let len_val = self.ensure_usize(len, u64_ty)?;
+        let idx_val = self.ensure_usize(idx, u64_ty)?;
+        let hash_val = self.ensure_usize(hash, u64_ty)?;
+        let key_len_val = self.ensure_usize(key_len, u64_ty)?;
+        let mut args = vec![
+            fmt_ptr,
+            cap_val,
+            len_val,
+            buckets_ptr,
+            head_ptr,
+            idx_val,
+            hash_val,
+            key_len_val,
+        ];
+        unsafe {
+            LLVMBuildCall2(
+                self.builder,
+                printf_ty,
+                printf_fn,
+                args.as_mut_ptr(),
+                args.len() as u32,
+                CString::new("map.debug.idx")?.as_ptr(),
+            );
+        }
+        Ok(())
+    }
+
+    fn debug_map_key(
+        &mut self,
+        label: &str,
+        key_ptr: LLVMValueRef,
+        key_len: LLVMValueRef,
+    ) -> Result<()> {
+        if std::env::var("GLYPH_DEBUG_MAP").is_err() {
+            return Ok(());
+        }
+
+        let printf_fn = self.ensure_printf_fn()?;
+        let printf_ty = self.printf_function_type();
+        let fmt_name = format!(".str.map.debug.key.{}", label);
+        let fmt = format!("[map:{}] key=%p len=%llu first=%llu\n", label);
+        let fmt_ptr = self.codegen_string_literal(&fmt, &fmt_name)?;
+
+        let i8_ty = unsafe { LLVMInt8TypeInContext(self.context) };
+        let i8_ptr_ty = unsafe { LLVMPointerType(i8_ty, 0) };
+        let key_ptr_cast = unsafe {
+            LLVMBuildBitCast(
+                self.builder,
+                key_ptr,
+                i8_ptr_ty,
+                CString::new("map.key.cast")?.as_ptr(),
+            )
+        };
+        let first_ptr = unsafe {
+            LLVMBuildGEP2(
+                self.builder,
+                i8_ty,
+                key_ptr_cast,
+                vec![LLVMConstInt(LLVMInt64TypeInContext(self.context), 0, 0)].as_mut_ptr(),
+                1,
+                CString::new("map.key.first")?.as_ptr(),
+            )
+        };
+        let first_val = unsafe {
+            LLVMBuildLoad2(
+                self.builder,
+                i8_ty,
+                first_ptr,
+                CString::new("map.key.first.load")?.as_ptr(),
+            )
+        };
+        let first_u64 = unsafe {
+            LLVMBuildZExt(
+                self.builder,
+                first_val,
+                LLVMInt64TypeInContext(self.context),
+                CString::new("map.key.first.u64")?.as_ptr(),
+            )
+        };
+        let len_ty = unsafe { LLVMInt64TypeInContext(self.context) };
+        let len_val = self.ensure_usize(key_len, len_ty)?;
+        let mut args = vec![fmt_ptr, key_ptr_cast, len_val, first_u64];
+        unsafe {
+            LLVMBuildCall2(
+                self.builder,
+                printf_ty,
+                printf_fn,
+                args.as_mut_ptr(),
+                args.len() as u32,
+                CString::new("map.debug.key")?.as_ptr(),
+            );
+        }
+        Ok(())
+    }
+
+    fn debug_map_key_compare(
+        &mut self,
+        label: &str,
+        input_ptr: LLVMValueRef,
+        bucket_ptr: LLVMValueRef,
+        input_len: LLVMValueRef,
+        bucket_len: LLVMValueRef,
+        eq_val: LLVMValueRef,
+    ) -> Result<()> {
+        if std::env::var("GLYPH_DEBUG_MAP").is_err() {
+            return Ok(());
+        }
+
+        let printf_fn = self.ensure_printf_fn()?;
+        let printf_ty = self.printf_function_type();
+        let fmt_name = format!(".str.map.debug.cmp.{}", label);
+        let fmt = format!(
+            "[map:{}] eq=%llu in.len=%llu bucket.len=%llu in.first=%llu bucket.first=%llu\n",
+            label
+        );
+        let fmt_ptr = self.codegen_string_literal(&fmt, &fmt_name)?;
+
+        let i8_ty = unsafe { LLVMInt8TypeInContext(self.context) };
+        let i8_ptr_ty = unsafe { LLVMPointerType(i8_ty, 0) };
+        let input_ptr = unsafe {
+            LLVMBuildBitCast(
+                self.builder,
+                input_ptr,
+                i8_ptr_ty,
+                CString::new("map.cmp.in.cast")?.as_ptr(),
+            )
+        };
+        let bucket_ptr = unsafe {
+            LLVMBuildBitCast(
+                self.builder,
+                bucket_ptr,
+                i8_ptr_ty,
+                CString::new("map.cmp.bucket.cast")?.as_ptr(),
+            )
+        };
+        let zero_idx = unsafe { LLVMConstInt(LLVMInt64TypeInContext(self.context), 0, 0) };
+        let input_first_ptr = unsafe {
+            LLVMBuildGEP2(
+                self.builder,
+                i8_ty,
+                input_ptr,
+                vec![zero_idx].as_mut_ptr(),
+                1,
+                CString::new("map.cmp.in.first")?.as_ptr(),
+            )
+        };
+        let bucket_first_ptr = unsafe {
+            LLVMBuildGEP2(
+                self.builder,
+                i8_ty,
+                bucket_ptr,
+                vec![zero_idx].as_mut_ptr(),
+                1,
+                CString::new("map.cmp.bucket.first")?.as_ptr(),
+            )
+        };
+        let input_first = unsafe {
+            LLVMBuildLoad2(
+                self.builder,
+                i8_ty,
+                input_first_ptr,
+                CString::new("map.cmp.in.first.load")?.as_ptr(),
+            )
+        };
+        let bucket_first = unsafe {
+            LLVMBuildLoad2(
+                self.builder,
+                i8_ty,
+                bucket_first_ptr,
+                CString::new("map.cmp.bucket.first.load")?.as_ptr(),
+            )
+        };
+        let u64_ty = unsafe { LLVMInt64TypeInContext(self.context) };
+        let input_first_u64 = unsafe {
+            LLVMBuildZExt(
+                self.builder,
+                input_first,
+                u64_ty,
+                CString::new("map.cmp.in.first.u64")?.as_ptr(),
+            )
+        };
+        let bucket_first_u64 = unsafe {
+            LLVMBuildZExt(
+                self.builder,
+                bucket_first,
+                u64_ty,
+                CString::new("map.cmp.bucket.first.u64")?.as_ptr(),
+            )
+        };
+        let input_len_u64 = self.ensure_usize(input_len, u64_ty)?;
+        let bucket_len_u64 = self.ensure_usize(bucket_len, u64_ty)?;
+        let eq_u64 = unsafe {
+            LLVMBuildZExt(
+                self.builder,
+                eq_val,
+                u64_ty,
+                CString::new("map.cmp.eq.u64")?.as_ptr(),
+            )
+        };
+        let mut args = vec![
+            fmt_ptr,
+            eq_u64,
+            input_len_u64,
+            bucket_len_u64,
+            input_first_u64,
+            bucket_first_u64,
+        ];
+        unsafe {
+            LLVMBuildCall2(
+                self.builder,
+                printf_ty,
+                printf_fn,
+                args.as_mut_ptr(),
+                args.len() as u32,
+                CString::new("map.debug.cmp")?.as_ptr(),
+            );
+        }
+        Ok(())
+    }
+
+    fn debug_map_hash_compare(
+        &mut self,
+        label: &str,
+        input_hash: LLVMValueRef,
+        bucket_hash: LLVMValueRef,
+    ) -> Result<()> {
+        if std::env::var("GLYPH_DEBUG_MAP").is_err() {
+            return Ok(());
+        }
+
+        let printf_fn = self.ensure_printf_fn()?;
+        let printf_ty = self.printf_function_type();
+        let fmt_name = format!(".str.map.debug.hash.{}", label);
+        let fmt = format!("[map:{}] hash.in=%llu hash.bucket=%llu\n", label);
+        let fmt_ptr = self.codegen_string_literal(&fmt, &fmt_name)?;
+        let u64_ty = unsafe { LLVMInt64TypeInContext(self.context) };
+        let in_val = self.ensure_usize(input_hash, u64_ty)?;
+        let bucket_val = self.ensure_usize(bucket_hash, u64_ty)?;
+        let mut args = vec![fmt_ptr, in_val, bucket_val];
+        unsafe {
+            LLVMBuildCall2(
+                self.builder,
+                printf_ty,
+                printf_fn,
+                args.as_mut_ptr(),
+                args.len() as u32,
+                CString::new("map.debug.hash")?.as_ptr(),
+            );
+        }
+        Ok(())
+    }
+
+    fn debug_map_tag(&mut self, label: &str, tag: LLVMValueRef) -> Result<()> {
+        if std::env::var("GLYPH_DEBUG_MAP").is_err() {
+            return Ok(());
+        }
+
+        let printf_fn = self.ensure_printf_fn()?;
+        let printf_ty = self.printf_function_type();
+        let fmt_name = format!(".str.map.debug.tag.{}", label);
+        let fmt = format!("[map:{}] tag=%llu\n", label);
+        let fmt_ptr = self.codegen_string_literal(&fmt, &fmt_name)?;
+        let u64_ty = unsafe { LLVMInt64TypeInContext(self.context) };
+        let tag_u64 = unsafe {
+            LLVMBuildZExt(
+                self.builder,
+                tag,
+                u64_ty,
+                CString::new("map.tag.u64")?.as_ptr(),
+            )
+        };
+        let mut args = vec![fmt_ptr, tag_u64];
+        unsafe {
+            LLVMBuildCall2(
+                self.builder,
+                printf_ty,
+                printf_fn,
+                args.as_mut_ptr(),
+                args.len() as u32,
+                CString::new("map.debug.tag")?.as_ptr(),
+            );
+        }
+        Ok(())
+    }
+
+    fn debug_map_json_tag(&mut self, label: &str, json_val: LLVMValueRef) -> Result<()> {
+        if std::env::var("GLYPH_DEBUG_MAP").is_err() {
+            return Ok(());
+        }
+
+        let json_ty = self.get_enum_type("JsonValue")?;
+        let tmp =
+            unsafe { LLVMBuildAlloca(self.builder, json_ty, CString::new("json.tmp")?.as_ptr()) };
+        unsafe { LLVMBuildStore(self.builder, json_val, tmp) };
+        let tag_ptr = unsafe {
+            LLVMBuildStructGEP2(
+                self.builder,
+                json_ty,
+                tmp,
+                0,
+                CString::new("json.tag")?.as_ptr(),
+            )
+        };
+        let tag_val = unsafe {
+            LLVMBuildLoad2(
+                self.builder,
+                LLVMInt32TypeInContext(self.context),
+                tag_ptr,
+                CString::new("json.tag.load")?.as_ptr(),
+            )
+        };
+        self.debug_map_tag(label, tag_val)
     }
 
     fn rvalue_tag(&self, rvalue: &Rvalue) -> &'static str {
@@ -1911,8 +2348,39 @@ impl CodegenContext {
                         let mut arg_val = self.codegen_value(arg, func, local_map)?;
 
                         if let Some(Some(param_ty)) = param_types.get(idx) {
+                            let arg_ty = self.mir_value_type(arg, func);
+
+                            if let Some(Type::Ref(inner, _)) = arg_ty.as_ref() {
+                                if inner.as_ref() == param_ty {
+                                    let inner_llvm_ty = self.get_llvm_type(param_ty)?;
+                                    arg_val = unsafe {
+                                        LLVMBuildLoad2(
+                                            self.builder,
+                                            inner_llvm_ty,
+                                            arg_val,
+                                            CString::new("arg.deref")?.as_ptr(),
+                                        )
+                                    };
+                                }
+                            }
+
+                            if let Type::Ref(inner, _) = param_ty {
+                                if arg_ty.as_ref() == Some(inner.as_ref()) {
+                                    let inner_llvm_ty = self.get_llvm_type(inner)?;
+                                    let slot = unsafe {
+                                        LLVMBuildAlloca(
+                                            self.builder,
+                                            inner_llvm_ty,
+                                            CString::new("arg.addr")?.as_ptr(),
+                                        )
+                                    };
+                                    unsafe { LLVMBuildStore(self.builder, arg_val, slot) };
+                                    arg_val = slot;
+                                }
+                            }
+
                             if is_extern {
-                                if let Some(arg_ty) = self.mir_value_type(arg, func) {
+                                if let Some(arg_ty) = arg_ty.as_ref() {
                                     if (matches!(arg_ty, Type::Str)
                                         && (matches!(param_ty, Type::RawPtr(_))
                                             || matches!(param_ty, Type::Str)))
@@ -1933,6 +2401,30 @@ impl CodegenContext {
                                         }
                                     }
                                 }
+                            }
+
+                            let expected_ty = self.get_llvm_type(param_ty)?;
+                            let arg_ty = unsafe { LLVMTypeOf(arg_val) };
+                            let expected_kind = unsafe { LLVMGetTypeKind(expected_ty) };
+                            let arg_kind = unsafe { LLVMGetTypeKind(arg_ty) };
+                            if expected_kind == llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind
+                                && arg_kind == llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind
+                            {
+                                let signed = matches!(param_ty, Type::I8 | Type::I32 | Type::I64);
+                                arg_val = self.coerce_int_value(arg_val, expected_ty, signed);
+                            } else if expected_kind == llvm_sys::LLVMTypeKind::LLVMPointerTypeKind
+                                && arg_kind == llvm_sys::LLVMTypeKind::LLVMPointerTypeKind
+                                && arg_ty != expected_ty
+                            {
+                                let cast_name = CString::new("arg.ptr.cast")?;
+                                arg_val = unsafe {
+                                    LLVMBuildBitCast(
+                                        self.builder,
+                                        arg_val,
+                                        expected_ty,
+                                        cast_name.as_ptr(),
+                                    )
+                                };
                             }
                         }
 
@@ -3067,8 +3559,61 @@ impl CodegenContext {
         unsafe { LLVMBuildBr(self.builder, cont_bb) };
 
         unsafe { LLVMPositionBuilderAtEnd(self.builder, cont_bb) };
-        let bucket_index = self
-            .codegen_map_bucket_index(map, key_type, key, func, local_map, functions, mir_module)?;
+        let mut key_val = self.codegen_value(key, func, local_map)?;
+        if matches!(key_type, Type::String | Type::Str) {
+            let key_len = self.codegen_string_len_value(key_val, functions)?;
+            key_val = self.codegen_string_copy_from_ptr_len(key_val, key_len, functions)?;
+        }
+        let value_val = self.codegen_value(value, func, local_map)?;
+
+        let cap_val_cont = unsafe {
+            LLVMBuildLoad2(
+                self.builder,
+                usize_ty,
+                cap_ptr,
+                CString::new("map.cap.load")?.as_ptr(),
+            )
+        };
+        let (bucket_index, hash_dbg, key_len_dbg) = if matches!(key_type, Type::String | Type::Str)
+        {
+            let key_len = self.codegen_string_len_value(key_val, functions)?;
+            let hash_val = self.codegen_hash_bytes(key_val, key_len)?;
+            let hash_val = self.ensure_usize(hash_val, usize_ty)?;
+            let zero = unsafe { LLVMConstInt(usize_ty, 0, 0) };
+            let cap_is_zero = unsafe {
+                LLVMBuildICmp(
+                    self.builder,
+                    llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                    cap_val_cont,
+                    zero,
+                    CString::new("map.cap.zero")?.as_ptr(),
+                )
+            };
+            let rem = unsafe {
+                LLVMBuildURem(
+                    self.builder,
+                    hash_val,
+                    cap_val_cont,
+                    CString::new("map.bucket.idx")?.as_ptr(),
+                )
+            };
+            let bucket_index = unsafe {
+                LLVMBuildSelect(
+                    self.builder,
+                    cap_is_zero,
+                    zero,
+                    rem,
+                    CString::new("map.bucket.sel")?.as_ptr(),
+                )
+            };
+            (bucket_index, hash_val, key_len)
+        } else {
+            let idx = self.codegen_map_bucket_index(
+                map, key_type, key, func, local_map, functions, mir_module,
+            )?;
+            let zero = unsafe { LLVMConstInt(usize_ty, 0, 0) };
+            (idx, zero, zero)
+        };
 
         let bucket_name = self.map_bucket_name(key_type, value_type);
         let bucket_head_ty = Type::RawPtr(Box::new(Type::Named(bucket_name.clone())));
@@ -3102,6 +3647,37 @@ impl CodegenContext {
                 CString::new("map.bucket.head")?.as_ptr(),
             )
         };
+        let cap_dbg = unsafe {
+            LLVMBuildLoad2(
+                self.builder,
+                usize_ty,
+                cap_ptr,
+                CString::new("map.cap.dbg")?.as_ptr(),
+            )
+        };
+        let len_dbg = unsafe {
+            LLVMBuildLoad2(
+                self.builder,
+                usize_ty,
+                len_ptr,
+                CString::new("map.len.dbg")?.as_ptr(),
+            )
+        };
+
+        self.debug_map_log("add", cap_dbg, len_dbg, head_val)?;
+        self.debug_map_log_index(
+            "add.idx",
+            cap_dbg,
+            len_dbg,
+            bucket_array,
+            head_val,
+            bucket_index,
+            hash_dbg,
+            key_len_dbg,
+        )?;
+        if matches!(key_type, Type::String | Type::Str) {
+            self.debug_map_key("add.key", key_val, key_len_dbg)?;
+        }
 
         let current_slot = unsafe {
             LLVMBuildAlloca(
@@ -3114,7 +3690,7 @@ impl CodegenContext {
 
         let input_key_val = match key_type {
             Type::Named(_) => None,
-            _ => Some(self.codegen_value(key, func, local_map)?),
+            _ => Some(key_val),
         };
         let input_hash = match key_type {
             Type::Named(_) => {
@@ -3122,12 +3698,6 @@ impl CodegenContext {
             }
             _ => None,
         };
-        let mut key_val = self.codegen_value(key, func, local_map)?;
-        if matches!(key_type, Type::String | Type::Str) {
-            let key_len = self.codegen_string_len_value(key_val, functions)?;
-            key_val = self.codegen_string_copy_from_ptr_len(key_val, key_len, functions)?;
-        }
-        let value_val = self.codegen_value(value, func, local_map)?;
 
         let check_bb = unsafe {
             LLVMAppendBasicBlockInContext(
@@ -3210,6 +3780,11 @@ impl CodegenContext {
             Type::Named(_) => {
                 let bucket_hash =
                     self.codegen_map_hash_from_ptr(key_type, key_ptr, functions, mir_module)?;
+                self.debug_map_hash_compare(
+                    "get.hash",
+                    input_hash.expect("hash for named key"),
+                    bucket_hash,
+                )?;
                 unsafe {
                     LLVMBuildICmp(
                         self.builder,
@@ -3231,11 +3806,19 @@ impl CodegenContext {
                     )
                 };
                 if matches!(key_type, Type::String | Type::Str) {
-                    self.codegen_string_eq(
+                    let input_val = input_key_val.expect("key value");
+                    let input_len = self.codegen_string_len_value(input_val, functions)?;
+                    let bucket_len = self.codegen_string_len_value(bucket_key_val, functions)?;
+                    let eq_val = self.codegen_string_eq(bucket_key_val, input_val, functions)?;
+                    self.debug_map_key_compare(
+                        "get.cmp",
+                        input_val,
                         bucket_key_val,
-                        input_key_val.expect("key value"),
-                        functions,
-                    )?
+                        input_len,
+                        bucket_len,
+                        eq_val,
+                    )?;
+                    eq_val
                 } else {
                     unsafe {
                         LLVMBuildICmp(
@@ -3421,12 +4004,29 @@ impl CodegenContext {
                 CString::new("map.cap").unwrap().as_ptr(),
             )
         };
+        let len_ptr = unsafe {
+            LLVMBuildStructGEP2(
+                self.builder,
+                llvm_map_ty,
+                map_ptr,
+                2,
+                CString::new("map.len").unwrap().as_ptr(),
+            )
+        };
         let cap_val = unsafe {
             LLVMBuildLoad2(
                 self.builder,
                 usize_ty,
                 cap_ptr,
                 CString::new("map.cap.load")?.as_ptr(),
+            )
+        };
+        let len_val = unsafe {
+            LLVMBuildLoad2(
+                self.builder,
+                usize_ty,
+                len_ptr,
+                CString::new("map.len.load")?.as_ptr(),
             )
         };
         let zero = unsafe { LLVMConstInt(usize_ty, 0, 0) };
@@ -3473,8 +4073,47 @@ impl CodegenContext {
         unsafe { LLVMBuildBr(self.builder, done_bb) };
 
         unsafe { LLVMPositionBuilderAtEnd(self.builder, cont_bb) };
-        let bucket_index = self
-            .codegen_map_bucket_index(map, key_type, key, func, local_map, functions, mir_module)?;
+        let (bucket_index, hash_dbg, key_len_dbg) = if matches!(key_type, Type::String | Type::Str)
+        {
+            let key_val = self.codegen_value(key, func, local_map)?;
+            let key_len = self.codegen_string_len_value(key_val, functions)?;
+            let hash_val = self.codegen_hash_bytes(key_val, key_len)?;
+            let hash_val = self.ensure_usize(hash_val, usize_ty)?;
+            let zero = unsafe { LLVMConstInt(usize_ty, 0, 0) };
+            let cap_is_zero = unsafe {
+                LLVMBuildICmp(
+                    self.builder,
+                    llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                    cap_val,
+                    zero,
+                    CString::new("map.cap.zero")?.as_ptr(),
+                )
+            };
+            let rem = unsafe {
+                LLVMBuildURem(
+                    self.builder,
+                    hash_val,
+                    cap_val,
+                    CString::new("map.bucket.idx")?.as_ptr(),
+                )
+            };
+            let bucket_index = unsafe {
+                LLVMBuildSelect(
+                    self.builder,
+                    cap_is_zero,
+                    zero,
+                    rem,
+                    CString::new("map.bucket.sel")?.as_ptr(),
+                )
+            };
+            (bucket_index, hash_val, key_len)
+        } else {
+            let idx = self.codegen_map_bucket_index(
+                map, key_type, key, func, local_map, functions, mir_module,
+            )?;
+            let zero = unsafe { LLVMConstInt(usize_ty, 0, 0) };
+            (idx, zero, zero)
+        };
 
         let bucket_name = self.map_bucket_name(key_type, value_type);
         let bucket_head_ty = Type::RawPtr(Box::new(Type::Named(bucket_name.clone())));
@@ -3508,6 +4147,19 @@ impl CodegenContext {
                 CString::new("map.bucket.head")?.as_ptr(),
             )
         };
+
+        self.debug_map_log_index(
+            "get.idx",
+            cap_val,
+            len_val,
+            bucket_array,
+            head_val,
+            bucket_index,
+            hash_dbg,
+            key_len_dbg,
+        )?;
+
+        self.debug_map_log("get", cap_val, len_val, head_val)?;
 
         let current_slot = unsafe {
             LLVMBuildAlloca(
@@ -3618,11 +4270,20 @@ impl CodegenContext {
                     )
                 };
                 if matches!(key_type, Type::String | Type::Str) {
-                    self.codegen_string_eq(
+                    let input_val = input_key_val.expect("key value");
+                    let input_len = self.codegen_string_len_value(input_val, functions)?;
+                    let bucket_len = self.codegen_string_len_value(bucket_key_val, functions)?;
+                    let eq_val = self.codegen_string_eq(bucket_key_val, input_val, functions)?;
+                    let label = format!("get.cmp.{}", self.type_key(key_type));
+                    self.debug_map_key_compare(
+                        &label,
+                        input_val,
                         bucket_key_val,
-                        input_key_val.expect("key value"),
-                        functions,
-                    )?
+                        input_len,
+                        bucket_len,
+                        eq_val,
+                    )?;
+                    eq_val
                 } else {
                     unsafe {
                         LLVMBuildICmp(
@@ -3953,6 +4614,11 @@ impl CodegenContext {
             Type::Named(_) => {
                 let bucket_hash =
                     self.codegen_map_hash_from_ptr(key_type, key_ptr, functions, mir_module)?;
+                self.debug_map_hash_compare(
+                    "get.hash",
+                    input_hash.expect("hash for named key"),
+                    bucket_hash,
+                )?;
                 unsafe {
                     LLVMBuildICmp(
                         self.builder,
@@ -3974,11 +4640,20 @@ impl CodegenContext {
                     )
                 };
                 if matches!(key_type, Type::String | Type::Str) {
-                    self.codegen_string_eq(
+                    let input_val = input_key_val.expect("key value");
+                    let input_len = self.codegen_string_len_value(input_val, functions)?;
+                    let bucket_len = self.codegen_string_len_value(bucket_key_val, functions)?;
+                    let eq_val = self.codegen_string_eq(bucket_key_val, input_val, functions)?;
+                    let label = format!("get.cmp.{}", self.type_key(key_type));
+                    self.debug_map_key_compare(
+                        &label,
+                        input_val,
                         bucket_key_val,
-                        input_key_val.expect("key value"),
-                        functions,
-                    )?
+                        input_len,
+                        bucket_len,
+                        eq_val,
+                    )?;
+                    eq_val
                 } else {
                     unsafe {
                         LLVMBuildICmp(
@@ -4176,12 +4851,29 @@ impl CodegenContext {
                 CString::new("map.cap").unwrap().as_ptr(),
             )
         };
+        let len_ptr = unsafe {
+            LLVMBuildStructGEP2(
+                self.builder,
+                llvm_map_ty,
+                map_ptr,
+                2,
+                CString::new("map.len").unwrap().as_ptr(),
+            )
+        };
         let cap_val = unsafe {
             LLVMBuildLoad2(
                 self.builder,
                 usize_ty,
                 cap_ptr,
                 CString::new("map.cap.load")?.as_ptr(),
+            )
+        };
+        let len_val = unsafe {
+            LLVMBuildLoad2(
+                self.builder,
+                usize_ty,
+                len_ptr,
+                CString::new("map.len.load")?.as_ptr(),
             )
         };
         let zero = unsafe { LLVMConstInt(usize_ty, 0, 0) };
@@ -4218,9 +4910,15 @@ impl CodegenContext {
                 CString::new("map.get.done")?.as_ptr(),
             )
         };
+        let null_head =
+            unsafe { LLVMConstNull(LLVMPointerType(LLVMInt8TypeInContext(self.context), 0)) };
+        self.debug_map_log("get.pre", cap_val, len_val, null_head)?;
         unsafe { LLVMBuildCondBr(self.builder, cap_is_zero, none_bb, cont_bb) };
 
         unsafe { LLVMPositionBuilderAtEnd(self.builder, none_bb) };
+        let null_head =
+            unsafe { LLVMConstNull(LLVMPointerType(LLVMInt8TypeInContext(self.context), 0)) };
+        self.debug_map_log("get.none", cap_val, len_val, null_head)?;
         let none_val = self.codegen_option_none(value_type, mir_module)?;
         unsafe { LLVMBuildBr(self.builder, done_bb) };
 
@@ -4260,6 +4958,8 @@ impl CodegenContext {
                 CString::new("map.bucket.head")?.as_ptr(),
             )
         };
+
+        self.debug_map_log("get", cap_val, len_val, head_val)?;
 
         let current_slot = unsafe {
             LLVMBuildAlloca(
@@ -4348,6 +5048,11 @@ impl CodegenContext {
             Type::Named(_) => {
                 let bucket_hash =
                     self.codegen_map_hash_from_ptr(key_type, key_ptr, functions, mir_module)?;
+                self.debug_map_hash_compare(
+                    "get.hash",
+                    input_hash.expect("hash for named key"),
+                    bucket_hash,
+                )?;
                 unsafe {
                     LLVMBuildICmp(
                         self.builder,
@@ -4369,11 +5074,20 @@ impl CodegenContext {
                     )
                 };
                 if matches!(key_type, Type::String | Type::Str) {
-                    self.codegen_string_eq(
+                    let input_val = input_key_val.expect("key value");
+                    let input_len = self.codegen_string_len_value(input_val, functions)?;
+                    let bucket_len = self.codegen_string_len_value(bucket_key_val, functions)?;
+                    let eq_val = self.codegen_string_eq(bucket_key_val, input_val, functions)?;
+                    let label = format!("get.cmp.{}", self.type_key(key_type));
+                    self.debug_map_key_compare(
+                        &label,
+                        input_val,
                         bucket_key_val,
-                        input_key_val.expect("key value"),
-                        functions,
-                    )?
+                        input_len,
+                        bucket_len,
+                        eq_val,
+                    )?;
+                    eq_val
                 } else {
                     unsafe {
                         LLVMBuildICmp(
@@ -4428,6 +5142,11 @@ impl CodegenContext {
                 CString::new("map.bucket.val.load")?.as_ptr(),
             )
         };
+        if std::env::var("GLYPH_DEBUG_MAP").is_ok() {
+            if matches!(value_type, Type::Enum(name) if name == "JsonValue") {
+                self.debug_map_json_tag("get.val", value_val)?;
+            }
+        }
         let some_val = self.codegen_option_some(value_type, value_val, mir_module)?;
         unsafe { LLVMBuildBr(self.builder, done_bb) };
 
@@ -4447,6 +5166,34 @@ impl CodegenContext {
             );
             phi_node
         };
+        if std::env::var("GLYPH_DEBUG_MAP").is_ok() {
+            let tmp = unsafe {
+                LLVMBuildAlloca(
+                    self.builder,
+                    llvm_option_ty,
+                    CString::new("map.get.opt.tmp")?.as_ptr(),
+                )
+            };
+            unsafe { LLVMBuildStore(self.builder, phi, tmp) };
+            let tag_ptr = unsafe {
+                LLVMBuildStructGEP2(
+                    self.builder,
+                    llvm_option_ty,
+                    tmp,
+                    0,
+                    CString::new("map.get.tag")?.as_ptr(),
+                )
+            };
+            let tag_val = unsafe {
+                LLVMBuildLoad2(
+                    self.builder,
+                    LLVMInt32TypeInContext(self.context),
+                    tag_ptr,
+                    CString::new("map.get.tag.load")?.as_ptr(),
+                )
+            };
+            self.debug_map_tag("get.opt", tag_val)?;
+        }
         self.debug_log(&format!(
             "codegen_map_get done: key={:?} value={:?}",
             key_type, value_type
@@ -6280,6 +7027,33 @@ impl CodegenContext {
         })
     }
 
+    fn codegen_string_base_value(
+        &mut self,
+        base: LocalId,
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+    ) -> Result<LLVMValueRef> {
+        let base_val = self.codegen_value(&MirValue::Local(base), func, local_map)?;
+        let base_ty = func
+            .locals
+            .get(base.0 as usize)
+            .and_then(|local| local.ty.as_ref());
+        if let Some(Type::Ref(inner, _)) = base_ty {
+            if matches!(inner.as_ref(), Type::Str | Type::String) {
+                let inner_llvm = self.get_llvm_type(inner)?;
+                return Ok(unsafe {
+                    LLVMBuildLoad2(
+                        self.builder,
+                        inner_llvm,
+                        base_val,
+                        CString::new("str.deref")?.as_ptr(),
+                    )
+                });
+            }
+        }
+        Ok(base_val)
+    }
+
     fn codegen_string_copy_from_ptr_len(
         &mut self,
         ptr: LLVMValueRef,
@@ -6359,7 +7133,7 @@ impl CodegenContext {
         local_map: &HashMap<LocalId, LLVMValueRef>,
         functions: &HashMap<String, LLVMValueRef>,
     ) -> Result<LLVMValueRef> {
-        let base_val = self.codegen_value(&MirValue::Local(base), func, local_map)?;
+        let base_val = self.codegen_string_base_value(base, func, local_map)?;
         self.codegen_string_len_value(base_val, functions)
     }
 
@@ -6371,7 +7145,7 @@ impl CodegenContext {
         local_map: &HashMap<LocalId, LLVMValueRef>,
         functions: &HashMap<String, LLVMValueRef>,
     ) -> Result<LLVMValueRef> {
-        let left_val = self.codegen_value(&MirValue::Local(base), func, local_map)?;
+        let left_val = self.codegen_string_base_value(base, func, local_map)?;
         let right_val = self.codegen_value(value, func, local_map)?;
         let left_len = self.codegen_string_len_value(left_val, functions)?;
         let right_len = self.codegen_string_len_value(right_val, functions)?;
@@ -6470,13 +7244,61 @@ impl CodegenContext {
         local_map: &HashMap<LocalId, LLVMValueRef>,
         functions: &HashMap<String, LLVMValueRef>,
     ) -> Result<LLVMValueRef> {
-        let base_val = self.codegen_value(&MirValue::Local(base), func, local_map)?;
+        let base_val = self.codegen_string_base_value(base, func, local_map)?;
         let start_val = self.codegen_value(start, func, local_map)?;
         let len_val = self.codegen_value(len, func, local_map)?;
         let usize_ty = unsafe { LLVMInt64TypeInContext(self.context) };
         let start_val = self.ensure_usize(start_val, usize_ty)?;
         let len_val = self.ensure_usize(len_val, usize_ty)?;
         let base_len = self.codegen_string_len_value(base_val, functions)?;
+
+        if std::env::var("GLYPH_DEBUG_MAP").is_ok() {
+            let printf_fn = self.ensure_printf_fn()?;
+            let printf_ty = self.printf_function_type();
+            let fmt_ptr = self.codegen_string_literal(
+                "[str.slice] base_len=%llu start=%llu len=%llu first=%llu\n",
+                ".str.slice.debug",
+            )?;
+            let i8_ty = unsafe { LLVMInt8TypeInContext(self.context) };
+            let first_ptr = unsafe {
+                LLVMBuildGEP2(
+                    self.builder,
+                    i8_ty,
+                    base_val,
+                    vec![LLVMConstInt(usize_ty, 0, 0)].as_mut_ptr(),
+                    1,
+                    CString::new("str.slice.first")?.as_ptr(),
+                )
+            };
+            let first_val = unsafe {
+                LLVMBuildLoad2(
+                    self.builder,
+                    i8_ty,
+                    first_ptr,
+                    CString::new("str.slice.first.load")?.as_ptr(),
+                )
+            };
+            let first_u64 = unsafe {
+                LLVMBuildZExt(
+                    self.builder,
+                    first_val,
+                    usize_ty,
+                    CString::new("str.slice.first.u64")?.as_ptr(),
+                )
+            };
+            let base_len_u64 = self.ensure_usize(base_len, usize_ty)?;
+            let mut args = vec![fmt_ptr, base_len_u64, start_val, len_val, first_u64];
+            unsafe {
+                LLVMBuildCall2(
+                    self.builder,
+                    printf_ty,
+                    printf_fn,
+                    args.as_mut_ptr(),
+                    args.len() as u32,
+                    CString::new("str.slice.debug")?.as_ptr(),
+                );
+            }
+        }
 
         let parent_bb = unsafe { LLVMGetInsertBlock(self.builder) };
         let parent_fn = unsafe { LLVMGetBasicBlockParent(parent_bb) };
@@ -6593,7 +7415,7 @@ impl CodegenContext {
         local_map: &HashMap<LocalId, LLVMValueRef>,
         functions: &HashMap<String, LLVMValueRef>,
     ) -> Result<LLVMValueRef> {
-        let base_val = self.codegen_value(&MirValue::Local(base), func, local_map)?;
+        let base_val = self.codegen_string_base_value(base, func, local_map)?;
         let len_val = self.codegen_string_len_value(base_val, functions)?;
         let usize_ty = unsafe { LLVMInt64TypeInContext(self.context) };
         let zero = unsafe { LLVMConstInt(usize_ty, 0, 0) };
@@ -6916,7 +7738,7 @@ impl CodegenContext {
         local_map: &HashMap<LocalId, LLVMValueRef>,
         functions: &HashMap<String, LLVMValueRef>,
     ) -> Result<LLVMValueRef> {
-        let base_val = self.codegen_value(&MirValue::Local(base), func, local_map)?;
+        let base_val = self.codegen_string_base_value(base, func, local_map)?;
         let sep_val = self.codegen_value(sep, func, local_map)?;
         let base_len = self.codegen_string_len_value(base_val, functions)?;
         let sep_len = self.codegen_string_len_value(sep_val, functions)?;
@@ -7345,7 +8167,7 @@ impl CodegenContext {
         local_map: &HashMap<LocalId, LLVMValueRef>,
         functions: &HashMap<String, LLVMValueRef>,
     ) -> Result<LLVMValueRef> {
-        let base_val = self.codegen_value(&MirValue::Local(base), func, local_map)?;
+        let base_val = self.codegen_string_base_value(base, func, local_map)?;
         let needle_val = self.codegen_value(needle, func, local_map)?;
         let base_len = self.codegen_string_len_value(base_val, functions)?;
         let needle_len = self.codegen_string_len_value(needle_val, functions)?;
@@ -7431,7 +8253,7 @@ impl CodegenContext {
         local_map: &HashMap<LocalId, LLVMValueRef>,
         functions: &HashMap<String, LLVMValueRef>,
     ) -> Result<LLVMValueRef> {
-        let base_val = self.codegen_value(&MirValue::Local(base), func, local_map)?;
+        let base_val = self.codegen_string_base_value(base, func, local_map)?;
         let needle_val = self.codegen_value(needle, func, local_map)?;
         let base_len = self.codegen_string_len_value(base_val, functions)?;
         let needle_len = self.codegen_string_len_value(needle_val, functions)?;
@@ -8941,11 +9763,36 @@ impl CodegenContext {
         }
     }
 
+    fn ensure_printf_fn(&mut self) -> Result<LLVMValueRef> {
+        let name = CString::new("printf")?;
+        unsafe {
+            let existing = LLVMGetNamedFunction(self.module, name.as_ptr());
+            if !existing.is_null() {
+                return Ok(existing);
+            }
+            let fn_ty = self.printf_function_type();
+            Ok(LLVMAddFunction(self.module, name.as_ptr(), fn_ty))
+        }
+    }
+
     fn strdup_function_type(&self) -> LLVMTypeRef {
         unsafe {
             let i8_ptr = LLVMPointerType(LLVMInt8TypeInContext(self.context), 0);
             let mut params = vec![i8_ptr];
             LLVMFunctionType(i8_ptr, params.as_mut_ptr(), params.len() as u32, 0)
+        }
+    }
+
+    fn printf_function_type(&self) -> LLVMTypeRef {
+        unsafe {
+            let i8_ptr = LLVMPointerType(LLVMInt8TypeInContext(self.context), 0);
+            let mut params = vec![i8_ptr];
+            LLVMFunctionType(
+                LLVMInt32TypeInContext(self.context),
+                params.as_mut_ptr(),
+                params.len() as u32,
+                1,
+            )
         }
     }
 

@@ -1,6 +1,5 @@
 ---
 source: crates/glyph-frontend/tests/mir_fixtures.rs
-assertion_line: 462
 expression: out.mir
 ---
 MirModule {
@@ -144,17 +143,7 @@ MirModule {
                         },
                         Drop(
                             LocalId(
-                                5,
-                            ),
-                        ),
-                        Drop(
-                            LocalId(
                                 4,
-                            ),
-                        ),
-                        Drop(
-                            LocalId(
-                                1,
                             ),
                         ),
                         Return(
