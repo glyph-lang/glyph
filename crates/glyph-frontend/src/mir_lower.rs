@@ -477,6 +477,7 @@ struct LowerCtx<'a> {
     bindings: HashMap<&'a str, LocalId>,
     next_local: u32,
     function_name: String,
+    fn_ret_type: Option<Type>,
     blocks: Vec<MirBlock>,
     current: BlockId,
     loop_stack: Vec<LoopContext>,
@@ -501,6 +502,7 @@ impl<'a> LowerCtx<'a> {
             bindings: HashMap::new(),
             next_local: 0,
             function_name,
+            fn_ret_type: None,
             blocks,
             current: BlockId(0),
             loop_stack: Vec::new(),
@@ -532,7 +534,12 @@ impl<'a> LowerCtx<'a> {
         self.blocks[self.current.0 as usize]
             .insts
             .last()
-            .map(|inst| matches!(inst, MirInst::Return(_) | MirInst::Goto(_)))
+            .map(|inst| {
+                matches!(
+                    inst,
+                    MirInst::Return(_) | MirInst::Goto(_) | MirInst::If { .. }
+                )
+            })
             .unwrap_or(false)
     }
 
@@ -689,13 +696,14 @@ fn lower_function(
     resolver: &ResolverContext,
     fn_sigs: &HashMap<String, FnSig>,
 ) -> (MirFunction, Vec<Diagnostic>) {
-    let mut ctx = LowerCtx::new(resolver, fn_sigs, func.name.0.clone());
-
     // Resolve return type
     let ret_type = func
         .ret_type
         .as_ref()
         .and_then(|t| crate::resolver::resolve_type_expr_to_type(t, resolver));
+
+    let mut ctx = LowerCtx::new(resolver, fn_sigs, func.name.0.clone());
+    ctx.fn_ret_type = ret_type.clone();
 
     // Create locals for parameters and bind them
     let mut param_locals = Vec::new();
@@ -781,7 +789,11 @@ fn lower_block<'a>(ctx: &mut LowerCtx<'a>, block: &'a Block) -> Option<MirValue>
                     ctx.locals[local.0 as usize].ty = Some(annot_ty);
                 }
 
-                if let Some(mut rv) = value.as_ref().and_then(|e| lower_expr(ctx, e)) {
+                let expected = ctx.locals[local.0 as usize].ty.clone();
+                if let Some(mut rv) = value
+                    .as_ref()
+                    .and_then(|e| lower_expr_with_expected(ctx, e, expected.as_ref()))
+                {
                     update_local_type_from_rvalue(ctx, local, &mut rv);
                     ctx.push_inst(MirInst::Assign { local, value: rv });
                 } else {
@@ -789,7 +801,10 @@ fn lower_block<'a>(ctx: &mut LowerCtx<'a>, block: &'a Block) -> Option<MirValue>
                 }
             }
             Stmt::Ret(expr, _) => {
-                let value = expr.as_ref().and_then(|e| lower_value(ctx, e));
+                let expected = ctx.fn_ret_type.clone();
+                let value = expr
+                    .as_ref()
+                    .and_then(|e| lower_value_with_expected(ctx, e, expected.as_ref()));
                 ctx.drop_all_active_locals();
                 ctx.push_inst(MirInst::Return(value));
             }
@@ -870,7 +885,8 @@ fn lower_block<'a>(ctx: &mut LowerCtx<'a>, block: &'a Block) -> Option<MirValue>
                 span: _,
             } => {
                 if let Some(local) = lower_assignment_target(ctx, target) {
-                    if let Some(mut rv) = lower_expr(ctx, value) {
+                    let expected = ctx.locals[local.0 as usize].ty.clone();
+                    if let Some(mut rv) = lower_expr_with_expected(ctx, value, expected.as_ref()) {
                         update_local_type_from_rvalue(ctx, local, &mut rv);
                         ctx.push_inst(MirInst::Assign { local, value: rv });
                     } else {
@@ -903,6 +919,7 @@ fn lower_match<'a>(
     arms: &'a [glyph_core::ast::MatchArm],
     require_value: bool,
     span: Span,
+    expected: Option<&Type>,
 ) -> Option<Rvalue> {
     // Evaluate scrutinee into a local
     let scrut_val = lower_value(ctx, scrutinee)?;
@@ -1001,7 +1018,15 @@ fn lower_match<'a>(
     });
 
     // Result local if needed
-    let mut result_local = None;
+    let mut result_local = if require_value {
+        expected.map(|ty| {
+            let l = ctx.fresh_local(None);
+            ctx.locals[l.0 as usize].ty = Some(ty.clone());
+            l
+        })
+    } else {
+        None
+    };
 
     let join_block = ctx.new_block();
     let mut arm_blocks = Vec::new();
@@ -1122,7 +1147,12 @@ fn lower_match<'a>(
             }
         }
 
-        let arm_val = lower_value(ctx, &arm.expr);
+        let arm_expected_ty: Option<Type> = expected.cloned().or_else(|| {
+            result_local
+                .and_then(|l| ctx.locals.get(l.0 as usize))
+                .and_then(|l| l.ty.clone())
+        });
+        let arm_val = lower_value_with_expected(ctx, &arm.expr, arm_expected_ty.as_ref());
         if require_value {
             if let Some(val) = arm_val {
                 let res_local = *result_local.get_or_insert_with(|| {
@@ -1183,12 +1213,11 @@ fn lower_if<'a>(
     let else_id = else_blk.map(|_| ctx.new_block());
     let join_id = ctx.new_block();
 
-    let cond_val = lower_value(ctx, cond).unwrap_or(MirValue::Bool(false));
-    ctx.blocks[header.0 as usize].insts.push(MirInst::If {
-        cond: cond_val,
-        then_bb: then_id,
-        else_bb: else_id.unwrap_or(join_id),
-    });
+    // Lower short-circuiting conditions directly into control flow.
+    // Using `lower_value()` here is incorrect because `&&`/`||` lowerings emit
+    // their own `If`/`Goto` terminators.
+    ctx.switch_to(header);
+    lower_cond_branch(ctx, cond, then_id, else_id.unwrap_or(join_id));
 
     ctx.switch_to(then_id);
     let _ = lower_block(ctx, then_blk);
@@ -1208,6 +1237,49 @@ fn lower_if<'a>(
     ctx.switch_to(join_id);
 }
 
+fn lower_cond_branch<'a>(
+    ctx: &mut LowerCtx<'a>,
+    cond: &'a Expr,
+    then_bb: BlockId,
+    else_bb: BlockId,
+) {
+    match cond {
+        Expr::Binary {
+            op: glyph_core::ast::BinaryOp::And,
+            lhs,
+            rhs,
+            ..
+        } => {
+            // (lhs && rhs): if lhs then eval rhs else false
+            let mid = ctx.new_block();
+            lower_cond_branch(ctx, lhs, mid, else_bb);
+            ctx.switch_to(mid);
+            lower_cond_branch(ctx, rhs, then_bb, else_bb);
+        }
+        Expr::Binary {
+            op: glyph_core::ast::BinaryOp::Or,
+            lhs,
+            rhs,
+            ..
+        } => {
+            // (lhs || rhs): if lhs then true else eval rhs
+            let mid = ctx.new_block();
+            lower_cond_branch(ctx, lhs, then_bb, mid);
+            ctx.switch_to(mid);
+            lower_cond_branch(ctx, rhs, then_bb, else_bb);
+        }
+        _ => {
+            let cond_val = lower_value(ctx, cond).unwrap_or(MirValue::Bool(false));
+            let cond_bool = coerce_to_bool(cond_val);
+            ctx.push_inst(MirInst::If {
+                cond: cond_bool,
+                then_bb,
+                else_bb,
+            });
+        }
+    }
+}
+
 fn lower_while<'a>(ctx: &mut LowerCtx<'a>, cond: &'a Expr, body_block: &'a Block) {
     let header_block = ctx.new_block();
     let body_bb = ctx.new_block();
@@ -1220,12 +1292,7 @@ fn lower_while<'a>(ctx: &mut LowerCtx<'a>, cond: &'a Expr, body_block: &'a Block
 
     // Header: evaluate condition and branch
     ctx.switch_to(header_block);
-    let cond_val = lower_value(ctx, cond).unwrap_or(MirValue::Bool(false));
-    ctx.push_inst(MirInst::If {
-        cond: cond_val,
-        then_bb: body_bb,
-        else_bb: exit_bb,
-    });
+    lower_cond_branch(ctx, cond, body_bb, exit_bb);
 
     // Body: lower statements, add back edge
     ctx.switch_to(body_bb);
@@ -1301,7 +1368,7 @@ fn lower_for<'a>(
     // Increment: var = var + 1
     if !ctx.terminated() {
         let inc_temp = ctx.fresh_local(None);
-        ctx.locals[inc_temp.0 as usize].ty = Some(Type::I32);
+        ctx.locals[inc_temp.0 as usize].ty = ctx.locals[var_local.0 as usize].ty.clone();
         ctx.push_inst(MirInst::Assign {
             local: inc_temp,
             value: Rvalue::Binary {
@@ -1322,6 +1389,14 @@ fn lower_for<'a>(
 }
 
 fn lower_expr<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr) -> Option<Rvalue> {
+    lower_expr_with_expected(ctx, expr, None)
+}
+
+fn lower_expr_with_expected<'a>(
+    ctx: &mut LowerCtx<'a>,
+    expr: &'a Expr,
+    expected: Option<&Type>,
+) -> Option<Rvalue> {
     match expr {
         Expr::Lit(glyph_core::ast::Literal::Int(i), _) => Some(Rvalue::ConstInt(*i)),
         Expr::Lit(glyph_core::ast::Literal::Bool(b), _) => Some(Rvalue::ConstBool(*b)),
@@ -1334,7 +1409,7 @@ fn lower_expr<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr) -> Option<Rvalue> {
             scrutinee,
             arms,
             span,
-        } => lower_match(ctx, scrutinee, arms, true, *span),
+        } => lower_match(ctx, scrutinee, arms, true, *span, expected),
         Expr::Ident(ident, span) => ctx
             .bindings
             .get(ident.0.as_str())
@@ -1352,7 +1427,7 @@ fn lower_expr<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr) -> Option<Rvalue> {
             }
             _ => lower_binary(ctx, op, lhs, rhs),
         },
-        Expr::Call { callee, args, span } => lower_call(ctx, callee, args, *span, false),
+        Expr::Call { callee, args, span } => lower_call(ctx, callee, args, *span, false, expected),
         Expr::If {
             cond,
             then_block,
@@ -1419,6 +1494,14 @@ fn lower_binary<'a>(
         | glyph_core::ast::BinaryOp::Gt
         | glyph_core::ast::BinaryOp::Ge => {
             ctx.locals[tmp.0 as usize].ty = Some(Type::Bool);
+        }
+        glyph_core::ast::BinaryOp::Add
+        | glyph_core::ast::BinaryOp::Sub
+        | glyph_core::ast::BinaryOp::Mul
+        | glyph_core::ast::BinaryOp::Div => {
+            if let Some(numeric) = infer_numeric_result_type(&lhs_val, &rhs_val, ctx) {
+                ctx.locals[tmp.0 as usize].ty = Some(numeric);
+            }
         }
         _ => {}
     }
@@ -1718,6 +1801,7 @@ fn lower_logical<'a>(
     let lhs_val = lower_value(ctx, lhs).unwrap_or(MirValue::Bool(false));
     let lhs_bool = coerce_to_bool(lhs_val.clone());
     let result = ctx.fresh_local(None);
+    ctx.locals[result.0 as usize].ty = Some(Type::Bool);
     let rhs_block = ctx.new_block();
     let join_block = ctx.new_block();
 
@@ -1796,12 +1880,14 @@ fn lower_call<'a>(
     args: &'a [Expr],
     span: Span,
     require_value: bool,
+    expected_ret: Option<&Type>,
 ) -> Option<Rvalue> {
     if let Some(builtin) = lower_method_builtin(ctx, callee, args, span) {
         return builtin;
     }
 
-    if let Some(builtin) = lower_static_builtin(ctx, callee, args, span) {
+    if let Some(builtin) = lower_static_builtin_with_expected(ctx, callee, args, span, expected_ret)
+    {
         return Some(builtin);
     }
 
@@ -1855,7 +1941,13 @@ fn lower_call<'a>(
     let mut ret_ty = sig.ret.clone();
 
     if let Some(enum_ctor) = &sig.enum_ctor {
-        if enum_ctor.has_generics && !lowered_args.is_empty() {
+        if let Some(Type::App { base, .. }) = expected_ret {
+            if base == &enum_ctor.enum_name {
+                ret_ty = Some(expected_ret.unwrap().clone());
+            }
+        }
+
+        if enum_ctor.has_generics && expected_ret.is_none() && !lowered_args.is_empty() {
             let mut arg_tys = Vec::new();
             for arg in &lowered_args {
                 if let Some(arg_ty) = infer_value_type(arg, ctx) {
@@ -1952,6 +2044,43 @@ fn infer_expr_type(ctx: &LowerCtx, expr: &Expr) -> Option<glyph_core::types::Typ
             ))
         }
 
+        _ => None,
+    }
+}
+
+fn infer_numeric_result_type(lhs: &MirValue, rhs: &MirValue, ctx: &LowerCtx) -> Option<Type> {
+    fn type_for_value(v: &MirValue, ctx: &LowerCtx) -> Option<Type> {
+        match v {
+            MirValue::Local(id) => ctx.locals.get(id.0 as usize).and_then(|l| l.ty.clone()),
+            MirValue::Int(_) => Some(Type::I32),
+            MirValue::Bool(_) | MirValue::Unit => None,
+        }
+    }
+
+    fn width(ty: &Type) -> Option<u32> {
+        match ty {
+            Type::I8 | Type::U8 => Some(8),
+            Type::I32 | Type::U32 | Type::Char => Some(32),
+            Type::I64 | Type::U64 | Type::Usize => Some(64),
+            _ => None,
+        }
+    }
+
+    let lt = type_for_value(lhs, ctx);
+    let rt = type_for_value(rhs, ctx);
+
+    match (lt.as_ref(), rt.as_ref()) {
+        (Some(l), Some(r)) => {
+            let lw = width(l)?;
+            let rw = width(r)?;
+            if lw >= rw {
+                Some(l.clone())
+            } else {
+                Some(r.clone())
+            }
+        }
+        (Some(l), None) => Some(l.clone()),
+        (None, Some(r)) => Some(r.clone()),
         _ => None,
     }
 }
@@ -2240,6 +2369,16 @@ fn lower_static_builtin<'a>(
     args: &'a [Expr],
     span: Span,
 ) -> Option<Rvalue> {
+    lower_static_builtin_with_expected(ctx, callee, args, span, None)
+}
+
+fn lower_static_builtin_with_expected<'a>(
+    ctx: &mut LowerCtx<'a>,
+    callee: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+    expected_ret: Option<&Type>,
+) -> Option<Rvalue> {
     let Expr::Ident(name, _) = callee else {
         return None;
     };
@@ -2248,10 +2387,10 @@ fn lower_static_builtin<'a>(
         "Own::new" => lower_own_new(ctx, args, span),
         "Own::from_raw" => lower_own_from_raw(ctx, args, span),
         "Shared::new" => lower_shared_new(ctx, args, span),
-        "Vec::new" => lower_vec_static_new(ctx, args, span),
-        "Vec::with_capacity" => lower_vec_static_with_capacity(ctx, args, span),
-        "Map::new" => lower_map_static_new(ctx, args, span),
-        "Map::with_capacity" => lower_map_static_with_capacity(ctx, args, span),
+        "Vec::new" => lower_vec_static_new(ctx, args, span, expected_ret),
+        "Vec::with_capacity" => lower_vec_static_with_capacity(ctx, args, span, expected_ret),
+        "Map::new" => lower_map_static_new(ctx, args, span, expected_ret),
+        "Map::with_capacity" => lower_map_static_with_capacity(ctx, args, span, expected_ret),
         "File::open" => lower_file_open(ctx, args, span, false),
         "File::create" => lower_file_open(ctx, args, span, true),
         "String::from_str" => lower_string_from(ctx, args, span),
@@ -2776,7 +2915,11 @@ fn lower_array_len<'a>(ctx: &mut LowerCtx<'a>, base: &'a Expr, span: Span) -> Op
 
 fn vec_elem_type_from_type(ty: &Type) -> Option<Type> {
     match ty {
-        Type::App { base, args } if base == "Vec" => args.get(0).cloned(),
+        Type::App { base, args }
+            if (base == "Vec" || base.ends_with("::Vec")) && args.len() == 1 =>
+        {
+            args.get(0).cloned()
+        }
         Type::Ref(inner, _) | Type::Own(inner) | Type::RawPtr(inner) | Type::Shared(inner) => {
             vec_elem_type_from_type(inner)
         }
@@ -2908,14 +3051,21 @@ fn lower_vec_static_new<'a>(
     ctx: &mut LowerCtx<'a>,
     args: &'a [Expr],
     span: Span,
+    expected_ret: Option<&Type>,
 ) -> Option<Rvalue> {
     if !args.is_empty() {
         ctx.error("Vec::new does not take arguments", Some(span));
         return None;
     }
 
-    // TODO: wire contextual element-type inference; default to i32 for now
-    let elem_type = Type::I32;
+    let elem_type = match expected_ret {
+        Some(Type::App { base, args })
+            if (base == "Vec" || base.ends_with("::Vec")) && args.len() == 1 =>
+        {
+            args[0].clone()
+        }
+        _ => Type::I32,
+    };
     let tmp = ctx.fresh_local(None);
     ctx.locals[tmp.0 as usize].ty = Some(Type::App {
         base: "Vec".into(),
@@ -2932,6 +3082,7 @@ fn lower_vec_static_with_capacity<'a>(
     ctx: &mut LowerCtx<'a>,
     args: &'a [Expr],
     span: Span,
+    expected_ret: Option<&Type>,
 ) -> Option<Rvalue> {
     if args.len() != 1 {
         ctx.error("Vec::with_capacity expects one argument", Some(span));
@@ -2939,8 +3090,14 @@ fn lower_vec_static_with_capacity<'a>(
     }
 
     let capacity = lower_value(ctx, &args[0])?;
-    // TODO: wire contextual element-type inference; default to i32 for now
-    let elem_type = Type::I32;
+    let elem_type = match expected_ret {
+        Some(Type::App { base, args })
+            if (base == "Vec" || base.ends_with("::Vec")) && args.len() == 1 =>
+        {
+            args[0].clone()
+        }
+        _ => Type::I32,
+    };
     let tmp = ctx.fresh_local(None);
     ctx.locals[tmp.0 as usize].ty = Some(Type::App {
         base: "Vec".into(),
@@ -3271,7 +3428,7 @@ fn lower_file_close<'a>(
 
 fn map_key_value_types(ty: &Type) -> Option<(Type, Type)> {
     match ty {
-        Type::App { base, args } if base == "Map" => {
+        Type::App { base, args } if base == "Map" || base.ends_with("::Map") => {
             let key = args.get(0)?.clone();
             let val = args.get(1)?.clone();
             Some((key, val))
@@ -3287,13 +3444,20 @@ fn lower_map_static_new<'a>(
     ctx: &mut LowerCtx<'a>,
     args: &'a [Expr],
     span: Span,
+    expected_ret: Option<&Type>,
 ) -> Option<Rvalue> {
     if !args.is_empty() {
         ctx.error("Map::new does not take arguments", Some(span));
         return None;
     }
-    let key_type = Type::I32;
-    let value_type = Type::I32;
+    let (key_type, value_type) = match expected_ret {
+        Some(Type::App { base, args })
+            if (base == "Map" || base.ends_with("::Map")) && args.len() == 2 =>
+        {
+            (args[0].clone(), args[1].clone())
+        }
+        _ => (Type::I32, Type::I32),
+    };
     let tmp = ctx.fresh_local(None);
     ctx.locals[tmp.0 as usize].ty = Some(Type::App {
         base: "Map".into(),
@@ -3313,14 +3477,21 @@ fn lower_map_static_with_capacity<'a>(
     ctx: &mut LowerCtx<'a>,
     args: &'a [Expr],
     span: Span,
+    expected_ret: Option<&Type>,
 ) -> Option<Rvalue> {
     if args.len() != 1 {
         ctx.error("Map::with_capacity expects one argument", Some(span));
         return None;
     }
     let capacity = lower_value(ctx, &args[0])?;
-    let key_type = Type::I32;
-    let value_type = Type::I32;
+    let (key_type, value_type) = match expected_ret {
+        Some(Type::App { base, args })
+            if (base == "Map" || base.ends_with("::Map")) && args.len() == 2 =>
+        {
+            (args[0].clone(), args[1].clone())
+        }
+        _ => (Type::I32, Type::I32),
+    };
     let tmp = ctx.fresh_local(None);
     ctx.locals[tmp.0 as usize].ty = Some(Type::App {
         base: "Map".into(),
@@ -4275,6 +4446,14 @@ fn rvalue_to_value(rv: Rvalue) -> Option<MirValue> {
 }
 
 fn lower_value<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr) -> Option<MirValue> {
+    lower_value_with_expected(ctx, expr, None)
+}
+
+fn lower_value_with_expected<'a>(
+    ctx: &mut LowerCtx<'a>,
+    expr: &'a Expr,
+    expected: Option<&Type>,
+) -> Option<MirValue> {
     match expr {
         Expr::Lit(glyph_core::ast::Literal::Int(i), _) => Some(MirValue::Int(*i)),
         Expr::Lit(glyph_core::ast::Literal::Bool(b), _) => Some(MirValue::Bool(*b)),
@@ -4328,7 +4507,7 @@ fn lower_value<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr) -> Option<MirValue> {
             _ => lower_binary(ctx, op, lhs, rhs).and_then(rvalue_to_value),
         },
         Expr::Call { callee, args, span } => {
-            lower_call(ctx, callee, args, *span, true).and_then(rvalue_to_value)
+            lower_call(ctx, callee, args, *span, true, expected).and_then(rvalue_to_value)
         }
         Expr::MethodCall {
             receiver,
@@ -4340,7 +4519,7 @@ fn lower_value<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr) -> Option<MirValue> {
             scrutinee,
             arms,
             span,
-        } => lower_match(ctx, scrutinee, arms, true, *span).and_then(rvalue_to_value),
+        } => lower_match(ctx, scrutinee, arms, true, *span, expected).and_then(rvalue_to_value),
         Expr::If {
             cond,
             then_block,
@@ -4949,5 +5128,70 @@ fn main() -> i32 {
             "expected arity diagnostic, got {:?}",
             diags
         );
+    }
+
+    #[test]
+    fn lowers_usize_add_literal_to_usize_temp() {
+        let span = Span::new(0, 0);
+        let func = Function {
+            name: Ident("main".into()),
+            params: vec![],
+            ret_type: Some(path_ty("usize", span)),
+            body: Block {
+                span,
+                stmts: vec![
+                    Stmt::Let {
+                        name: Ident("pos".into()),
+                        ty: Some(path_ty("usize", span)),
+                        mutable: false,
+                        value: Some(Expr::Lit(Literal::Int(0), span)),
+                        span,
+                    },
+                    Stmt::Ret(
+                        Some(Expr::Binary {
+                            op: BinaryOp::Add,
+                            lhs: Box::new(Expr::Ident(Ident("pos".into()), span)),
+                            rhs: Box::new(Expr::Lit(Literal::Int(1), span)),
+                            span,
+                        }),
+                        span,
+                    ),
+                ],
+            },
+            span,
+        };
+
+        let module = Module {
+            imports: vec![],
+            items: vec![Item::Function(func)],
+        };
+
+        let (mir, diags) = lower_module(&module, &ResolverContext::default());
+        assert!(diags.is_empty(), "unexpected diagnostics: {:?}", diags);
+
+        let main = mir
+            .functions
+            .iter()
+            .find(|f| f.name == "main")
+            .expect("main exists");
+
+        let mut found = false;
+        for block in &main.blocks {
+            for inst in &block.insts {
+                if let MirInst::Assign {
+                    local,
+                    value:
+                        Rvalue::Binary {
+                            op: BinaryOp::Add, ..
+                        },
+                } = inst
+                {
+                    let ty = main.locals[local.0 as usize].ty.as_ref();
+                    assert_eq!(ty, Some(&Type::Usize));
+                    found = true;
+                }
+            }
+        }
+        assert!(found, "expected an Add binary temp assignment");
     }
 }

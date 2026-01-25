@@ -272,7 +272,7 @@ fn parse_object_after_value(
 ) -> ParseResult<ParsedValue> {
   let mut obj = obj0
   let next_v = vparsed.next
-  let _ = obj.update(k, vparsed.value)
+  let _ = obj.add(k, vparsed.value)
 
   let mut i = skip_ws(input, next_v)
   if i >= len {

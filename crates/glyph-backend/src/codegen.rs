@@ -2644,6 +2644,82 @@ impl CodegenContext {
         )
     }
 
+    /// Ensures the bucket type for the given key/value types is registered and fully defined.
+    /// This must be called before any operations that query bucket type layout (GEP, loads, etc.)
+    /// to avoid LLVM hanging on getABITypeAlign queries for opaque struct types.
+    fn ensure_map_bucket_type(&mut self, key_type: &Type, value_type: &Type) -> Result<()> {
+        let bucket_name = self.map_bucket_name(key_type, value_type);
+
+        // Check if already registered
+        if self.struct_types.contains_key(&bucket_name) {
+            return Ok(());
+        }
+
+        // Create the named struct type
+        let bucket_name_c = CString::new(bucket_name.as_str())?;
+        let llvm_bucket_ty = unsafe {
+            LLVMStructCreateNamed(self.context, bucket_name_c.as_ptr())
+        };
+
+        // Build the field types: [key, value, next]
+        let key_llvm_ty = self.get_llvm_type(key_type)?;
+        let value_llvm_ty = self.get_llvm_type(value_type)?;
+        let next_ptr_ty = unsafe { LLVMPointerType(llvm_bucket_ty, 0) };
+
+        let mut field_tys = vec![key_llvm_ty, value_llvm_ty, next_ptr_ty];
+
+        // Set the struct body
+        unsafe {
+            LLVMStructSetBody(
+                llvm_bucket_ty,
+                field_tys.as_mut_ptr(),
+                field_tys.len() as u32,
+                0
+            );
+        }
+
+        // Register in our maps
+        self.struct_types.insert(bucket_name.clone(), llvm_bucket_ty);
+
+        // Create a layout for tracking (matches the field order)
+        let layout = StructType {
+            name: bucket_name.clone(),
+            fields: vec![
+                ("key".to_string(), key_type.clone()),
+                ("value".to_string(), value_type.clone()),
+                ("next".to_string(), Type::RawPtr(Box::new(Type::Named(bucket_name.clone())))),
+            ],
+        };
+        self.struct_layouts.insert(bucket_name, layout);
+
+        Ok(())
+    }
+
+    /// Ensures bucket type from map struct name when value_type is not directly available.
+    /// Extracts bucket type from map's struct layout.
+    fn ensure_map_bucket_type_from_map(&mut self, map_struct_name: &str, key_type: &Type) -> Result<()> {
+        let bucket_name = self.map_bucket_name_from_map(map_struct_name)?;
+
+        // Check if already registered
+        if self.struct_types.contains_key(&bucket_name) {
+            return Ok(());
+        }
+
+        // Extract value_type from bucket's layout if it exists, otherwise parse from name
+        // Bucket name format: "MapBucket$KeyType__ValueType"
+        // For now, we'll look it up in existing layouts or create a minimal version
+        // In practice, the bucket should already be in the map's layout from MIR
+        let value_type_opt = self.struct_layouts.get(&bucket_name)
+            .and_then(|layout| layout.fields.get(1))
+            .map(|(_, ty)| ty.clone());
+
+        if let Some(value_type) = value_type_opt {
+            return self.ensure_map_bucket_type(key_type, &value_type);
+        }
+
+        bail!("Cannot determine value type for bucket {}", bucket_name)
+    }
+
     fn map_bucket_name_from_map(&self, map_name: &str) -> Result<String> {
         let layout = self
             .struct_layouts
@@ -2859,6 +2935,9 @@ impl CodegenContext {
         functions: &HashMap<String, LLVMValueRef>,
         mir_module: &MirModule,
     ) -> Result<LLVMValueRef> {
+        // Ensure bucket type is fully registered before any GEP/load operations
+        self.ensure_map_bucket_type(key_type, value_type)?;
+
         let (struct_name, map_ptr) = self.struct_pointer_for_local(map, func, local_map)?;
         let (llvm_map_ty, usize_ty) = self
             .get_map_layout(&struct_name)
@@ -3243,6 +3322,9 @@ impl CodegenContext {
         functions: &HashMap<String, LLVMValueRef>,
         mir_module: &MirModule,
     ) -> Result<LLVMValueRef> {
+        // Ensure bucket type is fully registered before any GEP/load operations
+        self.ensure_map_bucket_type(key_type, value_type)?;
+
         let (struct_name, map_ptr) = self.struct_pointer_for_local(map, func, local_map)?;
         let (llvm_map_ty, usize_ty) = self
             .get_map_layout(&struct_name)
@@ -3543,6 +3625,9 @@ impl CodegenContext {
         functions: &HashMap<String, LLVMValueRef>,
         mir_module: &MirModule,
     ) -> Result<LLVMValueRef> {
+        // Ensure bucket type is fully registered before any GEP/load operations
+        self.ensure_map_bucket_type(key_type, value_type)?;
+
         let (struct_name, map_ptr) = self.struct_pointer_for_local(map, func, local_map)?;
         let (llvm_map_ty, usize_ty) = self
             .get_map_layout(&struct_name)
@@ -3960,6 +4045,9 @@ impl CodegenContext {
         functions: &HashMap<String, LLVMValueRef>,
         mir_module: &MirModule,
     ) -> Result<LLVMValueRef> {
+        // Ensure bucket type is fully registered before any GEP/load operations
+        self.ensure_map_bucket_type(key_type, value_type)?;
+
         let (struct_name, map_ptr) = self.struct_pointer_for_local(map, func, local_map)?;
         let (llvm_map_ty, usize_ty) = self
             .get_map_layout(&struct_name)
@@ -4259,6 +4347,8 @@ impl CodegenContext {
         mir_module: &MirModule,
     ) -> Result<LLVMValueRef> {
         let (struct_name, map_ptr) = self.struct_pointer_for_local(map, func, local_map)?;
+        // Ensure bucket type is fully registered before any GEP/load operations
+        self.ensure_map_bucket_type_from_map(&struct_name, key_type)?;
         let (llvm_map_ty, usize_ty) = self
             .get_map_layout(&struct_name)
             .ok_or_else(|| anyhow!("missing map layout for {}", struct_name))?;
@@ -4535,12 +4625,15 @@ impl CodegenContext {
         &mut self,
         map: LocalId,
         key_type: &Type,
-        _value_type: &Type,
+        value_type: &Type,
         func: &MirFunction,
         local_map: &HashMap<LocalId, LLVMValueRef>,
         _functions: &HashMap<String, LLVMValueRef>,
         _mir_module: &MirModule,
     ) -> Result<LLVMValueRef> {
+        // Ensure bucket type is fully registered before any GEP/load operations
+        self.ensure_map_bucket_type(key_type, value_type)?;
+
         let (struct_name, map_ptr) = self.struct_pointer_for_local(map, func, local_map)?;
         let (llvm_map_ty, usize_ty) = self
             .get_map_layout(&struct_name)
@@ -4857,13 +4950,16 @@ impl CodegenContext {
     fn codegen_map_vals(
         &mut self,
         map: LocalId,
-        _key_type: &Type,
+        key_type: &Type,
         value_type: &Type,
         func: &MirFunction,
         local_map: &HashMap<LocalId, LLVMValueRef>,
         _functions: &HashMap<String, LLVMValueRef>,
         _mir_module: &MirModule,
     ) -> Result<LLVMValueRef> {
+        // Ensure bucket type is fully registered before any GEP/load operations
+        self.ensure_map_bucket_type(key_type, value_type)?;
+
         let (struct_name, map_ptr) = self.struct_pointer_for_local(map, func, local_map)?;
         let (llvm_map_ty, usize_ty) = self
             .get_map_layout(&struct_name)

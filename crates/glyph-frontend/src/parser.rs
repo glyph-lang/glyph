@@ -957,10 +957,25 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_binary_expr(&mut self) -> Option<Expr> {
+        self.parse_binary_expr_prec(0)
+    }
+
+    fn parse_binary_expr_prec(&mut self, min_prec: u8) -> Option<Expr> {
         let mut lhs = self.parse_call_or_primary()?;
-        while let Some(op) = self.peek_binary_op() {
+
+        loop {
+            let Some(op) = self.peek_binary_op() else {
+                break;
+            };
+            let prec = self.binary_precedence(&op);
+            if prec < min_prec {
+                break;
+            }
+
             self.advance();
-            let rhs = self.parse_call_or_primary()?;
+            // All binary operators are left-associative.
+            let rhs = self.parse_binary_expr_prec(prec.saturating_add(1))?;
+
             let span = Span::new(self.expr_start(&lhs), self.expr_end(&rhs));
             lhs = Expr::Binary {
                 op,
@@ -969,7 +984,20 @@ impl<'a> Parser<'a> {
                 span,
             };
         }
+
         Some(lhs)
+    }
+
+    fn binary_precedence(&self, op: &BinaryOp) -> u8 {
+        match op {
+            // Lowest precedence
+            BinaryOp::Or => 1,
+            BinaryOp::And => 2,
+            BinaryOp::Eq | BinaryOp::Ne => 3,
+            BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => 4,
+            BinaryOp::Add | BinaryOp::Sub => 5,
+            BinaryOp::Mul | BinaryOp::Div => 6,
+        }
     }
 
     fn parse_call_or_primary(&mut self) -> Option<Expr> {
@@ -2069,6 +2097,49 @@ fn main() { p("hi") }"#;
                 }
             }
             other => panic!("expected function, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn binary_operator_precedence_equality_vs_or() {
+        let source = "fn main() { let x = ch == 32 || ch == 9 }";
+        let lexed = lex(source);
+        let out = parse(&lexed.tokens, source);
+        assert!(out.diagnostics.is_empty(), "diags: {:?}", out.diagnostics);
+
+        let Item::Function(f) = &out.module.items[0] else {
+            panic!("expected function");
+        };
+        let Stmt::Let {
+            value: Some(expr), ..
+        } = &f.body.stmts[0]
+        else {
+            panic!("expected let binding");
+        };
+
+        match expr {
+            Expr::Binary {
+                op: BinaryOp::Or,
+                lhs,
+                rhs,
+                ..
+            } => {
+                assert!(matches!(
+                    lhs.as_ref(),
+                    Expr::Binary {
+                        op: BinaryOp::Eq,
+                        ..
+                    }
+                ));
+                assert!(matches!(
+                    rhs.as_ref(),
+                    Expr::Binary {
+                        op: BinaryOp::Eq,
+                        ..
+                    }
+                ));
+            }
+            other => panic!("expected top-level ||, got {:?}", other),
         }
     }
 }
