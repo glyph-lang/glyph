@@ -1,0 +1,188 @@
+---
+source: crates/glyph-frontend/tests/mir_fixtures.rs
+assertion_line: 218
+expression: out.mir
+---
+MirModule {
+    struct_types: {
+        "Point": StructType {
+            name: "Point",
+            fields: [
+                (
+                    "x",
+                    I32,
+                ),
+                (
+                    "y",
+                    I32,
+                ),
+            ],
+        },
+    },
+    functions: [
+        MirFunction {
+            name: "main",
+            ret_type: Some(
+                I32,
+            ),
+            params: [],
+            locals: [
+                Local {
+                    name: Some(
+                        "point",
+                    ),
+                    ty: Some(
+                        Named(
+                            "Point",
+                        ),
+                    ),
+                    mutable: false,
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        Named(
+                            "Point",
+                        ),
+                    ),
+                    mutable: false,
+                },
+                Local {
+                    name: Some(
+                        "rp",
+                    ),
+                    ty: Some(
+                        Ref(
+                            Named(
+                                "Point",
+                            ),
+                            Immutable,
+                        ),
+                    ),
+                    mutable: false,
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        I32,
+                    ),
+                    mutable: false,
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        I32,
+                    ),
+                    mutable: false,
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        I32,
+                    ),
+                    mutable: false,
+                },
+            ],
+            blocks: [
+                MirBlock {
+                    insts: [
+                        Assign {
+                            local: LocalId(
+                                1,
+                            ),
+                            value: StructLit {
+                                struct_name: "Point",
+                                field_values: [
+                                    (
+                                        "x",
+                                        Int(
+                                            1,
+                                        ),
+                                    ),
+                                    (
+                                        "y",
+                                        Int(
+                                            2,
+                                        ),
+                                    ),
+                                ],
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                0,
+                            ),
+                            value: Move(
+                                LocalId(
+                                    1,
+                                ),
+                            ),
+                        },
+                        Assign {
+                            local: LocalId(
+                                2,
+                            ),
+                            value: Ref {
+                                base: LocalId(
+                                    0,
+                                ),
+                                mutability: Immutable,
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                3,
+                            ),
+                            value: FieldAccess {
+                                base: LocalId(
+                                    2,
+                                ),
+                                field_name: "x",
+                                field_index: 0,
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                4,
+                            ),
+                            value: FieldAccess {
+                                base: LocalId(
+                                    2,
+                                ),
+                                field_name: "y",
+                                field_index: 1,
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                5,
+                            ),
+                            value: Binary {
+                                op: Add,
+                                lhs: Local(
+                                    LocalId(
+                                        3,
+                                    ),
+                                ),
+                                rhs: Local(
+                                    LocalId(
+                                        4,
+                                    ),
+                                ),
+                            },
+                        },
+                        Return(
+                            Some(
+                                Local(
+                                    LocalId(
+                                        5,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+            ],
+        },
+    ],
+}

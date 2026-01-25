@@ -1237,6 +1237,80 @@ fn lower_if<'a>(
     ctx.switch_to(join_id);
 }
 
+fn lower_if_value<'a>(
+    ctx: &mut LowerCtx<'a>,
+    cond: &'a Expr,
+    then_blk: &'a Block,
+    else_blk: Option<&'a Block>,
+    expected: Option<&Type>,
+) -> Option<MirValue> {
+    let Some(else_block) = else_blk else {
+        if !matches!(expected, Some(Type::Void)) {
+            ctx.error("if expression requires an else branch", Some(then_blk.span));
+        }
+        lower_if(ctx, cond, then_blk, None);
+        return Some(MirValue::Unit);
+    };
+
+    let header = ctx.current;
+    let then_id = ctx.new_block();
+    let else_id = ctx.new_block();
+    let join_id = ctx.new_block();
+
+    ctx.switch_to(header);
+    lower_cond_branch(ctx, cond, then_id, else_id);
+
+    let result_local = ctx.fresh_local(None);
+    if let Some(ty) = expected {
+        ctx.locals[result_local.0 as usize].ty = Some(ty.clone());
+    }
+
+    let mut assign_result = |ctx: &mut LowerCtx<'a>, value: Option<MirValue>, span: Span| {
+        let Some(value) = value else {
+            if !matches!(expected, Some(Type::Void)) {
+                ctx.error("if expression branch missing value", Some(span));
+            }
+            return;
+        };
+
+        let inferred = infer_value_type(&value, ctx);
+        if ctx.locals[result_local.0 as usize].ty.is_none() {
+            ctx.locals[result_local.0 as usize].ty = inferred.clone();
+        }
+        if matches!(value, MirValue::Unit) && !matches!(expected, Some(Type::Void)) {
+            ctx.error("if expression branch produced unit", Some(span));
+            return;
+        }
+        if let Some(rv) = rvalue_from_value(value) {
+            ctx.push_inst(MirInst::Assign {
+                local: result_local,
+                value: rv,
+            });
+        }
+    };
+
+    ctx.switch_to(then_id);
+    let then_val = lower_block(ctx, then_blk);
+    assign_result(ctx, then_val, then_blk.span);
+    if !ctx.terminated() {
+        ctx.push_inst(MirInst::Goto(join_id));
+    }
+
+    ctx.switch_to(else_id);
+    let else_val = lower_block(ctx, else_block);
+    assign_result(ctx, else_val, else_block.span);
+    if !ctx.terminated() {
+        ctx.push_inst(MirInst::Goto(join_id));
+    }
+
+    ctx.switch_to(join_id);
+    if matches!(expected, Some(Type::Void)) {
+        Some(MirValue::Unit)
+    } else {
+        Some(MirValue::Local(result_local))
+    }
+}
+
 fn lower_cond_branch<'a>(
     ctx: &mut LowerCtx<'a>,
     cond: &'a Expr,
@@ -1434,8 +1508,8 @@ fn lower_expr_with_expected<'a>(
             else_block,
             ..
         } => {
-            lower_if(ctx, cond, then_block, else_block.as_ref());
-            None
+            let value = lower_if_value(ctx, cond, then_block, else_block.as_ref(), expected);
+            value.and_then(rvalue_from_value)
         }
         Expr::While { cond, body, .. } => {
             lower_while(ctx, cond, body);
@@ -4525,10 +4599,7 @@ fn lower_value_with_expected<'a>(
             then_block,
             else_block,
             ..
-        } => {
-            lower_if(ctx, cond, then_block, else_block.as_ref());
-            None
-        }
+        } => lower_if_value(ctx, cond, then_block, else_block.as_ref(), expected),
         Expr::StructLit { name, fields, span } => {
             lower_struct_lit(ctx, name, fields, *span).and_then(rvalue_to_value)
         }

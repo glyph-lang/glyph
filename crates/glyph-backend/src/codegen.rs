@@ -113,6 +113,64 @@ impl CodegenContext {
         }
     }
 
+    fn debug_log(&self, msg: &str) {
+        if std::env::var("GLYPH_DEBUG_CODEGEN").is_ok() {
+            eprintln!("[codegen] {}", msg);
+        }
+    }
+
+    fn rvalue_tag(&self, rvalue: &Rvalue) -> &'static str {
+        match rvalue {
+            Rvalue::ConstInt(_) => "ConstInt",
+            Rvalue::ConstBool(_) => "ConstBool",
+            Rvalue::StringLit { .. } => "StringLit",
+            Rvalue::Move(_) => "Move",
+            Rvalue::Binary { .. } => "Binary",
+            Rvalue::StructLit { .. } => "StructLit",
+            Rvalue::FieldAccess { .. } => "FieldAccess",
+            Rvalue::EnumConstruct { .. } => "EnumConstruct",
+            Rvalue::EnumTag { .. } => "EnumTag",
+            Rvalue::EnumPayload { .. } => "EnumPayload",
+            Rvalue::FileOpen { .. } => "FileOpen",
+            Rvalue::FileReadToString { .. } => "FileReadToString",
+            Rvalue::FileWriteString { .. } => "FileWriteString",
+            Rvalue::FileClose { .. } => "FileClose",
+            Rvalue::StringLen { .. } => "StringLen",
+            Rvalue::StringConcat { .. } => "StringConcat",
+            Rvalue::StringSlice { .. } => "StringSlice",
+            Rvalue::StringTrim { .. } => "StringTrim",
+            Rvalue::StringSplit { .. } => "StringSplit",
+            Rvalue::StringStartsWith { .. } => "StringStartsWith",
+            Rvalue::StringEndsWith { .. } => "StringEndsWith",
+            Rvalue::Call { .. } => "Call",
+            Rvalue::Ref { .. } => "Ref",
+            Rvalue::ArrayLit { .. } => "ArrayLit",
+            Rvalue::ArrayIndex { .. } => "ArrayIndex",
+            Rvalue::ArrayLen { .. } => "ArrayLen",
+            Rvalue::VecNew { .. } => "VecNew",
+            Rvalue::VecWithCapacity { .. } => "VecWithCapacity",
+            Rvalue::VecLen { .. } => "VecLen",
+            Rvalue::VecIndex { .. } => "VecIndex",
+            Rvalue::VecPush { .. } => "VecPush",
+            Rvalue::VecPop { .. } => "VecPop",
+            Rvalue::MapNew { .. } => "MapNew",
+            Rvalue::MapWithCapacity { .. } => "MapWithCapacity",
+            Rvalue::MapAdd { .. } => "MapAdd",
+            Rvalue::MapUpdate { .. } => "MapUpdate",
+            Rvalue::MapDel { .. } => "MapDel",
+            Rvalue::MapGet { .. } => "MapGet",
+            Rvalue::MapHas { .. } => "MapHas",
+            Rvalue::MapKeys { .. } => "MapKeys",
+            Rvalue::MapVals { .. } => "MapVals",
+            Rvalue::OwnNew { .. } => "OwnNew",
+            Rvalue::OwnIntoRaw { .. } => "OwnIntoRaw",
+            Rvalue::OwnFromRaw { .. } => "OwnFromRaw",
+            Rvalue::RawPtrNull { .. } => "RawPtrNull",
+            Rvalue::SharedNew { .. } => "SharedNew",
+            Rvalue::SharedClone { .. } => "SharedClone",
+        }
+    }
+
     fn create_named_types(&mut self, mir_module: &MirModule) -> Result<()> {
         for (name, layout) in &mir_module.struct_types {
             let name_c = CString::new(name.as_str())?;
@@ -614,88 +672,20 @@ impl CodegenContext {
     fn codegen_option_none(
         &self,
         elem_type: &Type,
-        mir_module: &MirModule,
+        _mir_module: &MirModule,
     ) -> Result<LLVMValueRef> {
         let option_name = format!("Option${}", self.type_key(elem_type));
-        let llvm_option = self.get_enum_type(&option_name)?;
-        let layout = self
-            .enum_layouts
-            .get(&option_name)
-            .ok_or_else(|| anyhow!("missing option layout for {}", option_name))?;
-        if layout.variants.len() < 1 {
-            bail!("option layout missing variants");
-        }
-
-        unsafe {
-            let alloca_name = CString::new("option.none.tmp")?;
-            let alloca = LLVMBuildAlloca(self.builder, llvm_option, alloca_name.as_ptr());
-            let tag_ptr = LLVMBuildStructGEP2(
-                self.builder,
-                llvm_option,
-                alloca,
-                0,
-                CString::new("option.tag")?.as_ptr(),
-            );
-            let tag_val = LLVMConstInt(LLVMInt32TypeInContext(self.context), 0, 0);
-            LLVMBuildStore(self.builder, tag_val, tag_ptr);
-            let load_name = CString::new("option.none.val")?;
-            Ok(LLVMBuildLoad2(
-                self.builder,
-                llvm_option,
-                alloca,
-                load_name.as_ptr(),
-            ))
-        }
+        self.codegen_enum_value(&option_name, 0, None)
     }
 
     fn codegen_option_some(
         &self,
         elem_type: &Type,
         payload_val: LLVMValueRef,
-        mir_module: &MirModule,
+        _mir_module: &MirModule,
     ) -> Result<LLVMValueRef> {
         let option_name = format!("Option${}", self.type_key(elem_type));
-        let llvm_option = self.get_enum_type(&option_name)?;
-        let layout = self
-            .enum_layouts
-            .get(&option_name)
-            .ok_or_else(|| anyhow!("missing option layout for {}", option_name))?;
-        if layout.variants.len() < 2 {
-            bail!("option layout missing Some variant");
-        }
-
-        unsafe {
-            let alloca_name = CString::new("option.some.tmp")?;
-            let alloca = LLVMBuildAlloca(self.builder, llvm_option, alloca_name.as_ptr());
-            // tag at index 0
-            let tag_ptr = LLVMBuildStructGEP2(
-                self.builder,
-                llvm_option,
-                alloca,
-                0,
-                CString::new("option.tag")?.as_ptr(),
-            );
-            let tag_val = LLVMConstInt(LLVMInt32TypeInContext(self.context), 1, 0);
-            LLVMBuildStore(self.builder, tag_val, tag_ptr);
-
-            // payload at index 1
-            let payload_ptr = LLVMBuildStructGEP2(
-                self.builder,
-                llvm_option,
-                alloca,
-                1,
-                CString::new("option.payload")?.as_ptr(),
-            );
-            LLVMBuildStore(self.builder, payload_val, payload_ptr);
-
-            let load_name = CString::new("option.some.val")?;
-            Ok(LLVMBuildLoad2(
-                self.builder,
-                llvm_option,
-                alloca,
-                load_name.as_ptr(),
-            ))
-        }
+        self.codegen_enum_value(&option_name, 1, Some(payload_val))
     }
 
     fn codegen_enum_value(
@@ -945,20 +935,26 @@ impl CodegenContext {
     }
 
     pub fn codegen_module(&mut self, mir_module: &MirModule) -> Result<()> {
+        self.debug_log("create_named_types start");
         self.create_named_types(mir_module)?;
+        self.debug_log("register_struct_types start");
         self.register_struct_types(mir_module)?;
+        self.debug_log("register_enum_types start");
         self.register_enum_types(mir_module)?;
 
         let needs_sys_argv = self.mir_uses_sys_argv(mir_module);
 
         // Declare all functions up-front so calls can reference any order.
+        self.debug_log("declare_functions start");
         let functions = self.declare_functions(mir_module, needs_sys_argv)?;
 
         for func in &mir_module.functions {
+            self.debug_log(&format!("codegen_function_body start: {}", func.name));
             let llvm_func = *functions
                 .get(&func.name)
                 .ok_or_else(|| anyhow!("missing declared function {}", func.name))?;
             self.codegen_function_body(func, llvm_func, &functions, mir_module)?;
+            self.debug_log(&format!("codegen_function_body done: {}", func.name));
         }
 
         if needs_sys_argv {
@@ -1087,6 +1083,8 @@ impl CodegenContext {
             bb_map.insert(BlockId(i as u32), bb);
         }
 
+        self.debug_log("codegen_function_body allocas start");
+
         // Create local allocas
         let mut local_map: HashMap<LocalId, LLVMValueRef> = HashMap::new();
 
@@ -1097,10 +1095,15 @@ impl CodegenContext {
             for (i, local) in func.locals.iter().enumerate() {
                 let local_id = LocalId(i as u32);
 
+                self.debug_log(&format!("alloca local {} ty={:?}", i, local.ty));
+
                 let local_ty = local
                     .ty
                     .as_ref()
-                    .map(|t| self.get_llvm_type(t))
+                    .map(|t| match t {
+                        Type::Void => Ok(unsafe { LLVMInt8TypeInContext(self.context) }),
+                        _ => self.get_llvm_type(t),
+                    })
                     .transpose()?
                     .unwrap_or_else(|| unsafe { LLVMInt32TypeInContext(self.context) });
 
@@ -1123,11 +1126,15 @@ impl CodegenContext {
             }
         }
 
+        self.debug_log("codegen_function_body allocas done");
+
         // Codegen each basic block
         for (i, block) in func.blocks.iter().enumerate() {
+            self.debug_log(&format!("codegen_block start bb{}", i));
             let bb = bb_map.get(&BlockId(i as u32)).unwrap();
             unsafe { LLVMPositionBuilderAtEnd(self.builder, *bb) };
             self.codegen_block(func, block, &local_map, &bb_map, functions, mir_module)?;
+            self.debug_log(&format!("codegen_block done bb{}", i));
         }
 
         Ok(())
@@ -1160,6 +1167,7 @@ impl CodegenContext {
         unsafe {
             match inst {
                 MirInst::Assign { local, value } => {
+                    self.debug_log(&format!("codegen_inst assign {}", self.rvalue_tag(value)));
                     let val = self.codegen_rvalue(value, func, local_map, functions, mir_module)?;
                     let local_ptr = local_map
                         .get(local)
@@ -1789,7 +1797,10 @@ impl CodegenContext {
                         1 + *variant_index,
                         CString::new("enum.payload.ptr")?.as_ptr(),
                     );
-                    let llvm_payload_ty = self.get_llvm_type(payload_type)?;
+                    let llvm_payload_ty = match payload_type {
+                        Type::Void => LLVMInt8TypeInContext(self.context),
+                        _ => self.get_llvm_type(payload_type)?,
+                    };
                     Ok(LLVMBuildLoad2(
                         self.builder,
                         llvm_payload_ty,
@@ -2104,6 +2115,9 @@ impl CodegenContext {
             .get(local_id.0 as usize)
             .ok_or_else(|| anyhow!("missing local {:?}", local_id))?;
         if let Some(ty) = local.ty.as_ref() {
+            if matches!(ty, Type::Void) {
+                return Ok(unsafe { LLVMInt8TypeInContext(self.context) });
+            }
             self.get_llvm_type(ty)
         } else {
             Ok(unsafe { LLVMInt32TypeInContext(self.context) })
@@ -2292,6 +2306,10 @@ impl CodegenContext {
         func: &MirFunction,
         local_map: &HashMap<LocalId, LLVMValueRef>,
     ) -> Result<LLVMValueRef> {
+        self.debug_log(&format!(
+            "codegen_map_init start: key={:?} value={:?}",
+            key_type, value_type
+        ));
         let inst_name = format!(
             "Map${}__{}",
             self.type_key(key_type),
@@ -2447,7 +2465,13 @@ impl CodegenContext {
         unsafe { LLVMPositionBuilderAtEnd(self.builder, done_bb) };
 
         let load_name = CString::new("map.value")?;
-        Ok(unsafe { LLVMBuildLoad2(self.builder, llvm_map_ty, alloca, load_name.as_ptr()) })
+        let result =
+            unsafe { LLVMBuildLoad2(self.builder, llvm_map_ty, alloca, load_name.as_ptr()) };
+        self.debug_log(&format!(
+            "codegen_map_init done: key={:?} value={:?}",
+            key_type, value_type
+        ));
+        Ok(result)
     }
 
     fn cast_int_to_u64(&mut self, val: LLVMValueRef, signed: bool) -> Result<LLVMValueRef> {
@@ -2488,7 +2512,7 @@ impl CodegenContext {
             Type::String | Type::Str => {
                 let val = self.codegen_value(key, func, local_map)?;
                 let len = self.codegen_string_len_value(val, functions)?;
-                self.cast_int_to_u64(len, false)
+                self.codegen_hash_bytes(val, len)
             }
             Type::Ref(_, _) | Type::RawPtr(_) | Type::Own(_) | Type::Shared(_) => {
                 let val = self.codegen_value(key, func, local_map)?;
@@ -2589,7 +2613,7 @@ impl CodegenContext {
                     )
                 };
                 let len = self.codegen_string_len_value(val, functions)?;
-                self.cast_int_to_u64(len, false)
+                self.codegen_hash_bytes(val, len)
             }
             Type::Ref(_, _) | Type::RawPtr(_) | Type::Own(_) | Type::Shared(_) => {
                 let raw_val = unsafe {
@@ -2650,15 +2674,33 @@ impl CodegenContext {
     fn ensure_map_bucket_type(&mut self, key_type: &Type, value_type: &Type) -> Result<()> {
         let bucket_name = self.map_bucket_name(key_type, value_type);
 
-        // Check if already registered
-        if self.struct_types.contains_key(&bucket_name) {
-            return Ok(());
-        }
-
-        // Create the named struct type
-        let bucket_name_c = CString::new(bucket_name.as_str())?;
-        let llvm_bucket_ty = unsafe {
-            LLVMStructCreateNamed(self.context, bucket_name_c.as_ptr())
+        let llvm_bucket_ty = if let Some(&existing) = self.struct_types.get(&bucket_name) {
+            let is_opaque = unsafe { LLVMIsOpaqueStruct(existing) != 0 };
+            if !is_opaque {
+                if !self.struct_layouts.contains_key(&bucket_name) {
+                    let layout = StructType {
+                        name: bucket_name.clone(),
+                        fields: vec![
+                            ("key".to_string(), key_type.clone()),
+                            ("value".to_string(), value_type.clone()),
+                            (
+                                "next".to_string(),
+                                Type::RawPtr(Box::new(Type::Named(bucket_name.clone()))),
+                            ),
+                        ],
+                    };
+                    self.struct_layouts.insert(bucket_name, layout);
+                }
+                return Ok(());
+            }
+            existing
+        } else {
+            let bucket_name_c = CString::new(bucket_name.as_str())?;
+            let llvm_bucket_ty =
+                unsafe { LLVMStructCreateNamed(self.context, bucket_name_c.as_ptr()) };
+            self.struct_types
+                .insert(bucket_name.clone(), llvm_bucket_ty);
+            llvm_bucket_ty
         };
 
         // Build the field types: [key, value, next]
@@ -2674,12 +2716,9 @@ impl CodegenContext {
                 llvm_bucket_ty,
                 field_tys.as_mut_ptr(),
                 field_tys.len() as u32,
-                0
+                0,
             );
         }
-
-        // Register in our maps
-        self.struct_types.insert(bucket_name.clone(), llvm_bucket_ty);
 
         // Create a layout for tracking (matches the field order)
         let layout = StructType {
@@ -2687,7 +2726,10 @@ impl CodegenContext {
             fields: vec![
                 ("key".to_string(), key_type.clone()),
                 ("value".to_string(), value_type.clone()),
-                ("next".to_string(), Type::RawPtr(Box::new(Type::Named(bucket_name.clone())))),
+                (
+                    "next".to_string(),
+                    Type::RawPtr(Box::new(Type::Named(bucket_name.clone()))),
+                ),
             ],
         };
         self.struct_layouts.insert(bucket_name, layout);
@@ -2697,19 +2739,27 @@ impl CodegenContext {
 
     /// Ensures bucket type from map struct name when value_type is not directly available.
     /// Extracts bucket type from map's struct layout.
-    fn ensure_map_bucket_type_from_map(&mut self, map_struct_name: &str, key_type: &Type) -> Result<()> {
+    fn ensure_map_bucket_type_from_map(
+        &mut self,
+        map_struct_name: &str,
+        key_type: &Type,
+    ) -> Result<()> {
         let bucket_name = self.map_bucket_name_from_map(map_struct_name)?;
 
-        // Check if already registered
-        if self.struct_types.contains_key(&bucket_name) {
-            return Ok(());
+        if let Some(&existing) = self.struct_types.get(&bucket_name) {
+            let is_opaque = unsafe { LLVMIsOpaqueStruct(existing) != 0 };
+            if !is_opaque {
+                return Ok(());
+            }
         }
 
         // Extract value_type from bucket's layout if it exists, otherwise parse from name
         // Bucket name format: "MapBucket$KeyType__ValueType"
         // For now, we'll look it up in existing layouts or create a minimal version
         // In practice, the bucket should already be in the map's layout from MIR
-        let value_type_opt = self.struct_layouts.get(&bucket_name)
+        let value_type_opt = self
+            .struct_layouts
+            .get(&bucket_name)
             .and_then(|layout| layout.fields.get(1))
             .map(|(_, ty)| ty.clone());
 
@@ -2935,6 +2985,10 @@ impl CodegenContext {
         functions: &HashMap<String, LLVMValueRef>,
         mir_module: &MirModule,
     ) -> Result<LLVMValueRef> {
+        self.debug_log(&format!(
+            "codegen_map_add start: key={:?} value={:?}",
+            key_type, value_type
+        ));
         // Ensure bucket type is fully registered before any GEP/load operations
         self.ensure_map_bucket_type(key_type, value_type)?;
 
@@ -3068,7 +3122,11 @@ impl CodegenContext {
             }
             _ => None,
         };
-        let key_val = self.codegen_value(key, func, local_map)?;
+        let mut key_val = self.codegen_value(key, func, local_map)?;
+        if matches!(key_type, Type::String | Type::Str) {
+            let key_len = self.codegen_string_len_value(key_val, functions)?;
+            key_val = self.codegen_string_copy_from_ptr_len(key_val, key_len, functions)?;
+        }
         let value_val = self.codegen_value(value, func, local_map)?;
 
         let check_bb = unsafe {
@@ -3172,14 +3230,22 @@ impl CodegenContext {
                         CString::new("map.key.load")?.as_ptr(),
                     )
                 };
-                unsafe {
-                    LLVMBuildICmp(
-                        self.builder,
-                        llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                if matches!(key_type, Type::String | Type::Str) {
+                    self.codegen_string_eq(
                         bucket_key_val,
                         input_key_val.expect("key value"),
-                        CString::new("map.key.eq")?.as_ptr(),
-                    )
+                        functions,
+                    )?
+                } else {
+                    unsafe {
+                        LLVMBuildICmp(
+                            self.builder,
+                            llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                            bucket_key_val,
+                            input_key_val.expect("key value"),
+                            CString::new("map.key.eq")?.as_ptr(),
+                        )
+                    }
                 }
             }
         };
@@ -3307,6 +3373,10 @@ impl CodegenContext {
             );
             phi_node
         };
+        self.debug_log(&format!(
+            "codegen_map_add done: key={:?} value={:?}",
+            key_type, value_type
+        ));
         Ok(phi)
     }
 
@@ -3322,6 +3392,10 @@ impl CodegenContext {
         functions: &HashMap<String, LLVMValueRef>,
         mir_module: &MirModule,
     ) -> Result<LLVMValueRef> {
+        self.debug_log(&format!(
+            "codegen_map_update start: key={:?} value={:?}",
+            key_type, value_type
+        ));
         // Ensure bucket type is fully registered before any GEP/load operations
         self.ensure_map_bucket_type(key_type, value_type)?;
 
@@ -3543,14 +3617,22 @@ impl CodegenContext {
                         CString::new("map.key.load")?.as_ptr(),
                     )
                 };
-                unsafe {
-                    LLVMBuildICmp(
-                        self.builder,
-                        llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                if matches!(key_type, Type::String | Type::Str) {
+                    self.codegen_string_eq(
                         bucket_key_val,
                         input_key_val.expect("key value"),
-                        CString::new("map.key.eq")?.as_ptr(),
-                    )
+                        functions,
+                    )?
+                } else {
+                    unsafe {
+                        LLVMBuildICmp(
+                            self.builder,
+                            llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                            bucket_key_val,
+                            input_key_val.expect("key value"),
+                            CString::new("map.key.eq")?.as_ptr(),
+                        )
+                    }
                 }
             }
         };
@@ -3611,6 +3693,10 @@ impl CodegenContext {
             );
             phi_node
         };
+        self.debug_log(&format!(
+            "codegen_map_update done: key={:?} value={:?}",
+            key_type, value_type
+        ));
         Ok(phi)
     }
 
@@ -3625,6 +3711,10 @@ impl CodegenContext {
         functions: &HashMap<String, LLVMValueRef>,
         mir_module: &MirModule,
     ) -> Result<LLVMValueRef> {
+        self.debug_log(&format!(
+            "codegen_map_del start: key={:?} value={:?}",
+            key_type, value_type
+        ));
         // Ensure bucket type is fully registered before any GEP/load operations
         self.ensure_map_bucket_type(key_type, value_type)?;
 
@@ -3883,14 +3973,22 @@ impl CodegenContext {
                         CString::new("map.key.load")?.as_ptr(),
                     )
                 };
-                unsafe {
-                    LLVMBuildICmp(
-                        self.builder,
-                        llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                if matches!(key_type, Type::String | Type::Str) {
+                    self.codegen_string_eq(
                         bucket_key_val,
                         input_key_val.expect("key value"),
-                        CString::new("map.key.eq")?.as_ptr(),
-                    )
+                        functions,
+                    )?
+                } else {
+                    unsafe {
+                        LLVMBuildICmp(
+                            self.builder,
+                            llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                            bucket_key_val,
+                            input_key_val.expect("key value"),
+                            CString::new("map.key.eq")?.as_ptr(),
+                        )
+                    }
                 }
             }
         };
@@ -4031,6 +4129,10 @@ impl CodegenContext {
             );
             phi_node
         };
+        self.debug_log(&format!(
+            "codegen_map_del done: key={:?} value={:?}",
+            key_type, value_type
+        ));
         Ok(phi)
     }
 
@@ -4045,6 +4147,10 @@ impl CodegenContext {
         functions: &HashMap<String, LLVMValueRef>,
         mir_module: &MirModule,
     ) -> Result<LLVMValueRef> {
+        self.debug_log(&format!(
+            "codegen_map_get start: key={:?} value={:?}",
+            key_type, value_type
+        ));
         // Ensure bucket type is fully registered before any GEP/load operations
         self.ensure_map_bucket_type(key_type, value_type)?;
 
@@ -4262,14 +4368,22 @@ impl CodegenContext {
                         CString::new("map.key.load")?.as_ptr(),
                     )
                 };
-                unsafe {
-                    LLVMBuildICmp(
-                        self.builder,
-                        llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                if matches!(key_type, Type::String | Type::Str) {
+                    self.codegen_string_eq(
                         bucket_key_val,
                         input_key_val.expect("key value"),
-                        CString::new("map.key.eq")?.as_ptr(),
-                    )
+                        functions,
+                    )?
+                } else {
+                    unsafe {
+                        LLVMBuildICmp(
+                            self.builder,
+                            llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                            bucket_key_val,
+                            input_key_val.expect("key value"),
+                            CString::new("map.key.eq")?.as_ptr(),
+                        )
+                    }
                 }
             }
         };
@@ -4333,6 +4447,10 @@ impl CodegenContext {
             );
             phi_node
         };
+        self.debug_log(&format!(
+            "codegen_map_get done: key={:?} value={:?}",
+            key_type, value_type
+        ));
         Ok(phi)
     }
 
@@ -4346,6 +4464,7 @@ impl CodegenContext {
         functions: &HashMap<String, LLVMValueRef>,
         mir_module: &MirModule,
     ) -> Result<LLVMValueRef> {
+        self.debug_log(&format!("codegen_map_has start: key={:?}", key_type));
         let (struct_name, map_ptr) = self.struct_pointer_for_local(map, func, local_map)?;
         // Ensure bucket type is fully registered before any GEP/load operations
         self.ensure_map_bucket_type_from_map(&struct_name, key_type)?;
@@ -4562,14 +4681,22 @@ impl CodegenContext {
                         CString::new("map.key.load")?.as_ptr(),
                     )
                 };
-                unsafe {
-                    LLVMBuildICmp(
-                        self.builder,
-                        llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                if matches!(key_type, Type::String | Type::Str) {
+                    self.codegen_string_eq(
                         bucket_key_val,
                         input_key_val.expect("key value"),
-                        CString::new("map.key.eq")?.as_ptr(),
-                    )
+                        functions,
+                    )?
+                } else {
+                    unsafe {
+                        LLVMBuildICmp(
+                            self.builder,
+                            llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                            bucket_key_val,
+                            input_key_val.expect("key value"),
+                            CString::new("map.key.eq")?.as_ptr(),
+                        )
+                    }
                 }
             }
         };
@@ -4618,6 +4745,7 @@ impl CodegenContext {
             );
             phi_node
         };
+        self.debug_log(&format!("codegen_map_has done: key={:?}", key_type));
         Ok(phi)
     }
 
@@ -4631,6 +4759,10 @@ impl CodegenContext {
         _functions: &HashMap<String, LLVMValueRef>,
         _mir_module: &MirModule,
     ) -> Result<LLVMValueRef> {
+        self.debug_log(&format!(
+            "codegen_map_keys start: key={:?} value={:?}",
+            key_type, value_type
+        ));
         // Ensure bucket type is fully registered before any GEP/load operations
         self.ensure_map_bucket_type(key_type, value_type)?;
 
@@ -4944,6 +5076,10 @@ impl CodegenContext {
                 CString::new("map.keys.load")?.as_ptr(),
             )
         };
+        self.debug_log(&format!(
+            "codegen_map_keys done: key={:?} value={:?}",
+            key_type, value_type
+        ));
         Ok(vec_val)
     }
 
@@ -4957,6 +5093,10 @@ impl CodegenContext {
         _functions: &HashMap<String, LLVMValueRef>,
         _mir_module: &MirModule,
     ) -> Result<LLVMValueRef> {
+        self.debug_log(&format!(
+            "codegen_map_vals start: key={:?} value={:?}",
+            key_type, value_type
+        ));
         // Ensure bucket type is fully registered before any GEP/load operations
         self.ensure_map_bucket_type(key_type, value_type)?;
 
@@ -5270,6 +5410,10 @@ impl CodegenContext {
                 CString::new("map.vals.load")?.as_ptr(),
             )
         };
+        self.debug_log(&format!(
+            "codegen_map_vals done: key={:?} value={:?}",
+            key_type, value_type
+        ));
         Ok(vec_val)
     }
 
@@ -6983,6 +7127,214 @@ impl CodegenContext {
             )
         };
         Ok(cmp_val)
+    }
+
+    fn codegen_hash_bytes(&mut self, ptr: LLVMValueRef, len: LLVMValueRef) -> Result<LLVMValueRef> {
+        let u64_ty = unsafe { LLVMInt64TypeInContext(self.context) };
+        let usize_ty = unsafe { LLVMInt64TypeInContext(self.context) };
+        let i8_ty = unsafe { LLVMInt8TypeInContext(self.context) };
+        let i8_ptr_ty = unsafe { LLVMPointerType(i8_ty, 0) };
+
+        let len_val = self.ensure_usize(len, usize_ty)?;
+        let ptr_val = unsafe {
+            if LLVMTypeOf(ptr) == i8_ptr_ty {
+                ptr
+            } else {
+                LLVMBuildBitCast(
+                    self.builder,
+                    ptr,
+                    i8_ptr_ty,
+                    CString::new("hash.ptr.cast")?.as_ptr(),
+                )
+            }
+        };
+
+        let offset = unsafe { LLVMConstInt(u64_ty, 14695981039346656037, 0) };
+        let prime = unsafe { LLVMConstInt(u64_ty, 1099511628211, 0) };
+        let zero = unsafe { LLVMConstInt(usize_ty, 0, 0) };
+
+        let hash_slot =
+            unsafe { LLVMBuildAlloca(self.builder, u64_ty, CString::new("hash.state")?.as_ptr()) };
+        let idx_slot =
+            unsafe { LLVMBuildAlloca(self.builder, usize_ty, CString::new("hash.idx")?.as_ptr()) };
+        unsafe {
+            LLVMBuildStore(self.builder, offset, hash_slot);
+            LLVMBuildStore(self.builder, zero, idx_slot);
+        }
+
+        let parent_bb = unsafe { LLVMGetInsertBlock(self.builder) };
+        let parent_fn = unsafe { LLVMGetBasicBlockParent(parent_bb) };
+        let check_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("hash.check")?.as_ptr(),
+            )
+        };
+        let body_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("hash.body")?.as_ptr(),
+            )
+        };
+        let done_bb = unsafe {
+            LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("hash.done")?.as_ptr(),
+            )
+        };
+        unsafe { LLVMBuildBr(self.builder, check_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, check_bb) };
+        let idx_val = unsafe {
+            LLVMBuildLoad2(
+                self.builder,
+                usize_ty,
+                idx_slot,
+                CString::new("hash.idx.load")?.as_ptr(),
+            )
+        };
+        let in_bounds = unsafe {
+            LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntULT,
+                idx_val,
+                len_val,
+                CString::new("hash.idx.lt")?.as_ptr(),
+            )
+        };
+        unsafe { LLVMBuildCondBr(self.builder, in_bounds, body_bb, done_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, body_bb) };
+        let byte_ptr = unsafe {
+            LLVMBuildGEP2(
+                self.builder,
+                i8_ty,
+                ptr_val,
+                vec![idx_val].as_mut_ptr(),
+                1,
+                CString::new("hash.byte.ptr")?.as_ptr(),
+            )
+        };
+        let byte_val = unsafe {
+            LLVMBuildLoad2(
+                self.builder,
+                i8_ty,
+                byte_ptr,
+                CString::new("hash.byte")?.as_ptr(),
+            )
+        };
+        let byte_u64 = unsafe {
+            LLVMBuildZExt(
+                self.builder,
+                byte_val,
+                u64_ty,
+                CString::new("hash.byte.u64")?.as_ptr(),
+            )
+        };
+        let hash_val = unsafe {
+            LLVMBuildLoad2(
+                self.builder,
+                u64_ty,
+                hash_slot,
+                CString::new("hash.load")?.as_ptr(),
+            )
+        };
+        let xor_val = unsafe {
+            LLVMBuildXor(
+                self.builder,
+                hash_val,
+                byte_u64,
+                CString::new("hash.xor")?.as_ptr(),
+            )
+        };
+        let mul_val = unsafe {
+            LLVMBuildMul(
+                self.builder,
+                xor_val,
+                prime,
+                CString::new("hash.mul")?.as_ptr(),
+            )
+        };
+        unsafe { LLVMBuildStore(self.builder, mul_val, hash_slot) };
+        let next_idx = unsafe {
+            LLVMBuildAdd(
+                self.builder,
+                idx_val,
+                LLVMConstInt(usize_ty, 1, 0),
+                CString::new("hash.idx.next")?.as_ptr(),
+            )
+        };
+        unsafe { LLVMBuildStore(self.builder, next_idx, idx_slot) };
+        unsafe { LLVMBuildBr(self.builder, check_bb) };
+
+        unsafe { LLVMPositionBuilderAtEnd(self.builder, done_bb) };
+        Ok(unsafe {
+            LLVMBuildLoad2(
+                self.builder,
+                u64_ty,
+                hash_slot,
+                CString::new("hash.result")?.as_ptr(),
+            )
+        })
+    }
+
+    fn codegen_string_eq(
+        &mut self,
+        left: LLVMValueRef,
+        right: LLVMValueRef,
+        functions: &HashMap<String, LLVMValueRef>,
+    ) -> Result<LLVMValueRef> {
+        let left_len = self.codegen_string_len_value(left, functions)?;
+        let right_len = self.codegen_string_len_value(right, functions)?;
+        let len_eq = unsafe {
+            LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                left_len,
+                right_len,
+                CString::new("str.len.eq")?.as_ptr(),
+            )
+        };
+        let len_lt = unsafe {
+            LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntULT,
+                left_len,
+                right_len,
+                CString::new("str.len.lt")?.as_ptr(),
+            )
+        };
+        let min_len = unsafe {
+            LLVMBuildSelect(
+                self.builder,
+                len_lt,
+                left_len,
+                right_len,
+                CString::new("str.len.min")?.as_ptr(),
+            )
+        };
+        let cmp_val = self.codegen_string_compare(left, right, min_len, functions)?;
+        let i32_ty = unsafe { LLVMInt32TypeInContext(self.context) };
+        let cmp_zero = unsafe {
+            LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                cmp_val,
+                LLVMConstInt(i32_ty, 0, 0),
+                CString::new("str.eq")?.as_ptr(),
+            )
+        };
+        Ok(unsafe {
+            LLVMBuildAnd(
+                self.builder,
+                len_eq,
+                cmp_zero,
+                CString::new("str.eq.and")?.as_ptr(),
+            )
+        })
     }
 
     fn codegen_string_starts_with(
