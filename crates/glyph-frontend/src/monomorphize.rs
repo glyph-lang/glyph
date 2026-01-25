@@ -333,7 +333,7 @@ fn rewrite_type(
             worklist,
             diagnostics,
         ))),
-        Type::Param(p) => {
+        Type::Param(_p) => {
             // Fallback: treat unresolved params as i32 to keep codegen moving.
             // TODO: replace with proper contextual substitution.
             Type::I32

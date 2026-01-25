@@ -1331,7 +1331,7 @@ fn lower_if_value<'a>(
         ctx.locals[result_local.0 as usize].ty = Some(ty.clone());
     }
 
-    let mut assign_result = |ctx: &mut LowerCtx<'a>, value: Option<MirValue>, span: Span| {
+    let assign_result = |ctx: &mut LowerCtx<'a>, value: Option<MirValue>, span: Span| {
         let Some(value) = value else {
             if !matches!(expected, Some(Type::Void)) {
                 ctx.error("if expression branch missing value", Some(span));
@@ -2504,15 +2504,6 @@ fn lower_method_builtin<'a>(
         }
     }
     None
-}
-
-fn lower_static_builtin<'a>(
-    ctx: &mut LowerCtx<'a>,
-    callee: &'a Expr,
-    args: &'a [Expr],
-    span: Span,
-) -> Option<Rvalue> {
-    lower_static_builtin_with_expected(ctx, callee, args, span, None)
 }
 
 fn lower_static_builtin_with_expected<'a>(

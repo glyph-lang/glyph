@@ -4,6 +4,7 @@ default:
 
 # Install the glyph project workflow tool
 install:
+    cargo uninstall glyph || true
     cargo install --path crates/glyph-cli --bin glyph
 
 # Install the glyph-cli compiler driver
