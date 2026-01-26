@@ -1,0 +1,7 @@
+fn helper() -> i32 {
+  ret 10
+}
+
+fn value() -> i32 {
+  ret 4
+}

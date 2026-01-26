@@ -71,13 +71,16 @@ fn main() -> i32 {
 
 ## Imports
 
-Imports use `from ... import ...`:
+Imports are file-based. Use `from ... import ...` for local names or `import ...`
+for qualified access:
 
 ```glyph
-from std/io import File
-from std/enums import Result
 from std import println
+from std/io import File
+import std/enums
 ```
+
+See [Imports](imports.md) for path rules, aliasing, and collisions.
 
 ## Structs
 

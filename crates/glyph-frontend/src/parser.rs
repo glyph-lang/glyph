@@ -4,7 +4,7 @@ use glyph_core::{
         BinaryOp, Block, EnumDef, EnumVariantDef, Expr, ExternFunctionDecl, FieldDef, Function,
         Ident, ImplBlock, Import, ImportItem, ImportKind, ImportPath, InlineImpl, InterfaceDef,
         InterfaceMethod, InterpSegment, Item, Literal, MatchArm, MatchPattern, Module, Param, Stmt,
-        StructDef, TypeExpr,
+        StructDef, TypeExpr, UnaryOp,
     },
     diag::Diagnostic,
     span::Span,
@@ -1004,6 +1004,19 @@ impl<'a> Parser<'a> {
         if self.at(TokenKind::Match) {
             return self.parse_match_expr();
         }
+        // Unary not prefix (!expr)
+        if self.at(TokenKind::Bang) {
+            let start_tok = self.peek().unwrap();
+            let start = start_tok.span.start;
+            self.advance();
+            let expr = self.parse_call_or_primary()?;
+            let span = Span::new(start, self.expr_end(&expr));
+            return Some(Expr::Unary {
+                op: UnaryOp::Not,
+                expr: Box::new(expr),
+                span,
+            });
+        }
         // Check for reference prefix (&expr or &mut expr)
         if self.at(TokenKind::Amp) {
             let start_tok = self.peek().unwrap();
@@ -1502,6 +1515,7 @@ impl<'a> Parser<'a> {
             Expr::Lit(_, sp) => sp.start,
             Expr::InterpString { span, .. } => span.start,
             Expr::Ident(_, sp) => sp.start,
+            Expr::Unary { span, .. } => span.start,
             Expr::Binary { span, .. } => span.start,
             Expr::Call { span, .. } => span.start,
             Expr::If { span, .. } => span.start,
@@ -1524,6 +1538,7 @@ impl<'a> Parser<'a> {
             Expr::Lit(_, sp) => sp.end,
             Expr::InterpString { span, .. } => span.end,
             Expr::Ident(_, sp) => sp.end,
+            Expr::Unary { span, .. } => span.end,
             Expr::Binary { span, .. } => span.end,
             Expr::Call { span, .. } => span.end,
             Expr::If { span, .. } => span.end,
@@ -1809,7 +1824,10 @@ fn parse_char_literal(raw: &str) -> char {
 }
 
 fn parse_string_literal(raw: &str) -> String {
-    let trimmed = raw.trim_matches('"');
+    let trimmed = raw
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .unwrap_or(raw);
     let mut result = String::new();
     let mut chars = trimmed.chars().peekable();
 
@@ -2098,6 +2116,28 @@ fn main() { p("hi") }"#;
             }
             other => panic!("expected function, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn parses_unary_not() {
+        let source = "fn main() { let x = !true }";
+        let lexed = lex(source);
+        let out = parse(&lexed.tokens, source);
+        assert!(out.diagnostics.is_empty(), "diags: {:?}", out.diagnostics);
+
+        let Item::Function(f) = &out.module.items[0] else {
+            panic!("expected function");
+        };
+        let Stmt::Let {
+            value: Some(Expr::Unary { op, expr, .. }),
+            ..
+        } = &f.body.stmts[0]
+        else {
+            panic!("expected unary not let binding");
+        };
+
+        assert_eq!(*op, UnaryOp::Not);
+        assert!(matches!(expr.as_ref(), Expr::Lit(Literal::Bool(true), _)));
     }
 
     #[test]

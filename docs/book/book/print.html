@@ -1,0 +1,599 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Glyph</title>
+        <meta name="robots" content="noindex">
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="favicon-8114d1fc.png">
+        <link rel="stylesheet" href="css/variables-8adf115d.css">
+        <link rel="stylesheet" href="css/general-2459343d.css">
+        <link rel="stylesheet" href="css/chrome-ae938929.css">
+        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex-4b6f1f45.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc-427db2f8.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Glyph</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="glyph"><a class="header" href="#glyph">Glyph</a></h1>
+<p>Glyph is a compact, compiled language designed to be readable by humans and efficient for LLMs to generate.
+This book collects the essentials for getting started and building small, reliable tools.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="getting-started"><a class="header" href="#getting-started">Getting Started</a></h1>
+<p>Build the toolchain with Cargo, then use the <code>glyph</code> utility for day-to-day work:</p>
+<pre><code class="language-bash">cargo build --release
+./target/release/glyph run
+</code></pre>
+<p>You can also compile a single file directly:</p>
+<pre><code class="language-bash">./target/release/glyph-cli build path/to/file.glyph
+</code></pre>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="language-basics"><a class="header" href="#language-basics">Language Basics</a></h1>
+<p>Glyph favors a small set of keywords and a readable, expression-oriented style.</p>
+<h2 id="a-small-program"><a class="header" href="#a-small-program">A Small Program</a></h2>
+<pre><code class="language-glyph">from std import println
+
+fn add(a: i32, b: i32) -&gt; i32 {
+  a + b
+}
+
+fn main() -&gt; i32 {
+  let x = add(2, 3)
+  println($"x = {x}")
+  ret 0
+}
+</code></pre>
+<h2 id="values-variables-and-types"><a class="header" href="#values-variables-and-types">Values, Variables, and Types</a></h2>
+<ul>
+<li><code>let name = expr</code> binds an immutable local.</li>
+<li><code>let mut name = expr</code> binds a mutable local.</li>
+<li>You can annotate types: <code>let v: Vec&lt;i32&gt; = Vec::new()</code>.</li>
+</ul>
+<p>Common built-in types include:</p>
+<ul>
+<li>integers: <code>i8</code>, <code>i32</code>, <code>i64</code>, <code>u8</code>, <code>u32</code>, <code>u64</code>, <code>usize</code></li>
+<li>floating point: <code>f32</code>, <code>f64</code></li>
+<li><code>bool</code>, <code>char</code></li>
+<li>strings: <code>str</code> (borrowed string), <code>String</code> (owned string)</li>
+</ul>
+<p>String literals like <code>"hello"</code> have type <code>str</code>. Use <code>String::from_str("...")</code> when you need an owned <code>String</code>.</p>
+<h2 id="expressions-and-return-values"><a class="header" href="#expressions-and-return-values">Expressions and Return Values</a></h2>
+<p>Blocks produce a value: the last expression is the block result.</p>
+<pre><code class="language-glyph">fn abs_i32(x: i32) -&gt; i32 {
+  if x &lt; 0 { -x } else { x }
+}
+</code></pre>
+<p>Use <code>ret expr</code> for an explicit return (useful for early exits).</p>
+<h2 id="control-flow"><a class="header" href="#control-flow">Control Flow</a></h2>
+<p><code>if</code> and <code>match</code> are expressions, so you can assign their result.</p>
+<p>Loops:</p>
+<pre><code class="language-glyph">fn main() -&gt; i32 {
+  let i = 0
+  while i &lt; 3 {
+    i = i + 1
+  }
+
+  let sum = 0
+  for n in 0..10 {
+    sum = sum + n
+  }
+
+  ret sum
+}
+</code></pre>
+<p><code>break</code> and <code>continue</code> work inside <code>while</code> and <code>for</code>.</p>
+<h2 id="imports"><a class="header" href="#imports">Imports</a></h2>
+<p>Imports are file-based. Use <code>from ... import ...</code> for local names or <code>import ...</code>
+for qualified access:</p>
+<pre><code class="language-glyph">from std import println
+from std/io import File
+import std/enums
+</code></pre>
+<p>See <a href="#imports-1">Imports</a> for path rules, aliasing, and collisions.</p>
+<h2 id="structs"><a class="header" href="#structs">Structs</a></h2>
+<p>Define structs with named fields:</p>
+<pre><code class="language-glyph">struct Point {
+  x: i32
+  y: i32
+}
+
+fn main() -&gt; i32 {
+  let p = Point { x: 1, y: 2 }
+  let sum = p.x + p.y
+  ret sum
+}
+</code></pre>
+<h2 id="enums"><a class="header" href="#enums">Enums</a></h2>
+<p>Enums can be simple tags or carry payload values:</p>
+<pre><code class="language-glyph">enum OptionI32 {
+  None
+  Some(i32)
+}
+
+fn main() -&gt; i32 {
+  let a: OptionI32 = OptionI32::Some(123)
+  let b: OptionI32 = OptionI32::None
+  let _keep_alive = (a, b)
+  ret 0
+}
+</code></pre>
+<h2 id="match"><a class="header" href="#match">match</a></h2>
+<p>Use <code>match</code> to branch on enum variants.</p>
+<pre><code class="language-glyph">from std/enums import Result
+from std/io import File
+from std import println
+
+fn main() -&gt; i32 {
+  let created = File::create("out.txt")
+  let status = match created {
+    Ok(file) =&gt; {
+      let _ = file.close()
+      0
+    },
+    Err(_err) =&gt; {
+      println("failed")
+      1
+    },
+  }
+  ret status
+}
+</code></pre>
+<h2 id="vectors-vec"><a class="header" href="#vectors-vec">Vectors (Vec)</a></h2>
+<p><code>Vec&lt;T&gt;</code> is the standard growable list.</p>
+<pre><code class="language-glyph">fn main() -&gt; i32 {
+  let mut v: Vec&lt;i32&gt; = Vec::new()
+  v.push(1)
+  v.push(2)
+  let _popped = v.pop()
+  let _len: usize = v.len()
+  ret 0
+}
+</code></pre>
+<h2 id="maps-map"><a class="header" href="#maps-map">Maps (Map)</a></h2>
+<p><code>Map&lt;K, V&gt;</code> is a hash map.</p>
+<pre><code class="language-glyph">from std/map import Map
+
+fn main() -&gt; i32 {
+  let m: Map&lt;i32, i32&gt; = Map::new()
+  let _ = m.add(1, 2)
+  let _ = m.update(1, 3)
+  let _ = m.get(1)
+  ret 0
+}
+</code></pre>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="imports-1"><a class="header" href="#imports-1">Imports</a></h1>
+<p>Glyph uses file-based modules. Each <code>.glyph</code> file is a module, and you import
+modules by their path relative to the entry file’s directory.</p>
+<h2 id="module-paths"><a class="header" href="#module-paths">Module Paths</a></h2>
+<ul>
+<li>Use <code>/</code> as the separator in import paths.</li>
+<li>Omit the <code>.glyph</code> extension.</li>
+<li>Parent directory segments (<code>..</code>) are not allowed.</li>
+<li>Path segments must be valid identifiers.</li>
+</ul>
+<p>If your entry file is <code>src/main.glyph</code>, then these files map to module paths:</p>
+<pre><code>src/utils.glyph          -&gt; utils
+src/math/geometry.glyph  -&gt; math/geometry
+src/math/algebra.glyph   -&gt; math/algebra
+</code></pre>
+<h2 id="selective-imports"><a class="header" href="#selective-imports">Selective Imports</a></h2>
+<p>Use <code>from &lt;path&gt; import &lt;name&gt;</code> to bring specific symbols into scope:</p>
+<pre><code class="language-glyph">from std import println
+from math/geometry import Point, distance
+from utils import helper
+
+fn main() -&gt; i32 {
+  let p = Point { x: 3, y: 4 }
+  let d = distance(p)
+  println("d = ")
+  ret helper() + d
+}
+</code></pre>
+<p>You can also use the <code>import ... from</code> form with aliases:</p>
+<pre><code class="language-glyph">import Point as GeoPoint, distance as dist from math/geometry
+
+fn main() -&gt; i32 {
+  let p = GeoPoint { x: 1, y: 2 }
+  ret dist(p)
+}
+</code></pre>
+<h2 id="wildcard-qualified-imports"><a class="header" href="#wildcard-qualified-imports">Wildcard (Qualified) Imports</a></h2>
+<p>Use <code>import &lt;path&gt;</code> to make a module available for qualified access. This does
+not bring any names into scope; you access symbols with <code>::</code>.</p>
+<pre><code class="language-glyph">import math/geometry
+
+fn main() -&gt; i32 {
+  let p = math::geometry::Point { x: 2, y: 3 }
+  ret math::geometry::distance(p)
+}
+</code></pre>
+<h2 id="import-order-and-collisions"><a class="header" href="#import-order-and-collisions">Import Order and Collisions</a></h2>
+<ul>
+<li>Imports must appear before any <code>fn</code>, <code>struct</code>, <code>enum</code>, or other items.</li>
+<li>If two selective imports introduce the same name, use an alias to avoid
+collisions.</li>
+</ul>
+<h2 id="current-limitations"><a class="header" href="#current-limitations">Current Limitations</a></h2>
+<ul>
+<li>There is no <code>pub</code> visibility filtering yet; all items are importable.</li>
+<li>Parent directory imports (<code>..</code>) are rejected.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="pointers"><a class="header" href="#pointers">Pointers</a></h1>
+<p>Glyph has a small set of pointer-like types for borrowing and heap allocation.</p>
+<h2 id="references"><a class="header" href="#references">References</a></h2>
+<p><code>&amp;T</code> is a borrowed reference to a value.</p>
+<p>You can take a reference to a local with <code>&amp;local</code>:</p>
+<pre><code class="language-glyph">struct Point {
+  x: i32
+}
+
+fn get_x(p: &amp;Point) -&gt; i32 {
+  ret p.x
+}
+
+fn main() -&gt; i32 {
+  let point = Point { x: 4 }
+  ret get_x(&amp;point)
+}
+</code></pre>
+<p>Notes:</p>
+<ul>
+<li>References can only be taken to locals (not arbitrary expressions).</li>
+<li><code>&amp;str</code> is the borrowed string type used for string parameters.</li>
+</ul>
+<h2 id="own"><a class="header" href="#own">Own<t></t></a></h2>
+<p><code>Own&lt;T&gt;</code> is a single-owner heap allocation.</p>
+<pre><code class="language-glyph">fn make() -&gt; Own&lt;i32&gt; {
+  let tmp = Own::new(99)
+  ret tmp
+}
+
+fn main() -&gt; i32 {
+  let heap = make()
+  let raw = heap.into_raw()
+  let back = Own::from_raw(raw)
+  let _keep_alive = back
+  ret 0
+}
+</code></pre>
+<p>Notes:</p>
+<ul>
+<li><code>into_raw()</code> transfers ownership to a <code>RawPtr&lt;T&gt;</code>.</li>
+<li><code>from_raw()</code> must be called exactly once for a given raw pointer to avoid leaks or double-free.</li>
+</ul>
+<h2 id="shared"><a class="header" href="#shared">Shared<t></t></a></h2>
+<p><code>Shared&lt;T&gt;</code> is shared ownership (reference-counted).</p>
+<pre><code class="language-glyph">fn main() -&gt; i32 {
+  let s1 = Shared::new(7)
+  let s2 = s1.clone()
+  let _keep_alive = (s1, s2)
+  ret 0
+}
+</code></pre>
+<h2 id="rawptr"><a class="header" href="#rawptr">RawPtr<t></t></a></h2>
+<p><code>RawPtr&lt;T&gt;</code> is an unsafe, opaque pointer type primarily used for FFI boundaries.
+You can obtain one from <code>Own&lt;T&gt;::into_raw()</code>.</p>
+<p>In general, prefer <code>&amp;T</code>, <code>Own&lt;T&gt;</code>, or <code>Shared&lt;T&gt;</code> unless you explicitly need raw pointers.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="standard-library"><a class="header" href="#standard-library">Standard Library</a></h1>
+<p>The standard library keeps a tight surface area:</p>
+<ul>
+<li><code>std/io</code> for I/O</li>
+<li><code>std/vec</code> for vectors</li>
+<li><code>std/map</code> for maps</li>
+<li><code>std/string</code> for strings</li>
+<li><code>std/json</code> for JSON types (and <code>std/json/parser</code>)</li>
+<li><code>std/process</code> for launching external processes</li>
+<li><code>std/sys</code> for low-level system access</li>
+</ul>
+<p>String utilities live on <code>String</code> and include <code>len</code>, <code>concat</code>, <code>slice</code>, <code>trim</code>, <code>split</code>,
+<code>starts_with</code>, and <code>ends_with</code>.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="file-io"><a class="header" href="#file-io">File I/O</a></h1>
+<p>File utilities live in <code>std::io::File</code> and return <code>Result</code> values.</p>
+<pre><code class="language-glyph">from std/io import File
+
+fn main() -&gt; i32 {
+  let created = File::create("out.txt")
+  let status = match created {
+    Ok(file) =&gt; {
+      let _ = file.write_string(String::from_str("hello"))
+      let _ = file.close()
+      0
+    },
+    Err(_) =&gt; 1,
+  }
+  ret status
+}
+</code></pre>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="json"><a class="header" href="#json">JSON</a></h1>
+<p>Glyph ships a small JSON type model in <code>std/json</code>.</p>
+<h2 id="types"><a class="header" href="#types">Types</a></h2>
+<p><code>JsonValue</code> is an enum that can represent any JSON value:</p>
+<pre><code class="language-glyph">from std/json import JsonValue
+
+fn main() -&gt; i32 {
+  let n = JsonValue::Null
+  let b = JsonValue::Bool(true)
+  let x = JsonValue::Number(42.5)
+  let s = JsonValue::String(String::from_str("hello"))
+
+  // Arrays and objects use `Vec` and `Map`.
+  let arr: Vec&lt;JsonValue&gt; = Vec::new()
+  let a = JsonValue::Array(arr)
+
+  let obj: Map&lt;String, JsonValue&gt; = Map::new()
+  let o = JsonValue::Object(obj)
+
+  let _keep_alive = (n, b, x, s, a, o)
+  ret 0
+}
+</code></pre>
+<p>Parse errors are represented by <code>ParseError { message: String, position: usize }</code>.</p>
+<h2 id="parsing"><a class="header" href="#parsing">Parsing</a></h2>
+<p>The parser lives in <code>std/json/parser</code> and returns <code>ParseResult&lt;T&gt;</code>:</p>
+<pre><code class="language-glyph">from std/json import JsonValue, ParseResult
+from std/json/parser import parse
+
+fn main() -&gt; i32 {
+  let r: ParseResult&lt;JsonValue&gt; = parse("{\"k\": 1}")
+  // Handle Ok(value) / Err(parse_error)
+  let _keep_alive = r
+  ret 0
+}
+</code></pre>
+<h2 id="status"><a class="header" href="#status">Status</a></h2>
+<p><code>std/json</code> always provides the JSON types.</p>
+<p><code>std/json/parser::parse</code> is intended to be a real parser, but some builds may ship a minimal stub while the compiler/runtime evolves. If you observe <code>parse(...)</code> always returning <code>Ok(JsonValue::Null)</code>, you’re on a stubbed build.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="external-processes"><a class="header" href="#external-processes">External Processes</a></h1>
+<p>To launch external (non-Glyph) programs, use <code>std/process::run</code>.</p>
+<pre><code class="language-glyph">from std/process import run
+
+fn main() -&gt; i32 {
+  // Note: `Vec::new()` currently defaults to `Vec&lt;i32&gt;`, so annotate the type.
+  let mut args: Vec&lt;String&gt; = Vec::new()
+  args.push(String::from_str("--version"))
+
+  // Returns the process exit code (0 means success).
+  ret run("git", args)
+}
+</code></pre>
+<h2 id="return-value"><a class="header" href="#return-value">Return value</a></h2>
+<p><code>run(cmd, args) -&gt; i32</code> returns:</p>
+<ul>
+<li><code>0..=255</code>: normal process exit code</li>
+<li><code>128 + signal</code>: if the process exits due to a signal (Unix)</li>
+<li>negative values: an OS error code (typically <code>-errno</code>)</li>
+</ul>
+<p>Platform note: currently implemented on Unix; on other platforms it returns <code>-ENOSYS</code>.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+        <!-- Livereload script (if served using the cli tool) -->
+        <script>
+            const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsAddress = wsProtocol + "//" + location.host + "/" + "__livereload";
+            const socket = new WebSocket(wsAddress);
+            socket.onmessage = function (event) {
+                if (event.data === "reload") {
+                    socket.close();
+                    location.reload();
+                }
+            };
+
+            window.onbeforeunload = function() {
+                socket.close();
+            }
+        </script>
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr-ef4e11c1.min.js"></script>
+        <script src="mark-09e88c2c.min.js"></script>
+        <script src="searcher-c2a407aa.js"></script>
+
+        <script src="clipboard-1626706a.min.js"></script>
+        <script src="highlight-abc7f01d.js"></script>
+        <script src="book-a0b12cfe.js"></script>
+
+        <!-- Custom JS scripts -->
+
+        <script>
+        window.addEventListener('load', function() {
+            window.setTimeout(window.print, 100);
+        });
+        </script>
+
+
+    </div>
+    </body>
+</html>

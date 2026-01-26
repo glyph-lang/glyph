@@ -260,3 +260,108 @@ fn std_json_parser_nested_and_trailing() {
 
     assert_eq!(build_and_run_exit_code(source), 0);
 }
+
+#[cfg(all(feature = "codegen", unix))]
+#[test]
+fn std_json_parser_string_escapes() {
+    let source = r#"
+        from std/enums import Option
+        from std/json import JsonValue, ParseResult
+        from std/map import Map
+        from std/string import byte_at
+
+        from std/json/parser import parse
+
+        fn hash_str(s: str) -> i64 {
+          let mut i: usize = 0
+          let len = s.len()
+          let mut h: i64 = 0
+          while i < len {
+            let b = byte_at(s, i)
+            h = h * 31 + b
+            i = i + 1
+          }
+          ret h
+        }
+
+        fn check_hash(input: &str, expected: i64) -> i32 {
+          let r = parse(input)
+          ret match r {
+            Ok(v) => match v {
+              String(s) => if hash_str(s) == expected { 0 } else { 1 },
+              _ => 1,
+            },
+            Err(_e) => 2,
+          }
+        }
+
+        fn check_err(input: &str) -> i32 {
+          let r = parse(input)
+          ret match r {
+            Ok(_v) => 1,
+            Err(_e) => 0,
+          }
+        }
+
+        fn check_object_text() -> i32 {
+          let r = parse("{\"text\":\"hi\\nthere\"}")
+          ret match r {
+            Ok(v) => match v {
+              Object(obj) => {
+                let t = obj.get(String::from_str("text"))
+                match t {
+                  Some(tv) => match tv {
+                    String(s) => if hash_str(s) == 2954896372955 { 0 } else { 1 },
+                    _ => 1,
+                  },
+                  None => 1,
+                }
+              }
+              _ => 1,
+            },
+            Err(_e) => 1,
+          }
+        }
+
+        fn main() -> i32 {
+          let r = parse("\"ab\"")
+          ret match r {
+            Ok(v) => match v {
+              String(s) => {
+                let s0: str = s
+                let len = s0.len()
+                if len == 2 {
+                  let b0 = byte_at(s0, 0)
+                  let b1 = byte_at(s0, 1)
+                  if b0 == 97 && b1 == 98 { 0 } else { 21 }
+                } else {
+                  if len == 4 {
+                    let b0 = byte_at(s0, 0)
+                    let b1 = byte_at(s0, 1)
+                    let b2 = byte_at(s0, 2)
+                    let b3 = byte_at(s0, 3)
+                    if b0 == 34 && b1 == 97 && b2 == 98 && b3 == 34 { 40 } else { 41 }
+                  } else {
+                    if len == 6 {
+                      let b0 = byte_at(s0, 0)
+                      let b1 = byte_at(s0, 1)
+                      let b2 = byte_at(s0, 2)
+                      let b3 = byte_at(s0, 3)
+                      let b4 = byte_at(s0, 4)
+                      let b5 = byte_at(s0, 5)
+                      if b0 == 92 && b1 == 34 && b2 == 97 && b3 == 98 && b4 == 92 && b5 == 34 { 60 } else { 61 }
+                    } else {
+                      30
+                    }
+                  }
+                }
+              }
+              _ => 22,
+            },
+            Err(_e) => 222,
+          }
+        }
+    "#;
+
+    assert_eq!(build_and_run_exit_code(source), 0);
+}

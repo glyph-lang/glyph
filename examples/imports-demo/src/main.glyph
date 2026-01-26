@@ -1,0 +1,18 @@
+from std import println
+from utils import helper
+from math/geometry import Point, distance
+from nested/tools import tool
+import utils
+import math/algebra
+
+fn main() -> i32 {
+  let p = Point { x: 3, y: 4 }
+  let d = distance(p)
+  let sum = math::algebra::add(2, 3)
+  let h = helper()
+  let v = utils::value()
+  let t = tool()
+  let total = d + sum + h + v + t
+  println("imports ok")
+  ret total
+}

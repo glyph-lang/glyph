@@ -740,6 +740,19 @@ pub fn std_modules() -> HashMap<String, Module> {
         span,
     };
 
+    let string_from_byte_extern = ExternFunctionDecl {
+        abi: Some("C".into()),
+        name: Ident("string_from_byte".into()),
+        params: vec![Param {
+            name: Ident("byte".into()),
+            ty: Some(tp("u8", span)),
+            span,
+        }],
+        ret_type: Some(tp("String", span)),
+        link_name: Some("glyph_string_from_byte".into()),
+        span,
+    };
+
     let std_string_module = Module {
         imports: vec![],
         items: vec![
@@ -753,6 +766,7 @@ pub fn std_modules() -> HashMap<String, Module> {
             glyph_core::ast::Item::ExternFunction(isdigit_extern),
             glyph_core::ast::Item::ExternFunction(atoi_extern),
             glyph_core::ast::Item::ExternFunction(byte_at_extern),
+            glyph_core::ast::Item::ExternFunction(string_from_byte_extern),
         ],
     };
     modules.insert("std/string".into(), std_string_module);

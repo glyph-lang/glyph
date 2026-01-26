@@ -1,16 +1,15 @@
 use std::collections::HashMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use glyph_backend::{Backend, CodegenOptions, EmitKind};
-use glyph_core::ast::Module;
 use glyph_frontend::{
-    compile_source, lex, parse, resolve_multi_module, resolve_types, FrontendOptions,
-    ResolverContext,
+    compile_modules, resolve_multi_module, resolve_types, FrontendOptions, ResolverContext,
 };
-use walkdir::WalkDir;
+
+mod module_loader;
+use module_loader::{discover_and_parse_modules, module_id_from_path};
 
 mod build_version;
 
@@ -86,59 +85,10 @@ fn main() -> Result<()> {
     }
 }
 
-fn load_source(path: &PathBuf) -> Result<String> {
-    Ok(fs::read_to_string(path)?)
-}
-
-/// Discover and parse all .glyph files in a directory tree
-fn discover_and_parse_modules(root: &Path) -> Result<HashMap<String, Module>> {
-    let mut modules = HashMap::new();
-
-    for entry in WalkDir::new(root).follow_links(true) {
-        let entry = entry?;
-        let path = entry.path();
-
-        // Skip non-.glyph files
-        if path.extension().and_then(|s| s.to_str()) != Some("glyph") {
-            continue;
-        }
-
-        // Read and parse the file
-        let source = fs::read_to_string(path)?;
-        let lex_out = lex(&source);
-        if !lex_out.diagnostics.is_empty() {
-            for diag in &lex_out.diagnostics {
-                eprintln!("{:?} in {:?}", diag, path);
-            }
-            return Err(anyhow!("lex failed for {:?}", path));
-        }
-
-        let parse_out = parse(&lex_out.tokens, &source);
-        if !parse_out.diagnostics.is_empty() {
-            for diag in &parse_out.diagnostics {
-                eprintln!("{:?} in {:?}", diag, path);
-            }
-            return Err(anyhow!("parse failed for {:?}", path));
-        }
-
-        // Generate module ID from relative path
-        // e.g., "src/math/geometry.glyph" -> "src/math/geometry"
-        let rel_path = path.strip_prefix(root).unwrap_or(path);
-        let module_id = rel_path
-            .with_extension("")
-            .to_str()
-            .ok_or_else(|| anyhow!("invalid path: {:?}", rel_path))?
-            .replace(std::path::MAIN_SEPARATOR, "/");
-
-        modules.insert(module_id, parse_out.module);
-    }
-
-    Ok(modules)
-}
-
 fn check(path: &PathBuf) -> Result<()> {
     // Determine project root (parent of the input file)
     let project_root = path.parent().unwrap_or(Path::new("."));
+    let entry_module = module_id_from_path(project_root, path)?;
 
     // Discover and parse all .glyph files in the project
     let modules = discover_and_parse_modules(project_root)?;
@@ -148,8 +98,8 @@ fn check(path: &PathBuf) -> Result<()> {
     }
 
     // Multi-module resolution
-    let (multi_ctx, compile_order) =
-        resolve_multi_module(modules, project_root).map_err(|diags| {
+    let (multi_ctx, compile_order) = resolve_multi_module(modules, &entry_module, project_root)
+        .map_err(|diags| {
             for diag in &diags {
                 eprintln!("{:?}", diag);
             }
@@ -195,9 +145,12 @@ fn build(
     link_lib: Vec<String>,
     link_search: Vec<PathBuf>,
 ) -> Result<()> {
-    let source = load_source(path)?;
-    let output = compile_source(
-        &source,
+    let project_root = path.parent().unwrap_or(Path::new("."));
+    let entry_module = module_id_from_path(project_root, path)?;
+    let modules = discover_and_parse_modules(project_root)?;
+    let output = compile_modules(
+        modules,
+        &entry_module,
         FrontendOptions {
             emit_mir: true,
             include_std: true,
@@ -304,9 +257,12 @@ fn build(
 }
 
 fn run(path: &PathBuf) -> Result<()> {
-    let source = load_source(path)?;
-    let output = compile_source(
-        &source,
+    let project_root = path.parent().unwrap_or(Path::new("."));
+    let entry_module = module_id_from_path(project_root, path)?;
+    let modules = discover_and_parse_modules(project_root)?;
+    let output = compile_modules(
+        modules,
+        &entry_module,
         FrontendOptions {
             emit_mir: true,
             include_std: true,
@@ -438,6 +394,7 @@ pub extern "C" fn glyph_process_run(_cmd: *const std::ffi::c_char, _args: GlyphV
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn parse_help_succeeds() {

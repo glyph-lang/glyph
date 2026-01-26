@@ -13,7 +13,10 @@ use glyph_backend::{
     codegen::CodegenContext,
     linker::{Linker, LinkerOptions},
 };
-use glyph_frontend::{compile_source, FrontendOptions};
+use glyph_frontend::{compile_modules, FrontendOptions};
+
+mod module_loader;
+use module_loader::{discover_and_parse_modules, module_id_from_path};
 
 const EXIT_SUCCESS: i32 = 0;
 const EXIT_USAGE: i32 = 1;
@@ -333,17 +336,26 @@ fn select_bin<'a>(manifest: &'a Manifest, requested: Option<&str>) -> GlyphResul
 
 fn build_bin(root: &Path, bin: &BinTarget, profile: &str, verbose: bool) -> GlyphResult<PathBuf> {
     let source_path = root.join(&bin.path);
+    let module_root = source_path.parent().unwrap_or(root);
     let output_dir = root.join("target").join(profile);
     fs::create_dir_all(&output_dir).map_err(internal_err(format!(
         "failed to create {}",
         output_dir.display()
     )))?;
 
-    let source = fs::read_to_string(&source_path)
-        .map_err(|e| usage_err(format!("failed to read {}: {}", source_path.display(), e)))?;
+    let entry_module = module_id_from_path(module_root, &source_path).map_err(|e| GlyphError {
+        code: EXIT_COMPILER,
+        message: format!("failed to determine entry module: {}", e),
+    })?;
 
-    let frontend_output = compile_source(
-        &source,
+    let modules = discover_and_parse_modules(module_root).map_err(|e| GlyphError {
+        code: EXIT_COMPILER,
+        message: format!("failed to load modules: {}", e),
+    })?;
+
+    let frontend_output = compile_modules(
+        modules,
+        &entry_module,
         FrontendOptions {
             emit_mir: true,
             include_std: true,

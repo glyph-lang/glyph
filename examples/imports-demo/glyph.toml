@@ -1,0 +1,10 @@
+[package]
+name = "imports-demo"
+version = "0.1.0"
+
+[dependencies]
+# Add dependencies here
+
+[[bin]]
+name = "imports-demo"
+path = "src/main.glyph"

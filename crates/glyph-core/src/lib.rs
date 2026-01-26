@@ -108,6 +108,11 @@ pub mod ast {
         Char(char),
     }
 
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub enum UnaryOp {
+        Not,
+    }
+
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     pub enum Expr {
         Lit(Literal, Span),
@@ -116,6 +121,11 @@ pub mod ast {
             span: Span,
         },
         Ident(Ident, Span),
+        Unary {
+            op: UnaryOp,
+            expr: Box<Expr>,
+            span: Span,
+        },
         Binary {
             op: BinaryOp,
             lhs: Box<Expr>,
@@ -1014,7 +1024,7 @@ mod tests {
         if let Expr::StructLit { name, fields, .. } = expr {
             assert_eq!(name.0, "Point");
             assert_eq!(fields.len(), 2);
-            assert_eq!(fields[0].0.0, "x");
+            assert_eq!(fields[0].0 .0, "x");
         } else {
             panic!("Expected StructLit");
         }

@@ -133,6 +133,7 @@ Use agentic resources at your disposal, specifically subagents and skills.
 Useful subagents:
 - wiggum : will tell you if the task is complete
 - MIR Expert: will help you thoroughly examine MIR-related code
+- language designer: reviews and critiques language design decisions
 
 
 Summary Checklist for Agents

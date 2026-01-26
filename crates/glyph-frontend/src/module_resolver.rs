@@ -351,11 +351,19 @@ fn build_import_scopes(
 /// Returns the multi-module context and compilation order
 pub fn resolve_multi_module(
     mut modules: HashMap<String, Module>,
+    entry_module: &str,
     _root_dir: &Path, // Reserved for future use
 ) -> Result<(MultiModuleContext, Vec<String>), Vec<Diagnostic>> {
     // Inject built-in std modules if they are not already provided by the user
     for (id, module) in std_modules() {
         modules.entry(id).or_insert(module);
+    }
+
+    if !modules.contains_key(entry_module) {
+        return Err(vec![Diagnostic::error(
+            format!("entry module '{}' not found", entry_module),
+            None,
+        )]);
     }
 
     // Step 1: Build dependency graph
@@ -377,11 +385,11 @@ pub fn resolve_multi_module(
         )]
     })?;
 
-    // Only compile modules reachable from `main`. This prevents unused std modules
+    // Only compile modules reachable from the entry module. This prevents unused std modules
     // (and their generic definitions) from being lowered into MIR and sent to codegen.
     let mut reachable: HashSet<String> = HashSet::new();
     let mut queue: VecDeque<String> = VecDeque::new();
-    queue.push_back("main".to_string());
+    queue.push_back(entry_module.to_string());
     while let Some(node) = queue.pop_front() {
         if !reachable.insert(node.clone()) {
             continue;
@@ -766,7 +774,7 @@ mod tests {
             },
         );
 
-        let result = resolve_multi_module(modules, Path::new("."));
+        let result = resolve_multi_module(modules, "main", Path::new("."));
         assert!(result.is_ok());
 
         let (context, order) = result.unwrap();
@@ -968,7 +976,8 @@ mod tests {
         let mut modules = HashMap::new();
         modules.insert("main".to_string(), parsed.module);
 
-        let (ctx, order) = resolve_multi_module(modules, Path::new(".")).expect("resolve std");
+        let (ctx, order) =
+            resolve_multi_module(modules, "main", Path::new(".")).expect("resolve std");
 
         assert!(ctx.modules.contains_key("std"));
         assert!(ctx.modules.contains_key("std/io"));

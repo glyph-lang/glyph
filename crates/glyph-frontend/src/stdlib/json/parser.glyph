@@ -1,8 +1,9 @@
 // Minimal JSON Parser - Uses only basic Glyph syntax
 
 from std/json import JsonValue, ParseError, ParseResult
+from std/enums import Option
 from std/map import Map
-from std/string import byte_at, atof
+from std/string import byte_at, atof, string_from_byte
 from std/vec import Vec
 
 struct ParsedValue {
@@ -15,13 +16,22 @@ struct ParsedString {
   next: usize,
 }
 
+struct ParsedHex {
+  value: i32,
+  ok: i32,
+}
+
+fn make_parse_error(msg: String, pos: usize) -> ParseError {
+  ret ParseError { message: msg, position: pos }
+}
+
 fn parsed_string_to_json_value(p: ParsedString) -> ParsedValue {
   let next = p.next
   let s = p.value
   ret ParsedValue { value: JsonValue::String(s), next: next }
 }
 
-fn skip_ws(input: &str, pos0: usize) -> usize {
+fn skip_ws(input: str, pos0: usize) -> usize {
   let mut pos = pos0
   let len = input.len()
   while pos < len {
@@ -40,7 +50,90 @@ fn is_digit(ch: u8) -> bool {
   ret ch >= 48 && ch <= 57
 }
 
-fn parse_literal(input: &str, pos: usize, lit: &str) -> bool {
+fn hex_value(ch: u8) -> i32 {
+  if ch >= 48 && ch <= 57 {
+    ret ch - 48
+  }
+  if ch >= 65 && ch <= 70 {
+    ret ch - 55
+  }
+  if ch >= 97 && ch <= 102 {
+    ret ch - 87
+  }
+  ret 0 - 1
+}
+
+fn parse_hex4(input: str, pos: usize) -> ParsedHex {
+  let len = input.len()
+  if pos + 3 >= len {
+    ret ParsedHex { value: 0, ok: 0 }
+  }
+  let d0 = hex_value(byte_at(input, pos))
+  if d0 < 0 {
+    ret ParsedHex { value: 0, ok: 0 }
+  }
+  let d1 = hex_value(byte_at(input, pos + 1))
+  if d1 < 0 {
+    ret ParsedHex { value: 0, ok: 0 }
+  }
+  let d2 = hex_value(byte_at(input, pos + 2))
+  if d2 < 0 {
+    ret ParsedHex { value: 0, ok: 0 }
+  }
+  let d3 = hex_value(byte_at(input, pos + 3))
+  if d3 < 0 {
+    ret ParsedHex { value: 0, ok: 0 }
+  }
+  let code = d0 * 4096 + d1 * 256 + d2 * 16 + d3
+  ret ParsedHex { value: code, ok: 1 }
+}
+
+fn rem_64(value: i32) -> i32 {
+  ret value - (value / 64) * 64
+}
+
+fn push_utf8_codepoint(segments0: Vec<String>, code: i32) -> Vec<String> {
+  let mut segments = segments0
+  if code <= 127 {
+    segments.push(string_from_byte(code))
+    ret segments
+  }
+  if code <= 2047 {
+    let hi = code / 64
+    let lo = rem_64(code)
+    let b1 = 192 + hi
+    let b2 = 128 + lo
+    segments.push(string_from_byte(b1))
+    segments.push(string_from_byte(b2))
+    ret segments
+  }
+  if code <= 65535 {
+    let mid = code / 64
+    let b1 = 224 + (code / 4096)
+    let b2 = 128 + rem_64(mid)
+    let b3 = 128 + rem_64(code)
+    segments.push(string_from_byte(b1))
+    segments.push(string_from_byte(b2))
+    segments.push(string_from_byte(b3))
+    ret segments
+  }
+  if code <= 1114111 {
+    let mid1 = code / 4096
+    let mid2 = code / 64
+    let b1 = 240 + (code / 262144)
+    let b2 = 128 + rem_64(mid1)
+    let b3 = 128 + rem_64(mid2)
+    let b4 = 128 + rem_64(code)
+    segments.push(string_from_byte(b1))
+    segments.push(string_from_byte(b2))
+    segments.push(string_from_byte(b3))
+    segments.push(string_from_byte(b4))
+    ret segments
+  }
+  ret segments
+}
+
+fn parse_literal(input: str, pos: usize, lit: str) -> bool {
   let lit_len = lit.len()
   let in_len = input.len()
   if pos + lit_len > in_len {
@@ -51,7 +144,7 @@ fn parse_literal(input: &str, pos: usize, lit: &str) -> bool {
   ret parse_literal_loop(input, pos, lit, lit_len, i0)
 }
 
-fn parse_literal_loop(input: &str, pos: usize, lit: &str, lit_len: usize, i: usize) -> bool {
+fn parse_literal_loop(input: str, pos: usize, lit: str, lit_len: usize, i: usize) -> bool {
   if i >= lit_len {
     ret true
   }
@@ -61,7 +154,7 @@ fn parse_literal_loop(input: &str, pos: usize, lit: &str, lit_len: usize, i: usi
   ret parse_literal_loop(input, pos, lit, lit_len, i + 1)
 }
 
-fn parse_number(input: &str, pos: usize) -> ParseResult<ParsedValue> {
+fn parse_number(input: str, pos: usize) -> ParseResult<ParsedValue> {
   let len = input.len()
   let mut i = pos
   if i < len && byte_at(input, i) == 45 {
@@ -121,7 +214,7 @@ fn parse_number(input: &str, pos: usize) -> ParseResult<ParsedValue> {
   ret Ok(ParsedValue { value: JsonValue::Number(n), next: i })
 }
 
-fn parse_digits(input: &str, len: usize, i0: usize) -> usize {
+fn parse_digits(input: str, len: usize, i0: usize) -> usize {
   if i0 >= len {
     ret i0
   }
@@ -133,41 +226,205 @@ fn parse_digits(input: &str, len: usize, i0: usize) -> usize {
   ret parse_digits(input, len, i0 + 1)
 }
 
-fn parse_string(input: &str, pos: usize) -> ParseResult<ParsedString> {
+fn parse_string(input: str, pos: usize) -> ParseResult<ParsedString> {
   let len = input.len()
   if pos >= len || byte_at(input, pos) != 34 {
-    ret Err(ParseError { message: String::from_str("expected string"), position: pos })
+    ret Err(make_parse_error(String::from_str("expected string"), pos))
   }
-  ret parse_string_scan(input, len, pos, pos + 1)
+  let mut i = pos + 1
+  let mut seg_start = i
+  let mut had_escape = false
+  let mut segments: Vec<String> = Vec::new()
+
+  while i < len {
+    let ch = byte_at(input, i)
+    if ch == 34 {
+      if had_escape == false {
+        let s = input.slice(pos + 1, i - (pos + 1))
+        ret Ok(ParsedString { value: s, next: i + 1 })
+      }
+      if seg_start < i {
+        let tail = input.slice(seg_start, i - seg_start)
+        segments.push(tail)
+      }
+      let s = concat_segments(segments)
+      ret Ok(ParsedString { value: s, next: i + 1 })
+    }
+
+    if ch < 32 {
+      ret Err(make_parse_error(String::from_str("unescaped control character"), i))
+    }
+
+    if ch == 92 {
+      had_escape = true
+      if seg_start < i {
+        let part = input.slice(seg_start, i - seg_start)
+        segments.push(part)
+      }
+
+      if i + 1 >= len {
+        ret Err(make_parse_error(String::from_str("unterminated escape"), i))
+      }
+
+      let next = byte_at(input, i + 1)
+      if next == 34 {
+        segments.push(string_from_byte(34))
+        i = i + 2
+        seg_start = i
+        cont
+      }
+      if next == 92 {
+        segments.push(string_from_byte(92))
+        i = i + 2
+        seg_start = i
+        cont
+      }
+      if next == 47 {
+        segments.push(string_from_byte(47))
+        i = i + 2
+        seg_start = i
+        cont
+      }
+      if next == 98 {
+        segments.push(string_from_byte(8))
+        i = i + 2
+        seg_start = i
+        cont
+      }
+      if next == 102 {
+        segments.push(string_from_byte(12))
+        i = i + 2
+        seg_start = i
+        cont
+      }
+      if next == 110 {
+        segments.push(string_from_byte(10))
+        i = i + 2
+        seg_start = i
+        cont
+      }
+      if next == 114 {
+        segments.push(string_from_byte(13))
+        i = i + 2
+        seg_start = i
+        cont
+      }
+      if next == 116 {
+        segments.push(string_from_byte(9))
+        i = i + 2
+        seg_start = i
+        cont
+      }
+
+      if next == 117 {
+        let esc_pos = i
+        let hex = parse_hex4(input, i + 2)
+        if hex.ok == 0 {
+          ret Err(make_parse_error(String::from_str("invalid unicode escape"), esc_pos))
+        }
+        let code: i32 = hex.value
+
+          if code == 0 {
+            ret Err(make_parse_error(String::from_str("nul escape unsupported"), esc_pos))
+          }
+
+        if code >= 55296 && code <= 56319 {
+          if i + 11 >= len {
+            ret Err(make_parse_error(String::from_str("invalid unicode surrogate"), esc_pos))
+          }
+          if byte_at(input, i + 6) != 92 || byte_at(input, i + 7) != 117 {
+            ret Err(make_parse_error(String::from_str("invalid unicode surrogate"), esc_pos))
+          }
+
+          let low_hex = parse_hex4(input, i + 8)
+          if low_hex.ok == 0 {
+            ret Err(make_parse_error(String::from_str("invalid unicode escape"), esc_pos))
+          }
+          let low: i32 = low_hex.value
+          if low < 56320 || low > 57343 {
+            ret Err(make_parse_error(String::from_str("invalid unicode surrogate"), esc_pos))
+          }
+
+          let high: i32 = code - 55296
+          let low_adj: i32 = low - 56320
+          let codepoint: i32 = 65536 + (high * 1024) + low_adj
+          segments = push_utf8_codepoint(segments, codepoint)
+          i = i + 12
+          seg_start = i
+          cont
+        }
+
+        if code >= 56320 && code <= 57343 {
+          ret Err(make_parse_error(String::from_str("invalid unicode surrogate"), esc_pos))
+        }
+
+        segments = push_utf8_codepoint(segments, code)
+        i = i + 6
+        seg_start = i
+        cont
+      }
+
+      ret Err(make_parse_error(String::from_str("invalid escape"), i))
+    }
+
+    i = i + 1
+  }
+
+  ret Err(make_parse_error(String::from_str("unterminated string"), pos))
 }
 
-fn parse_string_scan(input: &str, len: usize, start: usize, i: usize) -> ParseResult<ParsedString> {
-  if i >= len {
-    ret Err(ParseError { message: String::from_str("unterminated string"), position: start })
+fn concat_segments(segments0: Vec<String>) -> String {
+  let mut segments = segments0
+  if segments.len() == 0 {
+    ret String::from_str("")
   }
 
-  let ch = byte_at(input, i)
-  if ch == 34 {
-    let s = input.slice(start + 1, i - (start + 1))
-    ret Ok(ParsedString { value: s, next: i + 1 })
-  }
+  while segments.len() > 1 {
+    let mut next: Vec<String> = Vec::new()
 
-  if ch == 92 {
-    if i + 1 >= len {
-      ret Err(ParseError { message: String::from_str("unterminated escape"), position: i })
+    while segments.len() > 1 {
+      let right = segments.pop()
+      let left = segments.pop()
+      let merged = match left {
+        Some(l) => match right {
+          Some(r) => l.concat(r),
+          None => l,
+        },
+        None => String::from_str(""),
+      }
+      next.push(merged)
     }
-    // subset: allow \" only
-    let next = byte_at(input, i + 1)
-    if next != 34 {
-      ret Err(ParseError { message: String::from_str("unsupported escape"), position: i })
+
+    let leftover = segments.pop()
+    match leftover {
+      Some(s) => next.push(s),
+      None => {},
     }
-    ret parse_string_scan(input, len, start, i + 2)
+
+    segments = reverse_segments(next)
   }
 
-  ret parse_string_scan(input, len, start, i + 1)
+  let out = segments.pop()
+  ret match out {
+    Some(s) => s,
+    None => String::from_str(""),
+  }
 }
 
-fn parse_array(input: &str, pos: usize) -> ParseResult<ParsedValue> {
+fn reverse_segments(input: Vec<String>) -> Vec<String> {
+  let mut src = input
+  let mut out: Vec<String> = Vec::new()
+  while src.len() > 0 {
+    let v = src.pop()
+    match v {
+      Some(s) => out.push(s),
+      None => {},
+    }
+  }
+  ret out
+}
+
+fn parse_array(input: str, pos: usize) -> ParseResult<ParsedValue> {
   let len = input.len()
   if pos >= len || byte_at(input, pos) != 91 {
     ret Err(ParseError { message: String::from_str("expected '['"), position: pos })
@@ -183,7 +440,7 @@ fn parse_array(input: &str, pos: usize) -> ParseResult<ParsedValue> {
   ret parse_array_elems(input, len, i, arr)
 }
 
-fn parse_array_elems(input: &str, len: usize, i0: usize, arr0: Vec<JsonValue>) -> ParseResult<ParsedValue> {
+fn parse_array_elems(input: str, len: usize, i0: usize, arr0: Vec<JsonValue>) -> ParseResult<ParsedValue> {
   let pv = parse_value(input, i0)
   ret match pv {
     Ok(p) => parse_array_after_value(input, len, p, arr0),
@@ -192,7 +449,7 @@ fn parse_array_elems(input: &str, len: usize, i0: usize, arr0: Vec<JsonValue>) -
 }
 
 fn parse_array_after_value(
-  input: &str,
+  input: str,
   len: usize,
   parsed: ParsedValue,
   arr0: Vec<JsonValue>,
@@ -219,7 +476,7 @@ fn parse_array_after_value(
   ret Err(ParseError { message: String::from_str("expected ',' or ']'"), position: i })
 }
 
-fn parse_object(input: &str, pos: usize) -> ParseResult<ParsedValue> {
+fn parse_object(input: str, pos: usize) -> ParseResult<ParsedValue> {
   let len = input.len()
   if pos >= len || byte_at(input, pos) != 123 {
     ret Err(ParseError { message: String::from_str("expected '{'"), position: pos })
@@ -235,7 +492,7 @@ fn parse_object(input: &str, pos: usize) -> ParseResult<ParsedValue> {
   ret parse_object_pairs(input, len, i, obj)
 }
 
-fn parse_object_pairs(input: &str, len: usize, i0: usize, obj0: Map<String, JsonValue>) -> ParseResult<ParsedValue> {
+fn parse_object_pairs(input: str, len: usize, i0: usize, obj0: Map<String, JsonValue>) -> ParseResult<ParsedValue> {
   let pk = parse_string(input, i0)
   ret match pk {
     Ok(kparsed) => parse_object_after_key(input, len, kparsed, obj0),
@@ -244,7 +501,7 @@ fn parse_object_pairs(input: &str, len: usize, i0: usize, obj0: Map<String, Json
 }
 
 fn parse_object_after_key(
-  input: &str,
+  input: str,
   len: usize,
   kparsed: ParsedString,
   obj0: Map<String, JsonValue>,
@@ -264,7 +521,7 @@ fn parse_object_after_key(
 }
 
 fn parse_object_after_value(
-  input: &str,
+  input: str,
   len: usize,
   k: String,
   vparsed: ParsedValue,
@@ -292,7 +549,7 @@ fn parse_object_after_value(
   ret Err(ParseError { message: String::from_str("expected ',' or '}'"), position: i })
 }
 
-fn parse_value(input: &str, pos0: usize) -> ParseResult<ParsedValue> {
+fn parse_value(input: str, pos0: usize) -> ParseResult<ParsedValue> {
   let pos = skip_ws(input, pos0)
   let len = input.len()
   if pos >= len {
@@ -333,7 +590,7 @@ fn parse_value(input: &str, pos0: usize) -> ParseResult<ParsedValue> {
   ret Err(ParseError { message: String::from_str("unexpected token"), position: pos })
 }
 
-fn parse(input: &str) -> ParseResult<JsonValue> {
+fn parse(input: str) -> ParseResult<JsonValue> {
   let pv = parse_value(input, 0)
   ret match pv {
     Ok(p) => parse_finish(input, p),
@@ -341,7 +598,7 @@ fn parse(input: &str) -> ParseResult<JsonValue> {
   }
 }
 
-fn parse_finish(input: &str, parsed: ParsedValue) -> ParseResult<JsonValue> {
+fn parse_finish(input: str, parsed: ParsedValue) -> ParseResult<JsonValue> {
   let end = skip_ws(input, parsed.next)
   if end != input.len() {
     ret Err(ParseError { message: String::from_str("trailing characters"), position: end })

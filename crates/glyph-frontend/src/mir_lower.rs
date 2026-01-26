@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use glyph_core::ast::{BinaryOp, Block, Expr, Function, Ident, Item, Module, Stmt, TypeExpr};
+use glyph_core::ast::{
+    BinaryOp, Block, Expr, Function, Ident, Item, Module, Stmt, TypeExpr, UnaryOp,
+};
 use glyph_core::diag::Diagnostic;
 use glyph_core::mir::{
     BlockId, Local, LocalId, MirBlock, MirExternFunction, MirFunction, MirInst, MirModule,
@@ -1561,6 +1563,9 @@ fn lower_expr_with_expected<'a>(
                     None
                 }
             }),
+        Expr::Unary { op, expr, span } => match op {
+            UnaryOp::Not => lower_unary_not(ctx, expr, *span),
+        },
         Expr::Binary { op, lhs, rhs, .. } => match *op {
             glyph_core::ast::BinaryOp::And | glyph_core::ast::BinaryOp::Or => {
                 lower_logical(ctx, op, lhs, rhs)
@@ -1612,6 +1617,22 @@ fn lower_expr_with_expected<'a>(
         Expr::Tuple { elements, span } => lower_tuple_expr(ctx, elements, *span),
         _ => None,
     }
+}
+
+fn lower_unary_not<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr, _span: Span) -> Option<Rvalue> {
+    let value = lower_value(ctx, expr)?;
+    let coerced = coerce_to_bool(value);
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::Bool);
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::Binary {
+            op: BinaryOp::Eq,
+            lhs: coerced,
+            rhs: MirValue::Bool(false),
+        },
+    });
+    Some(Rvalue::Move(tmp))
 }
 
 fn lower_binary<'a>(
@@ -2151,6 +2172,9 @@ fn infer_expr_type(ctx: &LowerCtx, expr: &Expr) -> Option<glyph_core::types::Typ
         Expr::Lit(glyph_core::ast::Literal::Char(_), _) => Some(Type::Char),
         Expr::Lit(glyph_core::ast::Literal::Str(_), _) => Some(Type::Str),
         Expr::InterpString { .. } => Some(Type::Str),
+        Expr::Unary {
+            op: UnaryOp::Not, ..
+        } => Some(Type::Bool),
 
         // Struct literal: obvious
         Expr::StructLit { name, .. } => Some(glyph_core::types::Type::Named(name.0.clone())),
@@ -4535,6 +4559,7 @@ fn expr_span(expr: &Expr) -> Option<Span> {
     match expr {
         Expr::Lit(_, span) => Some(*span),
         Expr::Ident(_, span) => Some(*span),
+        Expr::Unary { span, .. } => Some(*span),
         Expr::Binary { span, .. } => Some(*span),
         Expr::Call { span, .. } => Some(*span),
         Expr::If { span, .. } => Some(*span),
@@ -4634,6 +4659,9 @@ fn lower_value_with_expected<'a>(
                     None
                 }
             }),
+        Expr::Unary { op, expr, span } => match op {
+            UnaryOp::Not => lower_unary_not(ctx, expr, *span).and_then(rvalue_to_value),
+        },
         Expr::Binary { op, lhs, rhs, .. } => match *op {
             glyph_core::ast::BinaryOp::And | glyph_core::ast::BinaryOp::Or => {
                 lower_logical(ctx, op, lhs, rhs).and_then(rvalue_to_value)

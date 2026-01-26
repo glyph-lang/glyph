@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use glyph_frontend::{FrontendOptions, compile_source};
+use glyph_frontend::{compile_source, FrontendOptions};
 use insta::assert_debug_snapshot;
 
 fn run_fixture(name: &str) -> String {
@@ -117,6 +117,19 @@ fn mir_compare_eq() {
 #[test]
 fn mir_logical_and() {
     let src = run_fixture("logical_and.glyph");
+    let out = compile_source(
+        &src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: false,
+        },
+    );
+    assert_debug_snapshot!(out.mir);
+}
+
+#[test]
+fn mir_logical_not() {
+    let src = run_fixture("logical_not.glyph");
     let out = compile_source(
         &src,
         FrontendOptions {
@@ -333,11 +346,10 @@ fn mir_break_outside_loop() {
         },
     );
     assert!(!out.diagnostics.is_empty());
-    assert!(
-        out.diagnostics
-            .iter()
-            .any(|d| d.message.contains("outside of loop"))
-    );
+    assert!(out
+        .diagnostics
+        .iter()
+        .any(|d| d.message.contains("outside of loop")));
 }
 
 #[test]
@@ -351,11 +363,10 @@ fn mir_continue_outside_loop() {
         },
     );
     assert!(!out.diagnostics.is_empty());
-    assert!(
-        out.diagnostics
-            .iter()
-            .any(|d| d.message.contains("outside of loop"))
-    );
+    assert!(out
+        .diagnostics
+        .iter()
+        .any(|d| d.message.contains("outside of loop")));
 }
 
 #[test]
