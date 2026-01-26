@@ -154,6 +154,7 @@ fn keyword_or_ident(text: &str) -> TokenKind {
     use TokenKind::*;
     match text {
         "fn" => Fn,
+        "const" => Const,
         "let" => Let,
         "mut" => Mut,
         "type" => Type,

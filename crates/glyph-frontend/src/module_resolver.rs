@@ -161,10 +161,13 @@ pub fn build_dependency_graph(
 
             // Validate dependency exists
             if !modules.contains_key(&dep_module_id) {
-                diagnostics.push(Diagnostic::error(
-                    format!("unknown import: module '{}' not found", dep_module_id),
-                    Some(import.span),
-                ));
+                diagnostics.push(
+                    Diagnostic::error(
+                        format!("unknown import: module '{}' not found", dep_module_id),
+                        Some(import.span),
+                    )
+                    .with_module_id(module_id.clone()),
+                );
                 continue;
             }
 
@@ -217,6 +220,7 @@ pub struct ModuleSymbols {
     pub enums: HashSet<String>,
     pub interfaces: HashSet<String>,
     pub functions: HashSet<String>,
+    pub consts: HashSet<String>,
 }
 
 impl ModuleSymbols {
@@ -226,6 +230,7 @@ impl ModuleSymbols {
             enums: HashSet::new(),
             interfaces: HashSet::new(),
             functions: HashSet::new(),
+            consts: HashSet::new(),
         }
     }
 }
@@ -253,6 +258,9 @@ fn collect_module_symbols(modules: &HashMap<String, Module>) -> HashMap<String, 
                 }
                 Item::ExternFunction(f) => {
                     symbols.functions.insert(f.name.0.clone());
+                }
+                Item::Const(c) => {
+                    symbols.consts.insert(c.name.0.clone());
                 }
                 Item::Impl(_) => {
                     // Methods are handled separately in resolver
@@ -299,16 +307,20 @@ fn build_import_scopes(
                             let exists = symbols.structs.contains(&original_name)
                                 || symbols.enums.contains(&original_name)
                                 || symbols.interfaces.contains(&original_name)
-                                || symbols.functions.contains(&original_name);
+                                || symbols.functions.contains(&original_name)
+                                || symbols.consts.contains(&original_name);
 
                             if !exists {
-                                diagnostics.push(Diagnostic::error(
-                                    format!(
-                                        "symbol '{}' not found in module '{}'",
-                                        original_name, source_module
-                                    ),
-                                    Some(item.span),
-                                ));
+                                diagnostics.push(
+                                    Diagnostic::error(
+                                        format!(
+                                            "symbol '{}' not found in module '{}'",
+                                            original_name, source_module
+                                        ),
+                                        Some(item.span),
+                                    )
+                                    .with_module_id(module_id.clone()),
+                                );
                                 continue;
                             }
                         }
@@ -326,7 +338,8 @@ fn build_import_scopes(
                                     source_module
                                 ),
                                 Some(item.span),
-                            ));
+                            )
+                            .with_module_id(module_id.clone()));
                         } else {
                             scope
                                 .direct_symbols

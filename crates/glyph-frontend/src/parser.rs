@@ -1,10 +1,10 @@
 use crate::method_symbols::{inherent_method_symbol, interface_method_symbol};
 use glyph_core::{
     ast::{
-        BinaryOp, Block, EnumDef, EnumVariantDef, Expr, ExternFunctionDecl, FieldDef, Function,
-        Ident, ImplBlock, Import, ImportItem, ImportKind, ImportPath, InlineImpl, InterfaceDef,
-        InterfaceMethod, InterpSegment, Item, Literal, MatchArm, MatchPattern, Module, Param, Stmt,
-        StructDef, TypeExpr, UnaryOp,
+        BinaryOp, Block, ConstDef, EnumDef, EnumVariantDef, Expr, ExternFunctionDecl, FieldDef,
+        Function, Ident, ImplBlock, Import, ImportItem, ImportKind, ImportPath, InlineImpl,
+        InterfaceDef, InterfaceMethod, InterpSegment, Item, Literal, MatchArm, MatchPattern,
+        Module, Param, Stmt, StructDef, TypeExpr, UnaryOp,
     },
     diag::Diagnostic,
     span::Span,
@@ -78,6 +78,11 @@ pub fn parse(tokens: &[Token], source: &str) -> ParseOutput {
                 Some(func) => parser.items.push(Item::Function(func)),
                 None => parser.synchronize(),
             }
+        } else if parser.at(TokenKind::Const) {
+            match parser.parse_const() {
+                Some(def) => parser.items.push(Item::Const(def)),
+                None => parser.synchronize(),
+            }
         } else if parser.at(TokenKind::Extern) {
             match parser.parse_extern_function() {
                 Some(extern_fn) => parser.items.push(Item::ExternFunction(extern_fn)),
@@ -86,7 +91,7 @@ pub fn parse(tokens: &[Token], source: &str) -> ParseOutput {
         } else {
             let span = parser.peek().map(|t| t.span);
             parser.diagnostics.push(Diagnostic::error(
-                "expected `fn`, `struct`, `enum`, `interface`, `impl`, or `extern`",
+                "expected `const`, `fn`, `struct`, `enum`, `interface`, `impl`, or `extern`",
                 span,
             ));
             parser.synchronize();
@@ -165,6 +170,37 @@ impl<'a> Parser<'a> {
             ret_type,
             span: Span::new(fn_tok.span.start, body.span.end),
             body,
+        })
+    }
+
+    fn parse_const(&mut self) -> Option<ConstDef> {
+        let const_tok = self.consume(TokenKind::Const, "expected `const`")?;
+        let name_tok = self.consume(TokenKind::Ident, "expected constant name")?;
+
+        if !self.at(TokenKind::Colon) {
+            let span = self.peek().map(|t| t.span).or(Some(name_tok.span));
+            self.diagnostics.push(Diagnostic::error(
+                "top-level const requires explicit type annotation",
+                span,
+            ));
+            return None;
+        }
+        self.advance();
+        let ty = self.parse_type_expr()?;
+
+        self.consume(TokenKind::Eq, "expected `=` after const type")?;
+        let value = self.parse_expr()?;
+
+        if self.at(TokenKind::Semicolon) {
+            self.advance();
+        }
+
+        let end = self.expr_end(&value);
+        Some(ConstDef {
+            name: Ident(self.slice(name_tok)),
+            ty,
+            value,
+            span: Span::new(const_tok.span.start, end),
         })
     }
 
@@ -1765,6 +1801,7 @@ impl<'a> Parser<'a> {
                 TokenKind::From => return true,
                 TokenKind::Semicolon
                 | TokenKind::Eof
+                | TokenKind::Const
                 | TokenKind::Struct
                 | TokenKind::Fn
                 | TokenKind::Interface
@@ -2181,5 +2218,41 @@ fn main() { p("hi") }"#;
             }
             other => panic!("expected top-level ||, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn parses_const_item() {
+        let source = "const SUCCESS: i32 = 0\nfn main() { ret SUCCESS }";
+        let lexed = lex(source);
+        let out = parse(&lexed.tokens, source);
+        assert!(out.diagnostics.is_empty(), "diags: {:?}", out.diagnostics);
+        assert_eq!(out.module.items.len(), 2);
+        match &out.module.items[0] {
+            Item::Const(def) => {
+                assert_eq!(def.name.0, "SUCCESS");
+                match &def.ty {
+                    TypeExpr::Path { segments, .. } => {
+                        assert_eq!(segments, &vec!["i32".to_string()])
+                    }
+                    other => panic!("expected type path, got {:?}", other),
+                }
+                match &def.value {
+                    Expr::Lit(Literal::Int(0), _) => {}
+                    other => panic!("expected int literal, got {:?}", other),
+                }
+            }
+            other => panic!("expected const item, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn const_requires_type_annotation() {
+        let source = "const MISSING = 1";
+        let lexed = lex(source);
+        let out = parse(&lexed.tokens, source);
+        assert!(out
+            .diagnostics
+            .iter()
+            .any(|d| { d.message.contains("requires explicit type annotation") }));
     }
 }

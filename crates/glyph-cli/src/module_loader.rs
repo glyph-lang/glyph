@@ -7,6 +7,8 @@ use glyph_core::ast::Module;
 use glyph_frontend::{lex, parse};
 use walkdir::WalkDir;
 
+use crate::diagnostics::SourceInfo;
+
 pub fn module_id_from_path(root: &Path, path: &Path) -> Result<String> {
     let rel_path = path.strip_prefix(root).unwrap_or(path);
     let module_id = rel_path
@@ -17,9 +19,17 @@ pub fn module_id_from_path(root: &Path, path: &Path) -> Result<String> {
     Ok(module_id)
 }
 
+pub struct ModuleLoadResult {
+    pub modules: HashMap<String, Module>,
+    pub sources: HashMap<String, SourceInfo>,
+    pub diagnostics: Vec<glyph_core::diag::Diagnostic>,
+}
+
 /// Discover and parse all .glyph files in a directory tree
-pub fn discover_and_parse_modules(root: &Path) -> Result<HashMap<String, Module>> {
+pub fn discover_and_parse_modules(root: &Path) -> Result<ModuleLoadResult> {
     let mut modules = HashMap::new();
+    let mut sources = HashMap::new();
+    let mut diagnostics = Vec::new();
 
     for entry in WalkDir::new(root).follow_links(true) {
         let entry = entry?;
@@ -32,25 +42,48 @@ pub fn discover_and_parse_modules(root: &Path) -> Result<HashMap<String, Module>
 
         // Read and parse the file
         let source = fs::read_to_string(path)?;
+        let module_id = module_id_from_path(root, path)?;
+        sources.insert(
+            module_id.clone(),
+            SourceInfo::new(path.to_path_buf(), source.clone()),
+        );
         let lex_out = lex(&source);
         if !lex_out.diagnostics.is_empty() {
-            for diag in &lex_out.diagnostics {
-                eprintln!("{:?} in {:?}", diag, path);
-            }
-            return Err(anyhow!("lex failed for {:?}", path));
+            diagnostics.extend(lex_out.diagnostics.into_iter().map(|diag| {
+                if diag.module_id.is_some() {
+                    diag
+                } else {
+                    diag.with_module_id(module_id.clone())
+                }
+            }));
+            return Ok(ModuleLoadResult {
+                modules,
+                sources,
+                diagnostics,
+            });
         }
 
         let parse_out = parse(&lex_out.tokens, &source);
         if !parse_out.diagnostics.is_empty() {
-            for diag in &parse_out.diagnostics {
-                eprintln!("{:?} in {:?}", diag, path);
-            }
-            return Err(anyhow!("parse failed for {:?}", path));
+            diagnostics.extend(parse_out.diagnostics.into_iter().map(|diag| {
+                if diag.module_id.is_some() {
+                    diag
+                } else {
+                    diag.with_module_id(module_id.clone())
+                }
+            }));
+            return Ok(ModuleLoadResult {
+                modules,
+                sources,
+                diagnostics,
+            });
         }
-
-        let module_id = module_id_from_path(root, path)?;
         modules.insert(module_id, parse_out.module);
     }
 
-    Ok(modules)
+    Ok(ModuleLoadResult {
+        modules,
+        sources,
+        diagnostics,
+    })
 }

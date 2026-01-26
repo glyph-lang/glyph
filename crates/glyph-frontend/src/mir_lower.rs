@@ -11,7 +11,7 @@ use glyph_core::mir::{
 use glyph_core::span::Span;
 use glyph_core::types::{Mutability, Type};
 
-use crate::resolver::ResolverContext;
+use crate::resolver::{ConstValue, ResolvedSymbol, ResolverContext};
 
 #[derive(Debug, Clone)]
 struct FnSig {
@@ -85,11 +85,11 @@ pub fn lower_module(module: &Module, resolver: &ResolverContext) -> (MirModule, 
     for item in &module.items {
         match item {
             Item::Function(func) => {
-                let (lowered, diags) = lower_function(func, resolver, &fn_sigs);
+                let (lowered, diags) = lower_function(func, module, resolver, &fn_sigs);
                 diagnostics.extend(diags);
                 mir.functions.push(lowered);
             }
-            Item::Struct(_) | Item::Interface(_) | Item::Impl(_) => {
+            Item::Struct(_) | Item::Interface(_) | Item::Impl(_) | Item::Const(_) => {
                 // Handled during resolution or desugaring stages.
             }
             Item::Enum(_) => {
@@ -473,6 +473,7 @@ fn collect_function_signatures(
 
 struct LowerCtx<'a> {
     resolver: &'a ResolverContext,
+    module: &'a Module,
     fn_sigs: &'a HashMap<String, FnSig>,
     diagnostics: Vec<Diagnostic>,
     locals: Vec<Local>,
@@ -491,6 +492,7 @@ struct LowerCtx<'a> {
 impl<'a> LowerCtx<'a> {
     fn new(
         resolver: &'a ResolverContext,
+        module: &'a Module,
         fn_sigs: &'a HashMap<String, FnSig>,
         function_name: String,
     ) -> Self {
@@ -498,6 +500,7 @@ impl<'a> LowerCtx<'a> {
         blocks.push(MirBlock::default());
         Self {
             resolver,
+            module,
             fn_sigs,
             diagnostics: Vec::new(),
             locals: Vec::new(),
@@ -718,6 +721,7 @@ fn imports_sys_argv(resolver: &ResolverContext) -> bool {
 
 fn lower_function(
     func: &Function,
+    module: &Module,
     resolver: &ResolverContext,
     fn_sigs: &HashMap<String, FnSig>,
 ) -> (MirFunction, Vec<Diagnostic>) {
@@ -727,7 +731,7 @@ fn lower_function(
         .as_ref()
         .and_then(|t| crate::resolver::resolve_type_expr_to_type(t, resolver));
 
-    let mut ctx = LowerCtx::new(resolver, fn_sigs, func.name.0.clone());
+    let mut ctx = LowerCtx::new(resolver, module, fn_sigs, func.name.0.clone());
     ctx.fn_ret_type = ret_type.clone();
 
     // Create locals for parameters and bind them
@@ -1552,17 +1556,19 @@ fn lower_expr_with_expected<'a>(
             arms,
             span,
         } => lower_match(ctx, scrutinee, arms, true, *span, expected),
-        Expr::Ident(ident, span) => ctx
-            .bindings
-            .get(ident.0.as_str())
-            .copied()
-            .and_then(|local| {
+        Expr::Ident(ident, span) => {
+            if let Some(local) = ctx.bindings.get(ident.0.as_str()).copied() {
                 if ctx.consume_local(local, Some(*span)) {
                     Some(Rvalue::Move(local))
                 } else {
                     None
                 }
-            }),
+            } else if let Some(value) = lookup_const_value(ctx, ident.0.as_str(), *span) {
+                lower_const_rvalue(ctx, value)
+            } else {
+                None
+            }
+        }
         Expr::Unary { op, expr, span } => match op {
             UnaryOp::Not => lower_unary_not(ctx, expr, *span),
         },
@@ -1616,6 +1622,55 @@ fn lower_expr_with_expected<'a>(
         } => lower_method_call(ctx, receiver, method, args, *span),
         Expr::Tuple { elements, span } => lower_tuple_expr(ctx, elements, *span),
         _ => None,
+    }
+}
+
+fn lookup_const_value<'a>(ctx: &mut LowerCtx<'a>, name: &str, span: Span) -> Option<ConstValue> {
+    if let Some(binding) = ctx.resolver.consts.get(name) {
+        return Some(binding.value.clone());
+    }
+
+    if !matches!(
+        ctx.resolver.resolve_symbol(name),
+        Some(ResolvedSymbol::Const(_, _))
+    ) {
+        return None;
+    }
+
+    crate::resolver::resolve_const_value(name, span, ctx.module, ctx.resolver, &mut ctx.diagnostics)
+}
+
+fn lower_const_rvalue<'a>(ctx: &mut LowerCtx<'a>, value: ConstValue) -> Option<Rvalue> {
+    let val = lower_const_value(ctx, value)?;
+    rvalue_from_value(val)
+}
+
+fn lower_const_value<'a>(ctx: &mut LowerCtx<'a>, value: ConstValue) -> Option<MirValue> {
+    match value {
+        ConstValue::Int(i) => Some(MirValue::Int(i)),
+        ConstValue::Bool(b) => Some(MirValue::Bool(b)),
+        ConstValue::Char(c) => {
+            let tmp = ctx.fresh_local(None);
+            ctx.locals[tmp.0 as usize].ty = Some(Type::Char);
+            ctx.push_inst(MirInst::Assign {
+                local: tmp,
+                value: Rvalue::ConstInt(c as i64),
+            });
+            Some(MirValue::Local(tmp))
+        }
+        ConstValue::Str(s) => {
+            let tmp = ctx.fresh_local(None);
+            ctx.locals[tmp.0 as usize].ty = Some(Type::Str);
+            let global_name = ctx.fresh_string_global();
+            ctx.push_inst(MirInst::Assign {
+                local: tmp,
+                value: Rvalue::StringLit {
+                    content: s,
+                    global_name,
+                },
+            });
+            Some(MirValue::Local(tmp))
+        }
     }
 }
 
@@ -4648,17 +4703,19 @@ fn lower_value_with_expected<'a>(
             });
             Some(MirValue::Local(tmp))
         }
-        Expr::Ident(ident, span) => ctx
-            .bindings
-            .get(ident.0.as_str())
-            .copied()
-            .and_then(|local| {
+        Expr::Ident(ident, span) => {
+            if let Some(local) = ctx.bindings.get(ident.0.as_str()).copied() {
                 if ctx.consume_local(local, Some(*span)) {
                     Some(MirValue::Local(local))
                 } else {
                     None
                 }
-            }),
+            } else if let Some(value) = lookup_const_value(ctx, ident.0.as_str(), *span) {
+                lower_const_value(ctx, value)
+            } else {
+                None
+            }
+        }
         Expr::Unary { op, expr, span } => match op {
             UnaryOp::Not => lower_unary_not(ctx, expr, *span).and_then(rvalue_to_value),
         },

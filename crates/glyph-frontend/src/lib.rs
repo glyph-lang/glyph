@@ -38,6 +38,27 @@ pub struct FrontendOutput {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+fn tag_diagnostics(module_id: &str, diags: Vec<Diagnostic>) -> Vec<Diagnostic> {
+    diags
+        .into_iter()
+        .map(|diag| {
+            if diag.module_id.is_some() {
+                diag
+            } else {
+                diag.with_module_id(module_id.to_string())
+            }
+        })
+        .collect()
+}
+
+fn tag_new_diagnostics(module_id: &str, diagnostics: &mut Vec<Diagnostic>, start: usize) {
+    for diag in diagnostics.iter_mut().skip(start) {
+        if diag.module_id.is_none() {
+            diag.module_id = Some(module_id.to_string());
+        }
+    }
+}
+
 fn compile_multi_module_graph(
     modules: std::collections::HashMap<String, Module>,
     entry_module: &str,
@@ -52,7 +73,7 @@ fn compile_multi_module_graph(
                 let module = multi_ctx.modules.get(&module_id).unwrap();
 
                 let (mut ctx, resolve_diags) = resolver::resolve_types(module);
-                diagnostics.extend(resolve_diags);
+                diagnostics.extend(tag_diagnostics(&module_id, resolve_diags));
                 if !diagnostics.is_empty() {
                     return Err(diagnostics);
                 }
@@ -61,14 +82,21 @@ fn compile_multi_module_graph(
                 ctx.import_scope = multi_ctx.import_scopes.get(&module_id).cloned();
                 ctx.all_modules = Some(multi_ctx.clone());
                 resolver::populate_imported_types(&mut ctx);
+                let diag_start = diagnostics.len();
                 resolver::validate_named_types(module, &ctx, &mut diagnostics);
+                tag_new_diagnostics(&module_id, &mut diagnostics, diag_start);
+                let diag_start = diagnostics.len();
                 resolver::validate_map_usage(module, &ctx, &mut diagnostics);
+                tag_new_diagnostics(&module_id, &mut diagnostics, diag_start);
+                let diag_start = diagnostics.len();
+                resolver::validate_consts(module, &mut ctx, &mut diagnostics);
+                tag_new_diagnostics(&module_id, &mut diagnostics, diag_start);
                 if !diagnostics.is_empty() {
                     return Err(diagnostics);
                 }
 
                 let (lowered, lower_diags) = mir_lower::lower_module(module, &ctx);
-                diagnostics.extend(lower_diags);
+                diagnostics.extend(tag_diagnostics(&module_id, lower_diags));
                 if !diagnostics.is_empty() {
                     return Err(diagnostics);
                 }
@@ -116,16 +144,26 @@ pub fn compile_modules(
             Err(diags) => diagnostics.extend(diags),
         }
     } else if let Some(ref m) = module {
-        let (ctx, resolve_diags) = resolver::resolve_types(m);
-        diagnostics.extend(resolve_diags);
+        let (mut ctx, resolve_diags) = resolver::resolve_types(m);
+        ctx.current_module = Some(entry_module.to_string());
+        diagnostics.extend(tag_diagnostics(entry_module, resolve_diags));
         if diagnostics.is_empty() {
+            let diag_start = diagnostics.len();
             resolver::validate_named_types(m, &ctx, &mut diagnostics);
+            tag_new_diagnostics(entry_module, &mut diagnostics, diag_start);
             if diagnostics.is_empty() {
+                let diag_start = diagnostics.len();
                 resolver::validate_map_usage(m, &ctx, &mut diagnostics);
+                tag_new_diagnostics(entry_module, &mut diagnostics, diag_start);
+            }
+            if diagnostics.is_empty() {
+                let diag_start = diagnostics.len();
+                resolver::validate_consts(m, &mut ctx, &mut diagnostics);
+                tag_new_diagnostics(entry_module, &mut diagnostics, diag_start);
             }
             if diagnostics.is_empty() {
                 let (mut lowered, lower_diags) = mir_lower::lower_module(m, &ctx);
-                diagnostics.extend(lower_diags);
+                diagnostics.extend(tag_diagnostics(entry_module, lower_diags));
                 if diagnostics.is_empty() {
                     let modules =
                         std::collections::HashMap::from([(entry_module.to_string(), m.clone())]);
@@ -177,7 +215,8 @@ pub fn compile_source(source: &str, opts: FrontendOptions) -> FrontendOutput {
                 let modules = std::collections::HashMap::from([("main".to_string(), m.clone())]);
                 return compile_modules(modules, "main", opts);
             } else {
-                let (ctx, resolve_diags) = resolver::resolve_types(m);
+                let (mut ctx, resolve_diags) = resolver::resolve_types(m);
+                ctx.current_module = Some("main".to_string());
                 diagnostics.extend(resolve_diags);
                 if diagnostics.is_empty() {
                     resolver::validate_named_types(m, &ctx, &mut diagnostics);
@@ -189,6 +228,14 @@ pub fn compile_source(source: &str, opts: FrontendOptions) -> FrontendOutput {
                         };
                     }
                     resolver::validate_map_usage(m, &ctx, &mut diagnostics);
+                    if !diagnostics.is_empty() {
+                        return FrontendOutput {
+                            module,
+                            mir,
+                            diagnostics,
+                        };
+                    }
+                    resolver::validate_consts(m, &mut ctx, &mut diagnostics);
                     if !diagnostics.is_empty() {
                         return FrontendOutput {
                             module,

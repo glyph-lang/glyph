@@ -11,6 +11,9 @@ use glyph_frontend::{
 mod module_loader;
 use module_loader::{discover_and_parse_modules, module_id_from_path};
 
+mod diagnostics;
+use diagnostics::format_diagnostic;
+
 mod build_version;
 
 #[cfg(feature = "codegen")]
@@ -91,7 +94,15 @@ fn check(path: &PathBuf) -> Result<()> {
     let entry_module = module_id_from_path(project_root, path)?;
 
     // Discover and parse all .glyph files in the project
-    let modules = discover_and_parse_modules(project_root)?;
+    let load = discover_and_parse_modules(project_root)?;
+    if !load.diagnostics.is_empty() {
+        for diag in &load.diagnostics {
+            eprintln!("{}", format_diagnostic(diag, &load.sources));
+        }
+        return Err(anyhow!("module load failed"));
+    }
+    let modules = load.modules;
+    let sources = load.sources;
 
     if modules.is_empty() {
         return Err(anyhow!("no .glyph files found in project"));
@@ -101,7 +112,7 @@ fn check(path: &PathBuf) -> Result<()> {
     let (multi_ctx, compile_order) = resolve_multi_module(modules, &entry_module, project_root)
         .map_err(|diags| {
             for diag in &diags {
-                eprintln!("{:?}", diag);
+                eprintln!("{}", format_diagnostic(diag, &sources));
             }
             anyhow!("multi-module resolution failed")
         })?;
@@ -121,7 +132,13 @@ fn check(path: &PathBuf) -> Result<()> {
 
         // Resolve types for this module
         let (_, diags) = resolve_types(module);
-        all_diagnostics.extend(diags);
+        all_diagnostics.extend(diags.into_iter().map(|diag| {
+            if diag.module_id.is_some() {
+                diag
+            } else {
+                diag.with_module_id(module_id.clone())
+            }
+        }));
     }
 
     // Report results
@@ -130,7 +147,7 @@ fn check(path: &PathBuf) -> Result<()> {
         Ok(())
     } else {
         for diag in &all_diagnostics {
-            eprintln!("{:?}", diag);
+            eprintln!("{}", format_diagnostic(diag, &sources));
         }
         Err(anyhow!(
             "check failed with {} diagnostic(s)",
@@ -147,7 +164,15 @@ fn build(
 ) -> Result<()> {
     let project_root = path.parent().unwrap_or(Path::new("."));
     let entry_module = module_id_from_path(project_root, path)?;
-    let modules = discover_and_parse_modules(project_root)?;
+    let load = discover_and_parse_modules(project_root)?;
+    if !load.diagnostics.is_empty() {
+        for diag in &load.diagnostics {
+            eprintln!("{}", format_diagnostic(diag, &load.sources));
+        }
+        return Err(anyhow!("module load failed"));
+    }
+    let modules = load.modules;
+    let sources = load.sources;
     let output = compile_modules(
         modules,
         &entry_module,
@@ -157,8 +182,8 @@ fn build(
         },
     );
     if !output.diagnostics.is_empty() {
-        for diag in output.diagnostics {
-            eprintln!("{:?}", diag);
+        for diag in &output.diagnostics {
+            eprintln!("{}", format_diagnostic(diag, &sources));
         }
         return Err(anyhow!("build failed"));
     }
@@ -259,7 +284,15 @@ fn build(
 fn run(path: &PathBuf) -> Result<()> {
     let project_root = path.parent().unwrap_or(Path::new("."));
     let entry_module = module_id_from_path(project_root, path)?;
-    let modules = discover_and_parse_modules(project_root)?;
+    let load = discover_and_parse_modules(project_root)?;
+    if !load.diagnostics.is_empty() {
+        for diag in &load.diagnostics {
+            eprintln!("{}", format_diagnostic(diag, &load.sources));
+        }
+        return Err(anyhow!("module load failed"));
+    }
+    let modules = load.modules;
+    let sources = load.sources;
     let output = compile_modules(
         modules,
         &entry_module,
@@ -269,8 +302,8 @@ fn run(path: &PathBuf) -> Result<()> {
         },
     );
     if !output.diagnostics.is_empty() {
-        for diag in output.diagnostics {
-            eprintln!("{:?}", diag);
+        for diag in &output.diagnostics {
+            eprintln!("{}", format_diagnostic(diag, &sources));
         }
         return Err(anyhow!("build failed"));
     }
@@ -428,7 +461,8 @@ mod tests {
         fs::write(math_dir.join("geometry.glyph"), "struct Point { x: i32 }").unwrap();
 
         // Discover modules
-        let modules = discover_and_parse_modules(root).unwrap();
+        let load = discover_and_parse_modules(root).unwrap();
+        let modules = load.modules;
 
         // Verify we found all 3 files
         assert_eq!(modules.len(), 3);

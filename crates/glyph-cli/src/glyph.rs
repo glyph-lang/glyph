@@ -18,6 +18,9 @@ use glyph_frontend::{compile_modules, FrontendOptions};
 mod module_loader;
 use module_loader::{discover_and_parse_modules, module_id_from_path};
 
+mod diagnostics;
+use diagnostics::format_diagnostic;
+
 const EXIT_SUCCESS: i32 = 0;
 const EXIT_USAGE: i32 = 1;
 const EXIT_COMPILER: i32 = 2;
@@ -348,10 +351,21 @@ fn build_bin(root: &Path, bin: &BinTarget, profile: &str, verbose: bool) -> Glyp
         message: format!("failed to determine entry module: {}", e),
     })?;
 
-    let modules = discover_and_parse_modules(module_root).map_err(|e| GlyphError {
+    let load = discover_and_parse_modules(module_root).map_err(|e| GlyphError {
         code: EXIT_COMPILER,
         message: format!("failed to load modules: {}", e),
     })?;
+    if !load.diagnostics.is_empty() {
+        for diag in &load.diagnostics {
+            eprintln!("{}", format_diagnostic(diag, &load.sources));
+        }
+        return Err(GlyphError {
+            code: EXIT_COMPILER,
+            message: "build failed due to compiler diagnostics".to_string(),
+        });
+    }
+    let modules = load.modules;
+    let sources = load.sources;
 
     let frontend_output = compile_modules(
         modules,
@@ -364,7 +378,7 @@ fn build_bin(root: &Path, bin: &BinTarget, profile: &str, verbose: bool) -> Glyp
 
     if !frontend_output.diagnostics.is_empty() {
         for diag in &frontend_output.diagnostics {
-            eprintln!("{:?}", diag);
+            eprintln!("{}", format_diagnostic(diag, &sources));
         }
         return Err(GlyphError {
             code: EXIT_COMPILER,

@@ -43,6 +43,7 @@ pub mod diag {
         pub message: String,
         pub severity: Severity,
         pub span: Option<Span>,
+        pub module_id: Option<String>,
     }
 
     impl Diagnostic {
@@ -51,6 +52,7 @@ pub mod diag {
                 message: message.into(),
                 severity,
                 span,
+                module_id: None,
             }
         }
 
@@ -60,6 +62,11 @@ pub mod diag {
 
         pub fn warning(message: impl Into<String>, span: Option<Span>) -> Self {
             Self::new(message, Severity::Warning, span)
+        }
+
+        pub fn with_module_id(mut self, module_id: impl Into<String>) -> Self {
+            self.module_id = Some(module_id.into());
+            self
         }
     }
 }
@@ -293,6 +300,14 @@ pub mod ast {
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct ConstDef {
+        pub name: Ident,
+        pub ty: TypeExpr,
+        pub value: Expr,
+        pub span: Span,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     pub struct EnumVariantDef {
         pub name: Ident,
         pub payload: Option<TypeExpr>,
@@ -381,6 +396,7 @@ pub mod ast {
         Interface(InterfaceDef),
         Impl(ImplBlock),
         ExternFunction(ExternFunctionDecl),
+        Const(ConstDef),
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -405,6 +421,7 @@ pub mod token {
     pub enum TokenKind {
         // Keywords
         Fn,
+        Const,
         Let,
         Mut,
         Type,
@@ -960,6 +977,15 @@ mod tests {
         assert_eq!(diag.message, "oops");
         assert!(matches!(diag.severity, Severity::Error));
         assert_eq!(diag.span.unwrap().start, 1);
+    }
+
+    #[test]
+    fn diagnostics_support_module_ids() {
+        let diag = Diagnostic::error("oops", Some(Span::new(1, 2)));
+        assert!(diag.module_id.is_none());
+
+        let tagged = Diagnostic::error("oops", None).with_module_id("main");
+        assert_eq!(tagged.module_id.as_deref(), Some("main"));
     }
 
     #[test]
