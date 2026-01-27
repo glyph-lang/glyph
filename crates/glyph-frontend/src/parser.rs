@@ -83,6 +83,62 @@ pub fn parse(tokens: &[Token], source: &str) -> ParseOutput {
                 Some(def) => parser.items.push(Item::Const(def)),
                 None => parser.synchronize(),
             }
+        } else if parser.at(TokenKind::Pub) {
+            parser.advance();
+            if parser.at(TokenKind::Struct) {
+                match parser.parse_struct() {
+                    Some(s) => {
+                        parser.items.push(Item::Struct(s));
+                        parser.flush_pending_items();
+                    }
+                    None => parser.synchronize(),
+                }
+            } else if parser.at(TokenKind::Enum) {
+                match parser.parse_enum() {
+                    Some(e) => {
+                        parser.items.push(Item::Enum(e));
+                        parser.flush_pending_items();
+                    }
+                    None => parser.synchronize(),
+                }
+            } else if parser.at(TokenKind::Interface) {
+                match parser.parse_interface() {
+                    Some(iface) => {
+                        parser.items.push(Item::Interface(iface));
+                        parser.flush_pending_items();
+                    }
+                    None => parser.synchronize(),
+                }
+            } else if parser.at(TokenKind::Impl) {
+                match parser.parse_impl_block() {
+                    Some(block) => {
+                        parser.items.push(Item::Impl(block));
+                        parser.flush_pending_items();
+                    }
+                    None => parser.synchronize(),
+                }
+            } else if parser.at(TokenKind::Fn) {
+                match parser.parse_function() {
+                    Some(func) => parser.items.push(Item::Function(func)),
+                    None => parser.synchronize(),
+                }
+            } else if parser.at(TokenKind::Const) {
+                match parser.parse_const() {
+                    Some(def) => parser.items.push(Item::Const(def)),
+                    None => parser.synchronize(),
+                }
+            } else if parser.at(TokenKind::Extern) {
+                match parser.parse_extern_function() {
+                    Some(extern_fn) => parser.items.push(Item::ExternFunction(extern_fn)),
+                    None => parser.synchronize(),
+                }
+            } else {
+                let span = parser.peek().map(|t| t.span);
+                parser
+                    .diagnostics
+                    .push(Diagnostic::error("expected item after `pub`", span));
+                parser.synchronize();
+            }
         } else if parser.at(TokenKind::Extern) {
             match parser.parse_extern_function() {
                 Some(extern_fn) => parser.items.push(Item::ExternFunction(extern_fn)),
@@ -271,6 +327,9 @@ impl<'a> Parser<'a> {
         self.consume(TokenKind::LBrace, "expected `{` to start interface body")?;
         let mut methods = Vec::new();
         while !self.at(TokenKind::RBrace) && !self.at(TokenKind::Eof) {
+            if self.at(TokenKind::Pub) {
+                self.advance();
+            }
             if self.at(TokenKind::Fn) {
                 if let Some(method) = self.parse_interface_method() {
                     methods.push(method);
@@ -347,6 +406,9 @@ impl<'a> Parser<'a> {
         let mut methods = Vec::new();
         let mut inline_impls = Vec::new();
         while !self.at(TokenKind::RBrace) && !self.at(TokenKind::Eof) {
+            if self.at(TokenKind::Pub) {
+                self.advance();
+            }
             if self.at(TokenKind::Fn) {
                 if let Some(func) = self.parse_function() {
                     methods.push(func);
@@ -471,6 +533,9 @@ impl<'a> Parser<'a> {
         )?;
         let mut methods = Vec::new();
         while !self.at(TokenKind::RBrace) && !self.at(TokenKind::Eof) {
+            if self.at(TokenKind::Pub) {
+                self.advance();
+            }
             if self.at(TokenKind::Fn) {
                 if let Some(func) = self.parse_function() {
                     methods.push(func);
@@ -507,6 +572,9 @@ impl<'a> Parser<'a> {
         self.consume(TokenKind::LBrace, "expected `{` to start impl body")?;
         let mut methods = Vec::new();
         while !self.at(TokenKind::RBrace) && !self.at(TokenKind::Eof) {
+            if self.at(TokenKind::Pub) {
+                self.advance();
+            }
             if self.at(TokenKind::Fn) {
                 if let Some(func) = self.parse_function() {
                     methods.push(func);
@@ -979,7 +1047,15 @@ impl<'a> Parser<'a> {
         }
 
         let variant_tok = self.consume(TokenKind::Ident, "expected variant name")?;
-        let name = Ident(self.slice(variant_tok));
+        let mut name = Ident(self.slice(variant_tok));
+        while self.at(TokenKind::ColonColon) {
+            self.advance();
+            let seg_tok = self.consume(
+                TokenKind::Ident,
+                "expected identifier after `::` in match pattern",
+            )?;
+            name = Ident(self.slice(seg_tok));
+        }
         let mut binding = None;
         if self.at(TokenKind::LParen) {
             self.advance();
@@ -1442,7 +1518,8 @@ impl<'a> Parser<'a> {
         let else_block = if self.at(TokenKind::Else) {
             self.advance();
             if self.at(TokenKind::If) {
-                let nested_start = self.peek().map(|t| t.span.start).unwrap_or(start);
+                let if_tok = self.advance().unwrap();
+                let nested_start = if_tok.span.start;
                 let nested = self.parse_if(nested_start)?;
                 Some(Block {
                     span: Span::new(self.expr_start(&nested), self.expr_end(&nested)),

@@ -108,23 +108,7 @@ When modifying existing work:
 - It is okay to show some personality 🙂
 - Light emoji use is welcome, but sparing 😀
 
-8. File Reading Expectations
 
-Do not assume partial file reads are sufficient.
-
-When working with a file:
-
-- Read the entire file from start to end
-- Do not rely on offsets, excerpts, or summaries unless explicitly instructed
-- If the file is long, read it in multiple passes if necessary
-- Re-read earlier sections if later sections depend on them
-
-Token efficiency is not a priority in this repository.
-Completeness and correctness take precedence over brevity.
-
-If you are unsure whether you have full context:
-- Say so explicitly
-- Ask to read more rather than guessing
 
 8. Using Agentic resources
 

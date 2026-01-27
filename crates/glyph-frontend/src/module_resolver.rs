@@ -1,5 +1,6 @@
 use glyph_core::ast::{ImportKind, Item, Module};
 use glyph_core::diag::Diagnostic;
+use glyph_core::types::Type;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 
@@ -310,7 +311,9 @@ fn build_import_scopes(
                                 || symbols.functions.contains(&original_name)
                                 || symbols.consts.contains(&original_name);
 
-                            if !exists {
+                            let builtin_from_std =
+                                source_module == "std" && Type::from_name(&original_name).is_some();
+                            if !exists && !builtin_from_std {
                                 diagnostics.push(
                                     Diagnostic::error(
                                         format!(

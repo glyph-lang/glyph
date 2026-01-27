@@ -753,6 +753,72 @@ pub fn std_modules() -> HashMap<String, Module> {
         span,
     };
 
+    let string_from_char_extern = ExternFunctionDecl {
+        abi: Some("C".into()),
+        name: Ident("string_from_char".into()),
+        params: vec![Param {
+            name: Ident("ch".into()),
+            ty: Some(tp("char", span)),
+            span,
+        }],
+        ret_type: Some(tp("String", span)),
+        link_name: Some("glyph_string_from_char".into()),
+        span,
+    };
+
+    let string_from_i32_extern = ExternFunctionDecl {
+        abi: Some("C".into()),
+        name: Ident("string_from_i32".into()),
+        params: vec![Param {
+            name: Ident("value".into()),
+            ty: Some(tp("i32", span)),
+            span,
+        }],
+        ret_type: Some(tp("String", span)),
+        link_name: Some("glyph_string_from_i32".into()),
+        span,
+    };
+
+    let string_char_at_extern = ExternFunctionDecl {
+        abi: Some("C".into()),
+        name: Ident("string_char_at".into()),
+        params: vec![
+            Param {
+                name: Ident("s".into()),
+                ty: Some(tp("str", span)),
+                span,
+            },
+            Param {
+                name: Ident("index".into()),
+                ty: Some(tp("usize", span)),
+                span,
+            },
+        ],
+        ret_type: Some(tp("char", span)),
+        link_name: Some("glyph_string_char_at".into()),
+        span,
+    };
+
+    let string_index_of_extern = ExternFunctionDecl {
+        abi: Some("C".into()),
+        name: Ident("string_index_of".into()),
+        params: vec![
+            Param {
+                name: Ident("haystack".into()),
+                ty: Some(tp("str", span)),
+                span,
+            },
+            Param {
+                name: Ident("needle".into()),
+                ty: Some(tp("str", span)),
+                span,
+            },
+        ],
+        ret_type: Some(tp("i64", span)),
+        link_name: Some("glyph_string_index_of".into()),
+        span,
+    };
+
     let std_string_module = Module {
         imports: vec![],
         items: vec![
@@ -767,6 +833,10 @@ pub fn std_modules() -> HashMap<String, Module> {
             glyph_core::ast::Item::ExternFunction(atoi_extern),
             glyph_core::ast::Item::ExternFunction(byte_at_extern),
             glyph_core::ast::Item::ExternFunction(string_from_byte_extern),
+            glyph_core::ast::Item::ExternFunction(string_from_char_extern),
+            glyph_core::ast::Item::ExternFunction(string_from_i32_extern),
+            glyph_core::ast::Item::ExternFunction(string_char_at_extern),
+            glyph_core::ast::Item::ExternFunction(string_index_of_extern),
         ],
     };
     modules.insert("std/string".into(), std_string_module);
