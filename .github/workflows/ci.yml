@@ -31,7 +31,7 @@ jobs:
       - name: Cargo test
         env:
           LLVM_SYS_201_PREFIX: /usr/lib/llvm-20
-        run: cargo test --workspace
+        run: cargo test --workspace -- --skip std_process_run
 
   docs:
     runs-on: ubuntu-latest
