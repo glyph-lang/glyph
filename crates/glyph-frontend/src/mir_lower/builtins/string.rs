@@ -1,0 +1,226 @@
+use glyph_core::ast::Expr;
+use glyph_core::mir::{LocalId, MirInst, MirValue, Rvalue};
+use glyph_core::span::Span;
+use glyph_core::types::Type;
+
+use super::super::context::LowerCtx;
+use super::super::expr::lower_value;
+
+fn string_receiver_local<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    span: Span,
+) -> Option<LocalId> {
+    let receiver_val = lower_value(ctx, base)?;
+    let receiver_local = match receiver_val {
+        MirValue::Local(id) => id,
+        _ => {
+            ctx.error("string receiver must be a local", Some(span));
+            return None;
+        }
+    };
+    let receiver_ty = ctx
+        .locals
+        .get(receiver_local.0 as usize)
+        .and_then(|l| l.ty.as_ref());
+    let is_string = matches!(receiver_ty, Some(Type::String))
+        || matches!(receiver_ty, Some(Type::Str))
+        || matches!(receiver_ty, Some(Type::Ref(inner, _)) if matches!(inner.as_ref(), Type::String | Type::Str));
+    if !is_string {
+        ctx.error("string methods require a String receiver", Some(span));
+        return None;
+    }
+    Some(receiver_local)
+}
+
+pub(crate) fn lower_string_from<'a>(
+    ctx: &mut LowerCtx<'a>,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if args.len() != 1 {
+        ctx.error("String::from expects exactly one argument", Some(span));
+        return None;
+    }
+    let value = lower_value(ctx, &args[0])?;
+
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::String);
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::Call {
+            name: "strdup".into(),
+            args: vec![value],
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+pub(crate) fn lower_string_len<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if !args.is_empty() {
+        ctx.error("len() does not take arguments", Some(span));
+        return None;
+    }
+    let receiver_local = string_receiver_local(ctx, base, span)?;
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::Usize);
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::StringLen {
+            base: receiver_local,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+pub(crate) fn lower_string_concat<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if args.len() != 1 {
+        ctx.error("concat() expects one argument", Some(span));
+        return None;
+    }
+    let receiver_local = string_receiver_local(ctx, base, span)?;
+    let value = lower_value(ctx, &args[0])?;
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::String);
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::StringConcat {
+            base: receiver_local,
+            value,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+pub(crate) fn lower_string_slice<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if args.len() != 2 {
+        ctx.error("slice() expects (start, len)", Some(span));
+        return None;
+    }
+    let receiver_local = string_receiver_local(ctx, base, span)?;
+    let start = lower_value(ctx, &args[0])?;
+    let len = lower_value(ctx, &args[1])?;
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::String);
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::StringSlice {
+            base: receiver_local,
+            start,
+            len,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+pub(crate) fn lower_string_trim<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if !args.is_empty() {
+        ctx.error("trim() does not take arguments", Some(span));
+        return None;
+    }
+    let receiver_local = string_receiver_local(ctx, base, span)?;
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::String);
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::StringTrim {
+            base: receiver_local,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+pub(crate) fn lower_string_split<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if args.len() != 1 {
+        ctx.error("split() expects a separator", Some(span));
+        return None;
+    }
+    let receiver_local = string_receiver_local(ctx, base, span)?;
+    let sep = lower_value(ctx, &args[0])?;
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::App {
+        base: "Vec".into(),
+        args: vec![Type::String],
+    });
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::StringSplit {
+            base: receiver_local,
+            sep,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+pub(crate) fn lower_string_starts_with<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if args.len() != 1 {
+        ctx.error("starts_with() expects a prefix", Some(span));
+        return None;
+    }
+    let receiver_local = string_receiver_local(ctx, base, span)?;
+    let needle = lower_value(ctx, &args[0])?;
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::Bool);
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::StringStartsWith {
+            base: receiver_local,
+            needle,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+pub(crate) fn lower_string_ends_with<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if args.len() != 1 {
+        ctx.error("ends_with() expects a suffix", Some(span));
+        return None;
+    }
+    let receiver_local = string_receiver_local(ctx, base, span)?;
+    let needle = lower_value(ctx, &args[0])?;
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::Bool);
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::StringEndsWith {
+            base: receiver_local,
+            needle,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}

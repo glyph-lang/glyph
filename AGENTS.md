@@ -109,7 +109,6 @@ When modifying existing work:
 - Light emoji use is welcome, but sparing 😀
 
 
-
 8. Using Agentic resources
 
 Use agentic resources at your disposal, specifically subagents and skills.
@@ -118,6 +117,11 @@ Useful subagents:
 - wiggum : will tell you if the task is complete
 - MIR Expert: will help you thoroughly examine MIR-related code
 - language designer: reviews and critiques language design decisions
+
+9. Clean Code
+- files over 2500 LOC are candidates for refactoring into smaller units (keep Agent context windows in mind!)
+- when making additions to the language, consider creating a new file or module
+- TDD: always run tests, or create tests for new feature. Do not consider testing an additional "ask"
 
 
 Summary Checklist for Agents

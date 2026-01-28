@@ -1,0 +1,1108 @@
+use glyph_core::ast::{BinaryOp, Expr, Ident, UnaryOp};
+use glyph_core::mir::{MirInst, MirValue, Rvalue};
+use glyph_core::span::Span;
+use glyph_core::types::{Mutability, Type};
+
+use crate::resolver::{ConstValue, ResolvedSymbol};
+
+use super::call::{lower_call, lower_method_call};
+use super::context::{LocalState, LowerCtx};
+use super::flow::{lower_block_with_expected, lower_for, lower_if_value, lower_while};
+use super::types::{tuple_struct_name, vec_elem_type_from_type};
+use super::value::{
+    bool_rvalue, coerce_to_bool, infer_numeric_result_type, infer_value_type, local_struct_name,
+    rvalue_from_value, rvalue_to_value, update_local_type_from_rvalue,
+};
+
+pub(crate) fn lower_expr<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr) -> Option<Rvalue> {
+    lower_expr_with_expected(ctx, expr, None)
+}
+
+pub(crate) fn lower_expr_with_expected<'a>(
+    ctx: &mut LowerCtx<'a>,
+    expr: &'a Expr,
+    expected: Option<&Type>,
+) -> Option<Rvalue> {
+    match expr {
+        Expr::Lit(glyph_core::ast::Literal::Int(i), _) => Some(Rvalue::ConstInt(*i)),
+        Expr::Lit(glyph_core::ast::Literal::Bool(b), _) => Some(Rvalue::ConstBool(*b)),
+        Expr::Lit(glyph_core::ast::Literal::Str(s), _) => Some(Rvalue::StringLit {
+            content: s.clone(),
+            global_name: ctx.fresh_string_global(),
+        }),
+        Expr::InterpString { segments, span } => lower_interp_string(ctx, segments, *span),
+        Expr::Match {
+            scrutinee,
+            arms,
+            span,
+        } => lower_match(ctx, scrutinee, arms, true, *span, expected),
+        Expr::Ident(ident, span) => {
+            if let Some(local) = ctx.bindings.get(ident.0.as_str()).copied() {
+                if ctx.consume_local(local, Some(*span)) {
+                    Some(Rvalue::Move(local))
+                } else {
+                    None
+                }
+            } else if let Some(value) = lookup_const_value(ctx, ident.0.as_str(), *span) {
+                lower_const_rvalue(ctx, value)
+            } else {
+                None
+            }
+        }
+        Expr::Unary { op, expr, span } => match op {
+            UnaryOp::Not => lower_unary_not(ctx, expr, *span),
+        },
+        Expr::Binary { op, lhs, rhs, .. } => match *op {
+            glyph_core::ast::BinaryOp::And | glyph_core::ast::BinaryOp::Or => {
+                lower_logical(ctx, op, lhs, rhs)
+            }
+            _ => lower_binary(ctx, op, lhs, rhs),
+        },
+        Expr::Call { callee, args, span } => lower_call(ctx, callee, args, *span, false, expected),
+        Expr::If {
+            cond,
+            then_block,
+            else_block,
+            ..
+        } => {
+            let value = lower_if_value(ctx, cond, then_block, else_block.as_ref(), expected);
+            value.and_then(rvalue_from_value)
+        }
+        Expr::Block(block) => {
+            lower_block_with_expected(ctx, block, expected, true, true).and_then(rvalue_from_value)
+        }
+        Expr::While { cond, body, .. } => {
+            lower_while(ctx, cond, body);
+            None
+        }
+        Expr::For {
+            var,
+            start,
+            end,
+            body,
+            ..
+        } => {
+            lower_for(ctx, var, start, end, body);
+            None
+        }
+        Expr::StructLit { name, fields, span } => lower_struct_lit(ctx, name, fields, *span),
+        Expr::FieldAccess { base, field, span } => lower_field_access(ctx, base, field, *span),
+        Expr::Ref {
+            expr,
+            mutability,
+            span,
+        } => lower_ref_expr(ctx, expr, *mutability, *span),
+        Expr::ArrayLit { elements, span } => lower_array_lit(ctx, elements, *span),
+        Expr::Index { base, index, span } => lower_array_index(ctx, base, index, *span),
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            span,
+        } => lower_method_call(ctx, receiver, method, args, *span),
+        Expr::Tuple { elements, span } => lower_tuple_expr(ctx, elements, *span),
+        _ => None,
+    }
+}
+
+fn lookup_const_value<'a>(ctx: &mut LowerCtx<'a>, name: &str, span: Span) -> Option<ConstValue> {
+    if let Some(binding) = ctx.resolver.consts.get(name) {
+        return Some(binding.value.clone());
+    }
+
+    if !matches!(
+        ctx.resolver.resolve_symbol(name),
+        Some(ResolvedSymbol::Const(_, _))
+    ) {
+        return None;
+    }
+
+    crate::resolver::resolve_const_value(name, span, ctx.module, ctx.resolver, &mut ctx.diagnostics)
+}
+
+fn lower_const_rvalue<'a>(ctx: &mut LowerCtx<'a>, value: ConstValue) -> Option<Rvalue> {
+    let val = lower_const_value(ctx, value)?;
+    rvalue_from_value(val)
+}
+
+fn lower_const_value<'a>(ctx: &mut LowerCtx<'a>, value: ConstValue) -> Option<MirValue> {
+    match value {
+        ConstValue::Int(i) => Some(MirValue::Int(i)),
+        ConstValue::Bool(b) => Some(MirValue::Bool(b)),
+        ConstValue::Char(c) => {
+            let tmp = ctx.fresh_local(None);
+            ctx.locals[tmp.0 as usize].ty = Some(Type::Char);
+            ctx.push_inst(MirInst::Assign {
+                local: tmp,
+                value: Rvalue::ConstInt(c as i64),
+            });
+            Some(MirValue::Local(tmp))
+        }
+        ConstValue::Str(s) => {
+            let tmp = ctx.fresh_local(None);
+            ctx.locals[tmp.0 as usize].ty = Some(Type::Str);
+            let global_name = ctx.fresh_string_global();
+            ctx.push_inst(MirInst::Assign {
+                local: tmp,
+                value: Rvalue::StringLit {
+                    content: s,
+                    global_name,
+                },
+            });
+            Some(MirValue::Local(tmp))
+        }
+    }
+}
+
+fn lower_unary_not<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr, _span: Span) -> Option<Rvalue> {
+    let value = lower_value(ctx, expr)?;
+    let coerced = coerce_to_bool(value);
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::Bool);
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::Binary {
+            op: BinaryOp::Eq,
+            lhs: coerced,
+            rhs: MirValue::Bool(false),
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_binary<'a>(
+    ctx: &mut LowerCtx<'a>,
+    op: &glyph_core::ast::BinaryOp,
+    lhs: &'a Expr,
+    rhs: &'a Expr,
+) -> Option<Rvalue> {
+    let lhs_val = lower_value(ctx, lhs)?;
+    let rhs_val = lower_value(ctx, rhs)?;
+    let tmp = ctx.fresh_local(None);
+
+    // Comparisons always produce bool.
+    //
+    // If we leave the type unset, codegen will default the local slot to i32,
+    // but LLVM ICmp returns i1; that mismatch later breaks `if`/`while` lowering
+    // (branch conditions become i32).
+    match op {
+        glyph_core::ast::BinaryOp::Eq
+        | glyph_core::ast::BinaryOp::Ne
+        | glyph_core::ast::BinaryOp::Lt
+        | glyph_core::ast::BinaryOp::Le
+        | glyph_core::ast::BinaryOp::Gt
+        | glyph_core::ast::BinaryOp::Ge => {
+            ctx.locals[tmp.0 as usize].ty = Some(Type::Bool);
+        }
+        glyph_core::ast::BinaryOp::Add
+        | glyph_core::ast::BinaryOp::Sub
+        | glyph_core::ast::BinaryOp::Mul
+        | glyph_core::ast::BinaryOp::Div => {
+            if let Some(numeric) = infer_numeric_result_type(&lhs_val, &rhs_val, ctx) {
+                ctx.locals[tmp.0 as usize].ty = Some(numeric);
+            }
+        }
+        _ => {}
+    }
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::Binary {
+            op: op.clone(),
+            lhs: lhs_val,
+            rhs: rhs_val,
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_interp_string(
+    ctx: &mut LowerCtx<'_>,
+    segments: &[glyph_core::ast::InterpSegment],
+    span: Span,
+) -> Option<Rvalue> {
+    let mut buf = String::new();
+    for seg in segments {
+        match seg {
+            glyph_core::ast::InterpSegment::Literal(s) => buf.push_str(s),
+            glyph_core::ast::InterpSegment::Expr(_) => {
+                ctx.error(
+                    "interpolation holes are not yet lowered; only literal segments are supported",
+                    Some(span),
+                );
+                return None;
+            }
+        }
+    }
+
+    Some(Rvalue::StringLit {
+        content: buf,
+        global_name: ctx.fresh_string_global(),
+    })
+}
+
+pub(crate) fn lower_logical<'a>(
+    ctx: &mut LowerCtx<'a>,
+    op: &glyph_core::ast::BinaryOp,
+    lhs: &'a Expr,
+    rhs: &'a Expr,
+) -> Option<Rvalue> {
+    let lhs_val = lower_value(ctx, lhs).unwrap_or(MirValue::Bool(false));
+    let lhs_bool = coerce_to_bool(lhs_val.clone());
+    let result = ctx.fresh_local(None);
+    ctx.locals[result.0 as usize].ty = Some(Type::Bool);
+    let rhs_block = ctx.new_block();
+    let join_block = ctx.new_block();
+
+    match op {
+        glyph_core::ast::BinaryOp::And => {
+            ctx.push_inst(MirInst::Assign {
+                local: result,
+                value: bool_rvalue(lhs_bool.clone()),
+            });
+            ctx.push_inst(MirInst::If {
+                cond: lhs_bool,
+                then_bb: rhs_block,
+                else_bb: join_block,
+            });
+            ctx.switch_to(rhs_block);
+            let rhs_val = lower_value(ctx, rhs).unwrap_or(MirValue::Bool(false));
+            ctx.push_inst(MirInst::Assign {
+                local: result,
+                value: bool_rvalue(rhs_val),
+            });
+        }
+        glyph_core::ast::BinaryOp::Or => {
+            ctx.push_inst(MirInst::Assign {
+                local: result,
+                value: bool_rvalue(lhs_bool.clone()),
+            });
+            ctx.push_inst(MirInst::If {
+                cond: lhs_bool,
+                then_bb: join_block,
+                else_bb: rhs_block,
+            });
+            ctx.switch_to(rhs_block);
+            let rhs_val = lower_value(ctx, rhs).unwrap_or(MirValue::Bool(false));
+            ctx.push_inst(MirInst::Assign {
+                local: result,
+                value: bool_rvalue(rhs_val),
+            });
+        }
+        _ => return lower_binary(ctx, op, lhs, rhs),
+    }
+
+    ctx.push_inst(MirInst::Goto(join_block));
+    ctx.switch_to(join_block);
+    Some(Rvalue::Move(result))
+}
+
+pub(crate) fn lower_match<'a>(
+    ctx: &mut LowerCtx<'a>,
+    scrutinee: &'a Expr,
+    arms: &'a [glyph_core::ast::MatchArm],
+    require_value: bool,
+    span: Span,
+    expected: Option<&Type>,
+) -> Option<Rvalue> {
+    // Evaluate scrutinee into a local
+    let scrut_val = lower_value(ctx, scrutinee)?;
+    let scrut_local = match scrut_val {
+        MirValue::Local(id) => id,
+        MirValue::Int(_) | MirValue::Bool(_) | MirValue::Unit => {
+            let tmp = ctx.fresh_local(None);
+            let rv = rvalue_from_value(scrut_val)?;
+            ctx.locals[tmp.0 as usize].ty = None;
+            ctx.push_inst(MirInst::Assign {
+                local: tmp,
+                value: rv,
+            });
+            tmp
+        }
+    };
+
+    let (enum_name, enum_args) = match ctx.locals[scrut_local.0 as usize].ty.clone() {
+        Some(Type::Enum(name)) => (name, None),
+        Some(Type::App { base, args }) => (base, Some(args)),
+        _ => {
+            ctx.error("match scrutinee must be an enum value", Some(span));
+            return None;
+        }
+    };
+
+    let enum_def = match ctx.resolver.get_enum(&enum_name) {
+        Some(e) => e.clone(),
+        None => {
+            ctx.error(format!("unknown enum type '{}'", enum_name), Some(span));
+            return None;
+        }
+    };
+
+    fn substitute_match_params(ty: &Type, args: Option<&[Type]>) -> Type {
+        let Some(args) = args else {
+            return ty.clone();
+        };
+        match ty {
+            Type::Param(p) if p == "T" => args.get(0).cloned().unwrap_or_else(|| ty.clone()),
+            Type::Param(p) if p == "E" => args.get(1).cloned().unwrap_or_else(|| ty.clone()),
+            Type::Ref(inner, m) => {
+                Type::Ref(Box::new(substitute_match_params(inner, Some(args))), *m)
+            }
+            Type::Array(inner, size) => {
+                Type::Array(Box::new(substitute_match_params(inner, Some(args))), *size)
+            }
+            Type::Own(inner) => Type::Own(Box::new(substitute_match_params(inner, Some(args)))),
+            Type::RawPtr(inner) => {
+                Type::RawPtr(Box::new(substitute_match_params(inner, Some(args))))
+            }
+            Type::Shared(inner) => {
+                Type::Shared(Box::new(substitute_match_params(inner, Some(args))))
+            }
+            Type::App { base, args: targs } => Type::App {
+                base: base.clone(),
+                args: targs
+                    .iter()
+                    .map(|a| substitute_match_params(a, Some(args)))
+                    .collect(),
+            },
+            Type::Tuple(elems) => Type::Tuple(
+                elems
+                    .iter()
+                    .map(|e| substitute_match_params(e, Some(args)))
+                    .collect(),
+            ),
+            other => other.clone(),
+        }
+    }
+
+    // Exhaustiveness check
+    let mut seen_variants = std::collections::HashSet::new();
+    let mut has_wildcard = false;
+    for arm in arms {
+        match &arm.pattern {
+            glyph_core::ast::MatchPattern::Wildcard => has_wildcard = true,
+            glyph_core::ast::MatchPattern::Variant { name, .. } => {
+                seen_variants.insert(name.0.clone());
+            }
+        }
+    }
+    if !has_wildcard && seen_variants.len() < enum_def.variants.len() {
+        ctx.error(
+            "non-exhaustive match: cover all variants or add `_` arm",
+            Some(span),
+        );
+    }
+
+    // Tag extraction
+    let tag_local = ctx.fresh_local(None);
+    ctx.locals[tag_local.0 as usize].ty = Some(Type::I32);
+    ctx.push_inst(MirInst::Assign {
+        local: tag_local,
+        value: Rvalue::EnumTag { base: scrut_local },
+    });
+
+    // Result local if needed
+    let mut result_local = if require_value {
+        expected.map(|ty| {
+            let l = ctx.fresh_local(None);
+            ctx.locals[l.0 as usize].ty = Some(ty.clone());
+            l
+        })
+    } else {
+        None
+    };
+
+    let join_block = ctx.new_block();
+    let mut arm_blocks = Vec::new();
+    for _ in arms {
+        arm_blocks.push(ctx.new_block());
+    }
+
+    // Build chain of comparisons.
+    //
+    // NOTE: we must emit the tag compare + branch into the *current* block of
+    // the chain. Previously we were appending `Assign`s via `ctx.push_inst`
+    // (which always targets `ctx.current`) while writing the `If` terminator
+    // into a different block (`current`). That could leave blocks without a
+    // terminator and also append instructions after a terminator.
+    let mut current = ctx.current;
+    for (idx, arm) in arms.iter().enumerate() {
+        // Ensure subsequent `push_inst`s land in the right block.
+        ctx.switch_to(current);
+
+        let arm_block = arm_blocks[idx];
+        match &arm.pattern {
+            glyph_core::ast::MatchPattern::Wildcard => {
+                ctx.push_inst(MirInst::Goto(arm_block));
+                break;
+            }
+            glyph_core::ast::MatchPattern::Variant { name, .. } => {
+                let variant_index = enum_def
+                    .variants
+                    .iter()
+                    .position(|v| v.name == name.0)
+                    .unwrap_or_else(|| {
+                        ctx.error(
+                            format!("unknown variant '{}' for enum '{}'", name.0, enum_name),
+                            Some(arm.span),
+                        );
+                        0
+                    });
+                let cond_local = ctx.fresh_local(None);
+                ctx.locals[cond_local.0 as usize].ty = Some(Type::Bool);
+                ctx.push_inst(MirInst::Assign {
+                    local: cond_local,
+                    value: Rvalue::Binary {
+                        op: BinaryOp::Eq,
+                        lhs: MirValue::Local(tag_local),
+                        rhs: MirValue::Int(variant_index as i64),
+                    },
+                });
+
+                let else_block = if idx == arms.len() - 1 {
+                    let sink = ctx.new_block();
+                    ctx.blocks[sink.0 as usize]
+                        .insts
+                        .push(MirInst::Goto(join_block));
+                    sink
+                } else {
+                    ctx.new_block()
+                };
+
+                ctx.push_inst(MirInst::If {
+                    cond: MirValue::Local(cond_local),
+                    then_bb: arm_block,
+                    else_bb: else_block,
+                });
+
+                current = else_block;
+            }
+        }
+    }
+
+    // Lower arms
+    //
+    // IMPORTANT: lowering arms can move locals. We must not let moves in one arm
+    // affect the move-state seen by subsequent arms, otherwise we can get false
+    // "use of moved value" diagnostics when a value is moved in only some arms.
+    //
+    // We snapshot the local state for the locals that exist before the arms,
+    // restore that snapshot at the start of each arm, and then conservatively
+    // merge the resulting states (Moved wins, then Uninitialized, then Initialized)
+    // for the join point.
+    let base_len = ctx.local_states.len();
+    let base_states = ctx.local_states.clone();
+    let mut merged_states = base_states.clone();
+
+    for (idx, arm) in arms.iter().enumerate() {
+        let arm_block = arm_blocks[idx];
+
+        // Reset pre-existing locals to their pre-arm state.
+        for i in 0..base_len {
+            ctx.local_states[i] = base_states[i];
+        }
+
+        ctx.switch_to(arm_block);
+        ctx.enter_scope();
+
+        if let glyph_core::ast::MatchPattern::Variant { name, binding } = &arm.pattern {
+            if let Some(bind_ident) = binding {
+                if let Some(variant) = enum_def.variants.iter().find(|v| v.name == name.0) {
+                    if let Some(payload_ty) = variant.payload.clone() {
+                        let payload_ty = substitute_match_params(&payload_ty, enum_args.as_deref());
+                        let binding_local = ctx.fresh_local(Some(&bind_ident.0));
+                        ctx.locals[binding_local.0 as usize].ty = Some(payload_ty.clone());
+                        ctx.bindings.insert(&bind_ident.0, binding_local);
+                        ctx.push_inst(MirInst::Assign {
+                            local: binding_local,
+                            value: Rvalue::EnumPayload {
+                                base: scrut_local,
+                                variant_index: enum_def
+                                    .variants
+                                    .iter()
+                                    .position(|v| v.name == name.0)
+                                    .unwrap_or(0)
+                                    as u32,
+                                payload_type: payload_ty,
+                            },
+                        });
+                    }
+                }
+            }
+        }
+
+        let arm_expected_ty: Option<Type> = expected.cloned().or_else(|| {
+            result_local
+                .and_then(|l| ctx.locals.get(l.0 as usize))
+                .and_then(|l| l.ty.clone())
+        });
+        let arm_val = lower_value_with_expected(ctx, &arm.expr, arm_expected_ty.as_ref());
+        if require_value {
+            if let Some(val) = arm_val {
+                let res_local = *result_local.get_or_insert_with(|| {
+                    let l = ctx.fresh_local(None);
+                    ctx.locals[l.0 as usize].ty = match &val {
+                        MirValue::Local(id) => ctx.locals[id.0 as usize].ty.clone(),
+                        MirValue::Int(_) => Some(Type::I32),
+                        MirValue::Bool(_) => Some(Type::Bool),
+                        MirValue::Unit => None,
+                    };
+                    l
+                });
+
+                if let Some(rv) = rvalue_from_value(val) {
+                    ctx.push_inst(MirInst::Assign {
+                        local: res_local,
+                        value: rv,
+                    });
+                }
+            }
+        }
+
+        if !ctx.terminated() {
+            ctx.push_inst(MirInst::Goto(join_block));
+        }
+        ctx.exit_scope();
+
+        // Merge move-state back into the join state.
+        for i in 0..base_len {
+            merged_states[i] = match (merged_states[i], ctx.local_states[i]) {
+                (LocalState::Moved, _) | (_, LocalState::Moved) => LocalState::Moved,
+                (LocalState::Uninitialized, _) | (_, LocalState::Uninitialized) => {
+                    LocalState::Uninitialized
+                }
+                _ => LocalState::Initialized,
+            };
+        }
+    }
+
+    // Apply merged local state for the join point.
+    for i in 0..base_len {
+        ctx.local_states[i] = merged_states[i];
+    }
+
+    ctx.switch_to(join_block);
+
+    result_local.map(Rvalue::Move)
+}
+
+pub(crate) fn lower_struct_lit<'a>(
+    ctx: &mut LowerCtx<'a>,
+    name: &'a Ident,
+    fields: &'a [(Ident, Expr)],
+    span: Span,
+) -> Option<Rvalue> {
+    let struct_name = name.0.clone();
+    let Some(struct_type) = ctx.resolver.get_struct(&struct_name) else {
+        ctx.error(format!("unknown struct '{}'", struct_name), Some(span));
+        return None;
+    };
+
+    let mut ok = true;
+
+    let mut lowered_fields = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for (field_name, expr) in fields {
+        if !seen.insert(field_name.0.as_str()) {
+            ctx.error(
+                format!("duplicate field '{}' in struct literal", field_name.0),
+                Some(span),
+            );
+            ok = false;
+            continue;
+        }
+
+        if !struct_type.fields.iter().any(|(n, _)| n == &field_name.0) {
+            ctx.error(
+                format!(
+                    "struct '{}' has no field named '{}'",
+                    struct_name, field_name.0
+                ),
+                Some(span),
+            );
+            ok = false;
+            continue;
+        }
+
+        match lower_value(ctx, expr) {
+            Some(value) => lowered_fields.push((field_name.0.clone(), value)),
+            None => ok = false,
+        }
+    }
+
+    for (required, _) in &struct_type.fields {
+        if !lowered_fields.iter().any(|(n, _)| n == required) {
+            ctx.error(
+                format!(
+                    "missing field '{}' in struct literal '{}'",
+                    required, struct_name
+                ),
+                Some(span),
+            );
+            ok = false;
+        }
+    }
+
+    if !ok {
+        return None;
+    }
+
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::Named(struct_name.clone()));
+
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::StructLit {
+            struct_name,
+            field_values: lowered_fields,
+        },
+    });
+
+    Some(Rvalue::Move(tmp))
+}
+
+pub(crate) fn lower_tuple_expr<'a>(
+    ctx: &mut LowerCtx<'a>,
+    elements: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    // Empty tuple is unit type
+    if elements.is_empty() {
+        return Some(Rvalue::ConstInt(0));
+    }
+
+    let mut elem_types = Vec::new();
+    let mut elem_values = Vec::new();
+
+    // Lower each element and infer its type
+    for elem_expr in elements {
+        let val = lower_value(ctx, elem_expr)?;
+
+        // Infer type from the element expression
+        let ty = match &val {
+            MirValue::Int(_) => Type::I32,
+            MirValue::Bool(_) => Type::Bool,
+            MirValue::Local(local_id) => ctx
+                .locals
+                .get(local_id.0 as usize)
+                .and_then(|local| local.ty.clone())
+                .ok_or_else(|| {
+                    ctx.error("cannot infer type of tuple element", Some(span));
+                })
+                .ok()?,
+            MirValue::Unit => Type::Void,
+        };
+
+        elem_types.push(ty);
+        elem_values.push(val);
+    }
+
+    // Generate tuple struct name using monomorphize-style type_key
+    let struct_name = tuple_struct_name(&elem_types);
+
+    // Create field values with numbered fields (0, 1, 2, ...)
+    let field_values: Vec<(String, MirValue)> = elem_values
+        .into_iter()
+        .enumerate()
+        .map(|(idx, val)| (idx.to_string(), val))
+        .collect();
+
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::Tuple(elem_types));
+
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::StructLit {
+            struct_name,
+            field_values,
+        },
+    });
+
+    Some(Rvalue::Move(tmp))
+}
+
+pub(crate) fn lower_array_lit<'a>(
+    ctx: &mut LowerCtx<'a>,
+    elements: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    // Check for empty array literal
+    if elements.is_empty() {
+        ctx.error("empty array literals are not supported", Some(span));
+        return None;
+    }
+
+    // Lower all elements
+    let mut mir_elements = Vec::new();
+    for elem in elements {
+        let mir_val = lower_value(ctx, elem)?;
+        mir_elements.push(mir_val);
+    }
+
+    // Infer element type from first element
+    let elem_type = infer_value_type(&mir_elements[0], ctx)?;
+
+    // Validate all elements have same type
+    for (i, val) in mir_elements.iter().enumerate().skip(1) {
+        let val_ty = infer_value_type(val, ctx)?;
+        if val_ty != elem_type {
+            ctx.error(
+                format!(
+                    "array element {} has type {:?}, expected {:?}",
+                    i, val_ty, elem_type
+                ),
+                Some(span),
+            );
+            return None;
+        }
+    }
+
+    let array_size = mir_elements.len();
+    let array_type = Type::Array(Box::new(elem_type.clone()), array_size);
+
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(array_type);
+
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::ArrayLit {
+            elem_type,
+            elements: mir_elements,
+        },
+    });
+
+    Some(Rvalue::Move(tmp))
+}
+
+pub(crate) fn lower_array_index<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    index: &'a Expr,
+    span: Span,
+) -> Option<Rvalue> {
+    // Lower base to local
+    let base_val = lower_value(ctx, base)?;
+    let base_local = match base_val {
+        MirValue::Local(local_id) => local_id,
+        _ => {
+            // If base is not a local, create one
+            let tmp = ctx.fresh_local(None);
+            ctx.push_inst(MirInst::Assign {
+                local: tmp,
+                value: match base_val {
+                    MirValue::Int(i) => Rvalue::ConstInt(i),
+                    MirValue::Bool(b) => Rvalue::ConstBool(b),
+                    MirValue::Local(_) => unreachable!(),
+                    MirValue::Unit => unreachable!("unit value cannot be indexed"),
+                },
+            });
+            tmp
+        }
+    };
+
+    // Get array type from base local
+    let base_type = ctx
+        .locals
+        .get(base_local.0 as usize)
+        .and_then(|local| local.ty.as_ref())?;
+
+    let (elem_type, is_vec) = match base_type {
+        Type::Array(elem_ty, _) => (elem_ty.as_ref().clone(), false),
+        ty if vec_elem_type_from_type(ty).is_some() => (vec_elem_type_from_type(ty).unwrap(), true),
+        _ => {
+            ctx.error(
+                format!("cannot index into non-array type {:?}", base_type),
+                Some(span),
+            );
+            return None;
+        }
+    };
+
+    // Lower index expression
+    let index_val = lower_value(ctx, index)?;
+
+    // Create temp with element type
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(elem_type.clone());
+
+    let value = if is_vec {
+        Rvalue::VecIndex {
+            vec: base_local,
+            elem_type,
+            index: index_val,
+            bounds_check: true,
+        }
+    } else {
+        Rvalue::ArrayIndex {
+            base: base_local,
+            index: index_val,
+            bounds_check: true, // Always check bounds
+        }
+    };
+
+    ctx.push_inst(MirInst::Assign { local: tmp, value });
+
+    Some(Rvalue::Move(tmp))
+}
+
+pub(crate) fn lower_array_len<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    span: Span,
+) -> Option<Rvalue> {
+    let base_local = match base {
+        Expr::Ident(ident, _) => ctx.bindings.get(ident.0.as_str()).copied(),
+        _ => None,
+    };
+
+    let base_local = match base_local {
+        Some(local) => local,
+        None => {
+            ctx.error(".len() target must be a local array", Some(span));
+            return None;
+        }
+    };
+
+    let Some(base_ty) = ctx
+        .locals
+        .get(base_local.0 as usize)
+        .and_then(|local| local.ty.as_ref())
+    else {
+        ctx.error("array length target has unknown type", Some(span));
+        return None;
+    };
+
+    if !matches!(base_ty, Type::Array(_, _)) {
+        ctx.error(".len() is only supported on arrays", Some(span));
+        return None;
+    }
+
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::I32);
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::ArrayLen { base: base_local },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+pub(crate) fn lower_field_access<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    field: &'a Ident,
+    span: Span,
+) -> Option<Rvalue> {
+    let base_val = lower_value(ctx, base)?;
+    let base_local = match base_val {
+        MirValue::Local(id) => id,
+        _ => {
+            ctx.error("field access base must be a local", Some(span));
+            return None;
+        }
+    };
+
+    // Check if this is a tuple type
+    let base_type = ctx
+        .locals
+        .get(base_local.0 as usize)
+        .and_then(|l| l.ty.as_ref());
+
+    let (field_type, field_index, _struct_name) = if let Some(Type::Tuple(elem_types)) = base_type {
+        // Handle tuple field access
+        if let Ok(idx) = field.0.parse::<usize>() {
+            if idx < elem_types.len() {
+                (elem_types[idx].clone(), idx, tuple_struct_name(elem_types))
+            } else {
+                ctx.error(
+                    format!(
+                        "tuple index {} out of bounds (len is {})",
+                        idx,
+                        elem_types.len()
+                    ),
+                    Some(span),
+                );
+                return None;
+            }
+        } else {
+            ctx.error(
+                format!(
+                    "tuple field access must use numeric index, got '{}'",
+                    field.0
+                ),
+                Some(span),
+            );
+            return None;
+        }
+    } else {
+        // Handle regular struct field access
+        let Some(struct_name) = local_struct_name(ctx, base_local) else {
+            ctx.error("field access base is not a struct", Some(span));
+            return None;
+        };
+
+        let Some((field_type, field_index)) = ctx.resolver.get_field(&struct_name, &field.0) else {
+            ctx.error(
+                format!("struct '{}' has no field named '{}'", struct_name, field.0),
+                Some(span),
+            );
+            return None;
+        };
+
+        (field_type, field_index, struct_name)
+    };
+
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(field_type);
+
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::FieldAccess {
+            base: base_local,
+            field_name: field.0.clone(),
+            field_index: field_index as u32,
+        },
+    });
+
+    Some(Rvalue::Move(tmp))
+}
+
+pub(crate) fn lower_ref_expr<'a>(
+    ctx: &mut LowerCtx<'a>,
+    expr: &'a Expr,
+    mutability: Mutability,
+    span: Span,
+) -> Option<Rvalue> {
+    match expr {
+        Expr::Ident(ident, _) => {
+            let Some(local) = ctx.bindings.get(ident.0.as_str()).copied() else {
+                ctx.error(format!("unknown identifier '{}'", ident.0), Some(span));
+                return None;
+            };
+            Some(Rvalue::Ref {
+                base: local,
+                mutability,
+            })
+        }
+        _ => {
+            ctx.error("references can only be taken to locals", Some(span));
+            None
+        }
+    }
+}
+
+pub(crate) fn lower_value<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr) -> Option<MirValue> {
+    lower_value_with_expected(ctx, expr, None)
+}
+
+pub(crate) fn lower_value_with_expected<'a>(
+    ctx: &mut LowerCtx<'a>,
+    expr: &'a Expr,
+    expected: Option<&Type>,
+) -> Option<MirValue> {
+    match expr {
+        Expr::Lit(glyph_core::ast::Literal::Int(i), _) => Some(MirValue::Int(*i)),
+        Expr::Lit(glyph_core::ast::Literal::Bool(b), _) => Some(MirValue::Bool(*b)),
+        Expr::Lit(glyph_core::ast::Literal::Char(c), _) => {
+            let tmp = ctx.fresh_local(None);
+            ctx.locals[tmp.0 as usize].ty = Some(Type::Char);
+            ctx.push_inst(MirInst::Assign {
+                local: tmp,
+                value: Rvalue::ConstInt(*c as i64),
+            });
+            Some(MirValue::Local(tmp))
+        }
+        Expr::Lit(glyph_core::ast::Literal::Str(s), _) => {
+            let tmp = ctx.fresh_local(None);
+            ctx.locals[tmp.0 as usize].ty = Some(Type::Str);
+            let rv = Rvalue::StringLit {
+                content: s.clone(),
+                global_name: ctx.fresh_string_global(),
+            };
+            ctx.push_inst(MirInst::Assign {
+                local: tmp,
+                value: rv,
+            });
+            Some(MirValue::Local(tmp))
+        }
+        Expr::InterpString { segments, span } => {
+            let rv = lower_interp_string(ctx, segments, *span)?;
+            let tmp = ctx.fresh_local(None);
+            ctx.locals[tmp.0 as usize].ty = Some(Type::Str);
+            ctx.push_inst(MirInst::Assign {
+                local: tmp,
+                value: rv,
+            });
+            Some(MirValue::Local(tmp))
+        }
+        Expr::Ident(ident, span) => {
+            if let Some(local) = ctx.bindings.get(ident.0.as_str()).copied() {
+                if ctx.consume_local(local, Some(*span)) {
+                    Some(MirValue::Local(local))
+                } else {
+                    None
+                }
+            } else if let Some(value) = lookup_const_value(ctx, ident.0.as_str(), *span) {
+                lower_const_value(ctx, value)
+            } else {
+                None
+            }
+        }
+        Expr::Unary { op, expr, span } => match op {
+            UnaryOp::Not => lower_unary_not(ctx, expr, *span).and_then(rvalue_to_value),
+        },
+        Expr::Binary { op, lhs, rhs, .. } => match *op {
+            glyph_core::ast::BinaryOp::And | glyph_core::ast::BinaryOp::Or => {
+                lower_logical(ctx, op, lhs, rhs).and_then(rvalue_to_value)
+            }
+            _ => lower_binary(ctx, op, lhs, rhs).and_then(rvalue_to_value),
+        },
+        Expr::Call { callee, args, span } => {
+            lower_call(ctx, callee, args, *span, true, expected).and_then(rvalue_to_value)
+        }
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            span,
+        } => lower_method_call(ctx, receiver, method, args, *span).and_then(rvalue_to_value),
+        Expr::Match {
+            scrutinee,
+            arms,
+            span,
+        } => lower_match(ctx, scrutinee, arms, true, *span, expected).and_then(rvalue_to_value),
+        Expr::If {
+            cond,
+            then_block,
+            else_block,
+            ..
+        } => lower_if_value(ctx, cond, then_block, else_block.as_ref(), expected),
+        Expr::Block(block) => lower_block_with_expected(ctx, block, expected, true, true),
+        Expr::StructLit { name, fields, span } => {
+            lower_struct_lit(ctx, name, fields, *span).and_then(rvalue_to_value)
+        }
+        Expr::FieldAccess { base, field, span } => {
+            lower_field_access(ctx, base, field, *span).and_then(rvalue_to_value)
+        }
+        Expr::Ref {
+            expr,
+            mutability,
+            span,
+        } => {
+            let mut rv = lower_ref_expr(ctx, expr, *mutability, *span)?;
+            let tmp = ctx.fresh_local(None);
+            update_local_type_from_rvalue(ctx, tmp, &mut rv);
+            ctx.push_inst(MirInst::Assign {
+                local: tmp,
+                value: rv,
+            });
+            Some(MirValue::Local(tmp))
+        }
+        Expr::ArrayLit { elements, span } => {
+            lower_array_lit(ctx, elements, *span).and_then(rvalue_to_value)
+        }
+        Expr::Index { base, index, span } => {
+            lower_array_index(ctx, base, index, *span).and_then(rvalue_to_value)
+        }
+        _ => None,
+    }
+}

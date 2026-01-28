@@ -1,0 +1,504 @@
+use glyph_core::ast::{Expr, Ident};
+use glyph_core::mir::{MirInst, MirValue, Rvalue};
+use glyph_core::span::Span;
+use glyph_core::types::{Mutability, Type};
+
+use crate::resolver::SelfKind;
+
+use super::builtins::{
+    lower_file_close, lower_file_open, lower_file_read_to_string, lower_file_write_string,
+    lower_map_add, lower_map_del, lower_map_get, lower_map_has, lower_map_keys,
+    lower_map_static_new, lower_map_static_with_capacity, lower_map_update, lower_map_vals,
+    lower_own_from_raw, lower_own_into_raw, lower_own_new, lower_print_builtin, lower_shared_clone,
+    lower_shared_new, lower_string_concat, lower_string_ends_with, lower_string_from,
+    lower_string_len, lower_string_slice, lower_string_split, lower_string_starts_with,
+    lower_string_trim, lower_vec_len, lower_vec_pop, lower_vec_push, lower_vec_static_new,
+    lower_vec_static_with_capacity,
+};
+use super::context::LowerCtx;
+use super::expr::{lower_array_len, lower_value};
+use super::value::infer_value_type;
+
+pub(crate) fn lower_call<'a>(
+    ctx: &mut LowerCtx<'a>,
+    callee: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+    require_value: bool,
+    expected_ret: Option<&Type>,
+) -> Option<Rvalue> {
+    if let Some(builtin) = lower_method_builtin(ctx, callee, args, span) {
+        return builtin;
+    }
+
+    if let Some(builtin) = lower_static_builtin_with_expected(ctx, callee, args, span, expected_ret)
+    {
+        return Some(builtin);
+    }
+
+    let Expr::Ident(name, _) = callee else {
+        ctx.error("call target must be an identifier", Some(span));
+        return None;
+    };
+
+    let Some(sig) = ctx.fn_sigs.get(&name.0) else {
+        ctx.error(format!("unknown function '{}'", name.0), Some(span));
+        return None;
+    };
+
+    if sig.params.len() != args.len() {
+        ctx.error(
+            format!(
+                "function '{}' expects {} arguments but got {}",
+                name.0,
+                sig.params.len(),
+                args.len()
+            ),
+            Some(span),
+        );
+        return None;
+    }
+
+    // For externs, ensure all parameter types are known
+    if sig.params.iter().any(|p| p.is_none()) {
+        ctx.error(
+            format!("function '{}' has unknown parameter types", name.0),
+            Some(span),
+        );
+        return None;
+    }
+
+    // Arity/type check for externs is already covered by sig.params length; here we ensure imports exist.
+    if require_value && sig.ret.is_none() {
+        ctx.error(
+            format!("function '{}' has no return type", name.0),
+            Some(span),
+        );
+        return None;
+    }
+
+    let mut lowered_args = Vec::new();
+    for arg in args {
+        lowered_args.push(lower_value(ctx, arg)?);
+    }
+
+    let tmp = ctx.fresh_local(None);
+    let mut ret_ty = sig.ret.clone();
+
+    if let Some(enum_ctor) = &sig.enum_ctor {
+        if let Some(Type::App { base, .. }) = expected_ret {
+            if base == &enum_ctor.enum_name {
+                ret_ty = Some(expected_ret.unwrap().clone());
+            }
+        }
+
+        if enum_ctor.has_generics && expected_ret.is_none() && !lowered_args.is_empty() {
+            let mut arg_tys = Vec::new();
+            for arg in &lowered_args {
+                if let Some(arg_ty) = infer_value_type(arg, ctx) {
+                    arg_tys.push(arg_ty);
+                }
+            }
+            if !arg_tys.is_empty() {
+                ret_ty = Some(Type::App {
+                    base: enum_ctor.enum_name.clone(),
+                    args: arg_tys,
+                });
+            }
+        }
+
+        if let Some(ret) = ret_ty.as_ref() {
+            ctx.locals[tmp.0 as usize].ty = Some(ret.clone());
+        }
+
+        let payload = lowered_args.get(0).cloned();
+        ctx.push_inst(MirInst::Assign {
+            local: tmp,
+            value: Rvalue::EnumConstruct {
+                enum_name: enum_ctor.enum_name.clone(),
+                variant_index: enum_ctor.variant_index as u32,
+                payload,
+            },
+        });
+    } else {
+        if let Some(ret) = ret_ty.as_ref() {
+            ctx.locals[tmp.0 as usize].ty = Some(ret.clone());
+        }
+
+        let call_target = sig.target_name.clone();
+
+        ctx.push_inst(MirInst::Assign {
+            local: tmp,
+            value: Rvalue::Call {
+                name: call_target,
+                args: lowered_args,
+            },
+        });
+    }
+
+    Some(Rvalue::Move(tmp))
+}
+
+/// Infer the type of an expression for method call resolution
+fn infer_expr_type(ctx: &LowerCtx, expr: &Expr) -> Option<glyph_core::types::Type> {
+    match expr {
+        // Local variable: look up in bindings
+        Expr::Ident(name, _) => {
+            let local = ctx.bindings.get(name.0.as_str()).copied()?;
+            ctx.locals.get(local.0 as usize).and_then(|l| l.ty.clone())
+        }
+
+        Expr::Lit(glyph_core::ast::Literal::Int(_), _) => Some(Type::I32),
+        Expr::Lit(glyph_core::ast::Literal::Bool(_), _) => Some(Type::Bool),
+        Expr::Lit(glyph_core::ast::Literal::Char(_), _) => Some(Type::Char),
+        Expr::Lit(glyph_core::ast::Literal::Str(_), _) => Some(Type::Str),
+        Expr::InterpString { .. } => Some(Type::Str),
+        Expr::Unary {
+            op: glyph_core::ast::UnaryOp::Not,
+            ..
+        } => Some(Type::Bool),
+
+        // Struct literal: obvious
+        Expr::StructLit { name, .. } => Some(glyph_core::types::Type::Named(name.0.clone())),
+
+        // Field access: get base type, then look up field
+        Expr::FieldAccess { base, field, .. } => {
+            let base_ty = infer_expr_type(ctx, base)?;
+            match base_ty {
+                glyph_core::types::Type::Named(struct_name) => {
+                    let (field_ty, _) = ctx.resolver.get_field(&struct_name, &field.0)?;
+                    Some(field_ty)
+                }
+                glyph_core::types::Type::Ref(ref inner_ty, _) => {
+                    // Dereference and look up field
+                    if let glyph_core::types::Type::Named(struct_name) = &**inner_ty {
+                        let (field_ty, _) = ctx.resolver.get_field(struct_name, &field.0)?;
+                        Some(field_ty)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        }
+
+        // Reference: return reference type
+        Expr::Ref {
+            expr, mutability, ..
+        } => {
+            let inner_ty = infer_expr_type(ctx, expr)?;
+            Some(glyph_core::types::Type::Ref(
+                Box::new(inner_ty),
+                *mutability,
+            ))
+        }
+
+        _ => None,
+    }
+}
+
+pub(crate) fn lower_method_call<'a>(
+    ctx: &mut LowerCtx<'a>,
+    receiver: &'a Expr,
+    method: &Ident,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    // Handle built-in method-like operations that are not tied to interfaces.
+    match method.0.as_str() {
+        "len" => {
+            if !args.is_empty() {
+                ctx.error(".len() does not take arguments", Some(span));
+                return None;
+            }
+            if let Some(rv) = lower_vec_len(ctx, receiver, span) {
+                return Some(rv);
+            }
+            if let Some(rv) = lower_string_len(ctx, receiver, args, span) {
+                return Some(rv);
+            }
+            return lower_array_len(ctx, receiver, span);
+        }
+        "push" => {
+            if let Some(rv) = lower_vec_push(ctx, receiver, args, span) {
+                return Some(rv);
+            }
+        }
+        "pop" => {
+            if let Some(rv) = lower_vec_pop(ctx, receiver, args, span) {
+                return Some(rv);
+            }
+        }
+        "add" => return lower_map_add(ctx, receiver, args, span),
+        "update" => return lower_map_update(ctx, receiver, args, span),
+        "del" => return lower_map_del(ctx, receiver, args, span),
+        "get" => return lower_map_get(ctx, receiver, args, span),
+        "has" => return lower_map_has(ctx, receiver, args, span),
+        "keys" => return lower_map_keys(ctx, receiver, args, span),
+        "vals" => return lower_map_vals(ctx, receiver, args, span),
+        "read_to_string" => return lower_file_read_to_string(ctx, receiver, args, span),
+        "write_string" => return lower_file_write_string(ctx, receiver, args, span),
+        "close" => return lower_file_close(ctx, receiver, args, span),
+        "concat" => return lower_string_concat(ctx, receiver, args, span),
+        "slice" => return lower_string_slice(ctx, receiver, args, span),
+        "trim" => return lower_string_trim(ctx, receiver, args, span),
+        "split" => return lower_string_split(ctx, receiver, args, span),
+        "starts_with" => return lower_string_starts_with(ctx, receiver, args, span),
+        "ends_with" => return lower_string_ends_with(ctx, receiver, args, span),
+        "into_raw" => {
+            if !args.is_empty() {
+                ctx.error("into_raw() does not take arguments", Some(span));
+                return None;
+            }
+            return lower_own_into_raw(ctx, receiver, span);
+        }
+        "clone" => {
+            if !args.is_empty() {
+                ctx.error(".clone() does not take arguments", Some(span));
+                return None;
+            }
+            // Check if receiver is Shared<T>
+            let base_ty = infer_expr_type(ctx, receiver)?;
+            if matches!(base_ty, Type::Shared(_)) {
+                return lower_shared_clone(ctx, receiver, span);
+            }
+            // If not Shared, fall through to regular method dispatch
+        }
+        _ => {}
+    }
+
+    // 1. Infer receiver type
+    let receiver_ty = infer_expr_type(ctx, receiver);
+    let receiver_ty = match receiver_ty {
+        Some(ty) => ty,
+        None => {
+            ctx.error(
+                "cannot infer type of method receiver; consider adding type annotation",
+                Some(span),
+            );
+            return None;
+        }
+    };
+
+    // 2. Extract struct name from type (handle both by-value and references)
+    let struct_name = match &receiver_ty {
+        glyph_core::types::Type::Named(name) => name.clone(),
+        glyph_core::types::Type::Ref(inner_ty, _) => {
+            // Dereference to get the struct name
+            if let glyph_core::types::Type::Named(name) = &**inner_ty {
+                name.clone()
+            } else {
+                ctx.error("methods can only be called on struct types", Some(span));
+                return None;
+            }
+        }
+        _ => {
+            ctx.error("methods can only be called on struct types", Some(span));
+            return None;
+        }
+    };
+
+    // 3. Look up method (inherent first, then interfaces)
+    let mut resolved = ctx
+        .resolver
+        .get_inherent_method(&struct_name, &method.0)
+        .map(|info| (info.function_name.clone(), info.self_kind.clone()));
+
+    if resolved.is_none() {
+        if let Some(interfaces) = ctx.resolver.interface_impls.get(&struct_name) {
+            let mut found: Option<(String, crate::resolver::MethodInfo)> = None;
+
+            for (iface_name, methods) in interfaces {
+                if let Some(info) = methods.get(&method.0) {
+                    if let Some((existing_iface, _)) = &found {
+                        ctx.error(
+                            format!(
+                                "method '{}' is provided by multiple interfaces on '{}': '{}' and '{}'",
+                                method.0, struct_name, existing_iface, iface_name
+                            ),
+                            Some(span),
+                        );
+                        return None;
+                    }
+
+                    found = Some((iface_name.clone(), info.clone()));
+                }
+            }
+
+            if let Some((_, info)) = found {
+                resolved = Some((info.function_name.clone(), info.self_kind.clone()));
+            }
+        }
+    }
+
+    let Some((mangled_name, self_kind)) = resolved else {
+        ctx.error(
+            format!("no method '{}' found on type '{}'", method.0, struct_name),
+            Some(span),
+        );
+        return None;
+    };
+
+    // 4. Lower receiver value
+    let receiver_val = lower_value(ctx, receiver)?;
+
+    // 5. Auto-borrow if method expects reference
+    let receiver_arg = match self_kind {
+        SelfKind::ByValue => {
+            // Pass receiver by value (move semantics)
+            receiver_val
+        }
+        SelfKind::Ref => {
+            // Auto-borrow as immutable reference
+            match receiver_val {
+                // Already a reference - use as-is
+                MirValue::Local(local)
+                    if matches!(
+                        ctx.locals.get(local.0 as usize).and_then(|l| l.ty.as_ref()),
+                        Some(glyph_core::types::Type::Ref(_, _))
+                    ) =>
+                {
+                    receiver_val
+                }
+                MirValue::Local(local) => {
+                    // Create immutable reference
+                    let ref_tmp = ctx.fresh_local(None);
+                    ctx.locals[ref_tmp.0 as usize].ty = Some(glyph_core::types::Type::Ref(
+                        Box::new(glyph_core::types::Type::Named(struct_name.clone())),
+                        Mutability::Immutable,
+                    ));
+                    ctx.push_inst(MirInst::Assign {
+                        local: ref_tmp,
+                        value: Rvalue::Ref {
+                            base: local,
+                            mutability: Mutability::Immutable,
+                        },
+                    });
+                    MirValue::Local(ref_tmp)
+                }
+                _ => {
+                    ctx.error("cannot borrow non-local value", Some(span));
+                    return None;
+                }
+            }
+        }
+        SelfKind::MutRef => {
+            // Auto-borrow as mutable reference
+            match receiver_val {
+                // Already a mut reference - use as-is
+                MirValue::Local(local)
+                    if matches!(
+                        ctx.locals.get(local.0 as usize).and_then(|l| l.ty.as_ref()),
+                        Some(glyph_core::types::Type::Ref(_, Mutability::Mutable))
+                    ) =>
+                {
+                    receiver_val
+                }
+                MirValue::Local(local) => {
+                    // Create mutable reference
+                    let ref_tmp = ctx.fresh_local(None);
+                    ctx.locals[ref_tmp.0 as usize].ty = Some(glyph_core::types::Type::Ref(
+                        Box::new(glyph_core::types::Type::Named(struct_name)),
+                        Mutability::Mutable,
+                    ));
+                    ctx.push_inst(MirInst::Assign {
+                        local: ref_tmp,
+                        value: Rvalue::Ref {
+                            base: local,
+                            mutability: Mutability::Mutable,
+                        },
+                    });
+                    MirValue::Local(ref_tmp)
+                }
+                _ => {
+                    ctx.error("cannot borrow non-local value", Some(span));
+                    return None;
+                }
+            }
+        }
+    };
+
+    // 6. Lower remaining arguments
+    let mut all_args = vec![receiver_arg];
+    for arg in args {
+        let arg_val = lower_value(ctx, arg)?;
+        all_args.push(arg_val);
+    }
+
+    // 7. Create call with mangled name (reusing call infrastructure)
+    let tmp = ctx.fresh_local(None);
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::Call {
+            name: mangled_name,
+            args: all_args,
+        },
+    });
+
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_method_builtin<'a>(
+    ctx: &mut LowerCtx<'a>,
+    callee: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Option<Rvalue>> {
+    if let Expr::FieldAccess { base, field, .. } = callee {
+        match field.0.as_str() {
+            "len" => {
+                if !args.is_empty() {
+                    ctx.error(".len() does not take arguments", Some(span));
+                    return Some(None);
+                }
+                return Some(lower_array_len(ctx, base, span));
+            }
+            "into_raw" => {
+                if !args.is_empty() {
+                    ctx.error("into_raw() does not take arguments", Some(span));
+                    return Some(None);
+                }
+                return Some(lower_own_into_raw(ctx, base, span));
+            }
+            "add" => return Some(lower_map_add(ctx, base, args, span)),
+            "update" => return Some(lower_map_update(ctx, base, args, span)),
+            "del" => return Some(lower_map_del(ctx, base, args, span)),
+            "get" => return Some(lower_map_get(ctx, base, args, span)),
+            "has" => return Some(lower_map_has(ctx, base, args, span)),
+            "keys" => return Some(lower_map_keys(ctx, base, args, span)),
+            "vals" => return Some(lower_map_vals(ctx, base, args, span)),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn lower_static_builtin_with_expected<'a>(
+    ctx: &mut LowerCtx<'a>,
+    callee: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+    expected_ret: Option<&Type>,
+) -> Option<Rvalue> {
+    let Expr::Ident(name, _) = callee else {
+        return None;
+    };
+
+    match name.0.as_str() {
+        "Own::new" => lower_own_new(ctx, args, span),
+        "Own::from_raw" => lower_own_from_raw(ctx, args, span),
+        "Shared::new" => lower_shared_new(ctx, args, span),
+        "Vec::new" => lower_vec_static_new(ctx, args, span, expected_ret),
+        "Vec::with_capacity" => lower_vec_static_with_capacity(ctx, args, span, expected_ret),
+        "Map::new" => lower_map_static_new(ctx, args, span, expected_ret),
+        "Map::with_capacity" => lower_map_static_with_capacity(ctx, args, span, expected_ret),
+        "File::open" => lower_file_open(ctx, args, span, false),
+        "File::create" => lower_file_open(ctx, args, span, true),
+        "String::from_str" => lower_string_from(ctx, args, span),
+        "print" | "std::print" => lower_print_builtin(ctx, args, span, false, false),
+        "println" | "std::println" => lower_print_builtin(ctx, args, span, true, false),
+        "eprint" | "std::eprint" => lower_print_builtin(ctx, args, span, false, true),
+        "eprintln" | "std::eprintln" => lower_print_builtin(ctx, args, span, true, true),
+        _ => None,
+    }
+}
