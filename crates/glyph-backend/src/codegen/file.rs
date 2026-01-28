@@ -9,6 +9,15 @@ impl CodegenContext {
     ) -> Result<(LLVMTypeRef, LLVMValueRef)> {
         let (struct_name, file_ptr) = self.struct_pointer_for_local(file, func, local_map)?;
         let llvm_file_ty = self.get_struct_type(&struct_name)?;
+        let layout = self
+            .struct_layouts
+            .get(&struct_name)
+            .ok_or_else(|| anyhow!("missing layout for struct {}", struct_name))?;
+        let handle_field = layout
+            .fields
+            .first()
+            .ok_or_else(|| anyhow!("missing File handle field"))?;
+        let handle_ty = self.get_llvm_type(&handle_field.1)?;
         let handle_ptr = unsafe {
             LLVMBuildStructGEP2(
                 self.builder,
@@ -18,7 +27,6 @@ impl CodegenContext {
                 CString::new("file.handle")?.as_ptr(),
             )
         };
-        let handle_ty = unsafe { LLVMGetElementType(LLVMTypeOf(handle_ptr)) };
         Ok((handle_ty, handle_ptr))
     }
 
@@ -36,7 +44,7 @@ impl CodegenContext {
         let mode_val = self.codegen_string_literal(mode_str, &format!(".str.file.{}", mode_str))?;
         let fopen_fn = self.get_extern_function(functions, "fopen")?;
         let mut args = vec![path_val, mode_val];
-        let fn_ty = unsafe { LLVMGetElementType(LLVMTypeOf(fopen_fn)) };
+        let fn_ty = self.function_type_for("fopen")?;
         let call = unsafe {
             LLVMBuildCall2(
                 self.builder,
@@ -221,7 +229,7 @@ impl CodegenContext {
         let zero_i64 = unsafe { LLVMConstInt(i64_ty, 0, 0) };
         let seek_end = unsafe { LLVMConstInt(i32_ty, 2, 0) };
         let mut seek_args = vec![handle_val, zero_i64, seek_end];
-        let seek_ty = unsafe { LLVMGetElementType(LLVMTypeOf(fseek_fn)) };
+        let seek_ty = self.function_type_for("fseek")?;
         let seek_res = unsafe {
             LLVMBuildCall2(
                 self.builder,
@@ -265,7 +273,7 @@ impl CodegenContext {
 
         unsafe { LLVMPositionBuilderAtEnd(self.builder, tell_bb) };
         let mut tell_args = vec![handle_val];
-        let tell_ty = unsafe { LLVMGetElementType(LLVMTypeOf(ftell_fn)) };
+        let tell_ty = self.function_type_for("ftell")?;
         let size_val = unsafe {
             LLVMBuildCall2(
                 self.builder,
@@ -309,7 +317,7 @@ impl CodegenContext {
         unsafe { LLVMPositionBuilderAtEnd(self.builder, alloc_bb) };
         unsafe {
             let mut rewind_args = vec![handle_val];
-            let rewind_ty = LLVMGetElementType(LLVMTypeOf(rewind_fn));
+            let rewind_ty = self.function_type_for("rewind")?;
             LLVMBuildCall2(
                 self.builder,
                 rewind_ty,
@@ -382,7 +390,7 @@ impl CodegenContext {
         };
         let one_u32 = unsafe { LLVMConstInt(LLVMInt32TypeInContext(self.context), 1, 0) };
         let mut fread_args = vec![buf_ptr, one_u32, size_u32, handle_val];
-        let fread_ty = unsafe { LLVMGetElementType(LLVMTypeOf(fread_fn)) };
+        let fread_ty = self.function_type_for("fread")?;
         let read_count = unsafe {
             LLVMBuildCall2(
                 self.builder,
@@ -582,7 +590,7 @@ impl CodegenContext {
         let contents_val = self.codegen_value(contents, func, local_map)?;
         let strlen_fn = self.get_extern_function(functions, "strlen")?;
         let mut strlen_args = vec![contents_val];
-        let strlen_ty = unsafe { LLVMGetElementType(LLVMTypeOf(strlen_fn)) };
+        let strlen_ty = self.function_type_for("strlen")?;
         let len_val = unsafe {
             LLVMBuildCall2(
                 self.builder,
@@ -601,10 +609,10 @@ impl CodegenContext {
                 CString::new("file.len.u32")?.as_ptr(),
             )
         };
-        let fwrite_fn = self.get_extern_function(functions, "fwrite")?;
+        let fwrite_fn = self.get_extern_function(functions, "write")?;
         let one_u32 = unsafe { LLVMConstInt(LLVMInt32TypeInContext(self.context), 1, 0) };
         let mut fwrite_args = vec![contents_val, one_u32, len_u32, handle_val];
-        let fwrite_ty = unsafe { LLVMGetElementType(LLVMTypeOf(fwrite_fn)) };
+        let fwrite_ty = self.function_type_for("write")?;
         let wrote = unsafe {
             LLVMBuildCall2(
                 self.builder,
@@ -758,7 +766,7 @@ impl CodegenContext {
         unsafe { LLVMPositionBuilderAtEnd(self.builder, body_bb) };
         let fclose_fn = self.get_extern_function(functions, "fclose")?;
         let mut fclose_args = vec![handle_val];
-        let fclose_ty = unsafe { LLVMGetElementType(LLVMTypeOf(fclose_fn)) };
+        let fclose_ty = self.function_type_for("fclose")?;
         let close_res = unsafe {
             LLVMBuildCall2(
                 self.builder,

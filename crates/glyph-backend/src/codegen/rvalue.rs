@@ -132,7 +132,11 @@ impl CodegenContext {
         }
     }
 
-    pub(super) fn call_param_types(&self, name: &str, mir_module: &MirModule) -> (Vec<Option<Type>>, bool) {
+    pub(super) fn call_param_types(
+        &self,
+        name: &str,
+        mir_module: &MirModule,
+    ) -> (Vec<Option<Type>>, bool) {
         if let Some(func) = mir_module.functions.iter().find(|f| f.name == name) {
             let params = func
                 .params
@@ -497,28 +501,24 @@ impl CodegenContext {
                             if let Some(Type::Ref(inner, _)) = arg_ty.as_ref() {
                                 if inner.as_ref() == param_ty {
                                     let inner_llvm_ty = self.get_llvm_type(param_ty)?;
-                                    arg_val = unsafe {
-                                        LLVMBuildLoad2(
-                                            self.builder,
-                                            inner_llvm_ty,
-                                            arg_val,
-                                            CString::new("arg.deref")?.as_ptr(),
-                                        )
-                                    };
+                                    arg_val = LLVMBuildLoad2(
+                                        self.builder,
+                                        inner_llvm_ty,
+                                        arg_val,
+                                        CString::new("arg.deref")?.as_ptr(),
+                                    );
                                 }
                             }
 
                             if let Type::Ref(inner, _) = param_ty {
                                 if arg_ty.as_ref() == Some(inner.as_ref()) {
                                     let inner_llvm_ty = self.get_llvm_type(inner)?;
-                                    let slot = unsafe {
-                                        LLVMBuildAlloca(
-                                            self.builder,
-                                            inner_llvm_ty,
-                                            CString::new("arg.addr")?.as_ptr(),
-                                        )
-                                    };
-                                    unsafe { LLVMBuildStore(self.builder, arg_val, slot) };
+                                    let slot = LLVMBuildAlloca(
+                                        self.builder,
+                                        inner_llvm_ty,
+                                        CString::new("arg.addr")?.as_ptr(),
+                                    );
+                                    LLVMBuildStore(self.builder, arg_val, slot);
                                     arg_val = slot;
                                 }
                             }
@@ -548,9 +548,9 @@ impl CodegenContext {
                             }
 
                             let expected_ty = self.get_llvm_type(param_ty)?;
-                            let arg_ty = unsafe { LLVMTypeOf(arg_val) };
-                            let expected_kind = unsafe { LLVMGetTypeKind(expected_ty) };
-                            let arg_kind = unsafe { LLVMGetTypeKind(arg_ty) };
+                            let arg_ty = LLVMTypeOf(arg_val);
+                            let expected_kind = LLVMGetTypeKind(expected_ty);
+                            let arg_kind = LLVMGetTypeKind(arg_ty);
                             if expected_kind == llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind
                                 && arg_kind == llvm_sys::LLVMTypeKind::LLVMIntegerTypeKind
                             {
@@ -561,14 +561,12 @@ impl CodegenContext {
                                 && arg_ty != expected_ty
                             {
                                 let cast_name = CString::new("arg.ptr.cast")?;
-                                arg_val = unsafe {
-                                    LLVMBuildBitCast(
-                                        self.builder,
-                                        arg_val,
-                                        expected_ty,
-                                        cast_name.as_ptr(),
-                                    )
-                                };
+                                arg_val = LLVMBuildBitCast(
+                                    self.builder,
+                                    arg_val,
+                                    expected_ty,
+                                    cast_name.as_ptr(),
+                                );
                             }
                         }
 
@@ -745,7 +743,11 @@ impl CodegenContext {
         }
     }
 
-    pub(super) fn local_llvm_type(&self, func: &MirFunction, local_id: LocalId) -> Result<LLVMTypeRef> {
+    pub(super) fn local_llvm_type(
+        &self,
+        func: &MirFunction,
+        local_id: LocalId,
+    ) -> Result<LLVMTypeRef> {
         let local = func
             .locals
             .get(local_id.0 as usize)

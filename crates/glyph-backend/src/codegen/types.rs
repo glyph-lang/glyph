@@ -151,7 +151,11 @@ impl CodegenContext {
         }
     }
 
-    pub(super) fn ensure_usize(&self, val: LLVMValueRef, usize_ty: LLVMTypeRef) -> Result<LLVMValueRef> {
+    pub(super) fn ensure_usize(
+        &self,
+        val: LLVMValueRef,
+        usize_ty: LLVMTypeRef,
+    ) -> Result<LLVMValueRef> {
         unsafe {
             if LLVMTypeOf(val) == usize_ty {
                 Ok(val)
@@ -216,7 +220,7 @@ impl CodegenContext {
                 }
                 Type::Array(elem_ty, size) => {
                     let elem_llvm = self.get_llvm_type(&elem_ty)?;
-                    LLVMArrayType(elem_llvm, size as u32)
+                    LLVMArrayType2(elem_llvm, size as u64)
                 }
                 Type::Own(inner) | Type::RawPtr(inner) | Type::Shared(inner) => {
                     let elem_ty = self.get_llvm_type(&inner)?;

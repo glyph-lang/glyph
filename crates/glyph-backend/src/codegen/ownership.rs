@@ -90,7 +90,11 @@ impl CodegenContext {
         Ok(())
     }
 
-    pub(super) fn codegen_drop_shared_slot(&mut self, slot: LLVMValueRef, elem_type: &Type) -> Result<()> {
+    pub(super) fn codegen_drop_shared_slot(
+        &mut self,
+        slot: LLVMValueRef,
+        elem_type: &Type,
+    ) -> Result<()> {
         unsafe {
             // 1. Load pointer
             let ptr_ty = self.get_llvm_type(&Type::Shared(Box::new(elem_type.clone())))?;
@@ -235,6 +239,15 @@ impl CodegenContext {
     pub(super) fn codegen_drop_file_slot(&mut self, slot: LLVMValueRef) -> Result<()> {
         unsafe {
             let file_ty = self.get_struct_type("File")?;
+            let layout = self
+                .struct_layouts
+                .get("File")
+                .ok_or_else(|| anyhow!("missing layout for struct File"))?;
+            let handle_field = layout
+                .fields
+                .first()
+                .ok_or_else(|| anyhow!("missing File handle field"))?;
+            let handle_ty = self.get_llvm_type(&handle_field.1)?;
             let handle_ptr = LLVMBuildStructGEP2(
                 self.builder,
                 file_ty,
@@ -242,7 +255,6 @@ impl CodegenContext {
                 0,
                 CString::new("file.handle")?.as_ptr(),
             );
-            let handle_ty = LLVMGetElementType(LLVMTypeOf(handle_ptr));
             let handle_val = LLVMBuildLoad2(
                 self.builder,
                 handle_ty,
@@ -275,15 +287,16 @@ impl CodegenContext {
             let fclose_fn = LLVMGetNamedFunction(self.module, CString::new("fclose")?.as_ptr());
             if !fclose_fn.is_null() {
                 let mut args = vec![handle_val];
-                let fn_ty = LLVMGetElementType(LLVMTypeOf(fclose_fn));
-                LLVMBuildCall2(
-                    self.builder,
-                    fn_ty,
-                    fclose_fn,
-                    args.as_mut_ptr(),
-                    args.len() as u32,
-                    CString::new("file.drop.close")?.as_ptr(),
-                );
+                if let Ok(fn_ty) = self.function_type_for("fclose") {
+                    LLVMBuildCall2(
+                        self.builder,
+                        fn_ty,
+                        fclose_fn,
+                        args.as_mut_ptr(),
+                        args.len() as u32,
+                        CString::new("file.drop.close")?.as_ptr(),
+                    );
+                }
             }
             LLVMBuildStore(self.builder, null_ptr, handle_ptr);
             LLVMBuildBr(self.builder, cont_bb);
@@ -293,7 +306,11 @@ impl CodegenContext {
         Ok(())
     }
 
-    pub(super) fn codegen_drop_elem_slot(&mut self, slot: LLVMValueRef, elem_type: &Type) -> Result<()> {
+    pub(super) fn codegen_drop_elem_slot(
+        &mut self,
+        slot: LLVMValueRef,
+        elem_type: &Type,
+    ) -> Result<()> {
         match elem_type {
             Type::Own(inner) => self.codegen_drop_own_slot(slot, inner),
             Type::Shared(inner) => self.codegen_drop_shared_slot(slot, inner),

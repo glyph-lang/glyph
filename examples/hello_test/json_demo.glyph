@@ -1,3 +1,5 @@
+from std import println
+
 // Demonstrates tuple returns and mutable variables for parsing
 
 fn parse_value(pos: i32) -> (bool, i32) {

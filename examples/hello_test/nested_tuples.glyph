@@ -1,3 +1,5 @@
+from std import println
+
 fn get_nested() -> ((i32, i32), i32) {
     let inner = (1, 2)
     ret (inner, 3)

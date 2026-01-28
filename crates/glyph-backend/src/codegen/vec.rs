@@ -213,16 +213,6 @@ impl CodegenContext {
         let alloca_name = CString::new("vec.tmp")?;
         let alloca = unsafe { LLVMBuildAlloca(self.builder, llvm_vec_ty, alloca_name.as_ptr()) };
 
-        // Field 0: data ptr (RawPtr<T>)
-        let data_field_ptr = unsafe {
-            LLVMBuildStructGEP2(
-                self.builder,
-                llvm_vec_ty,
-                alloca,
-                0,
-                CString::new("vec.data").unwrap().as_ptr(),
-            )
-        };
         let elem_ptr_ty = self.get_llvm_type(&Type::RawPtr(Box::new(elem_type.clone())))?;
 
         // Field 1: len

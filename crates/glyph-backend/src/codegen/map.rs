@@ -1,8 +1,6 @@
 use super::*;
 
 const MAP_INITIAL_BUCKETS: u64 = 8;
-const MAP_LOAD_FACTOR_NUM: u64 = 3;
-const MAP_LOAD_FACTOR_DEN: u64 = 4;
 
 impl CodegenContext {
     pub(super) fn debug_map_log(
@@ -409,7 +407,11 @@ impl CodegenContext {
         self.debug_map_tag(label, tag_val)
     }
 
-    pub(super) fn cast_int_to_u64(&mut self, val: LLVMValueRef, signed: bool) -> Result<LLVMValueRef> {
+    pub(super) fn cast_int_to_u64(
+        &mut self,
+        val: LLVMValueRef,
+        signed: bool,
+    ) -> Result<LLVMValueRef> {
         let u64_ty = unsafe { LLVMInt64TypeInContext(self.context) };
         unsafe {
             if LLVMTypeOf(val) == u64_ty {
@@ -606,7 +608,11 @@ impl CodegenContext {
     /// Ensures the bucket type for the given key/value types is registered and fully defined.
     /// This must be called before any operations that query bucket type layout (GEP, loads, etc.)
     /// to avoid LLVM hanging on getABITypeAlign queries for opaque struct types.
-    pub(super) fn ensure_map_bucket_type(&mut self, key_type: &Type, value_type: &Type) -> Result<()> {
+    pub(super) fn ensure_map_bucket_type(
+        &mut self,
+        key_type: &Type,
+        value_type: &Type,
+    ) -> Result<()> {
         let bucket_name = self.map_bucket_name(key_type, value_type);
 
         let llvm_bucket_ty = if let Some(&existing) = self.struct_types.get(&bucket_name) {
@@ -854,58 +860,6 @@ impl CodegenContext {
                 CString::new("map.bucket.sel")?.as_ptr(),
             )
         })
-    }
-
-    pub(super) fn codegen_map_stub(&mut self, rvalue: &Rvalue) -> Result<LLVMValueRef> {
-        let llvm_ty = match rvalue {
-            Rvalue::MapAdd { .. } | Rvalue::MapUpdate { .. } => {
-                let inst_name = format!(
-                    "{}${}",
-                    self.sanitize("Result"),
-                    vec![Type::Void, Type::Named("Err".into())]
-                        .iter()
-                        .map(|ty| self.type_key(ty))
-                        .collect::<Vec<_>>()
-                        .join("__")
-                );
-                self.get_enum_type(&inst_name)?
-            }
-            Rvalue::MapDel { value_type, .. } => {
-                let inst_name = format!(
-                    "{}${}",
-                    self.sanitize("Result"),
-                    vec![value_type.clone(), Type::Named("Err".into())]
-                        .iter()
-                        .map(|ty| self.type_key(ty))
-                        .collect::<Vec<_>>()
-                        .join("__")
-                );
-                self.get_enum_type(&inst_name)?
-            }
-            Rvalue::MapGet { value_type, .. } => {
-                let inst_name = format!(
-                    "{}${}",
-                    self.sanitize("Option"),
-                    vec![value_type.clone()]
-                        .iter()
-                        .map(|ty| self.type_key(ty))
-                        .collect::<Vec<_>>()
-                        .join("__")
-                );
-                self.get_enum_type(&inst_name)?
-            }
-            Rvalue::MapHas { .. } => unsafe { LLVMInt1TypeInContext(self.context) },
-            Rvalue::MapKeys { key_type, .. } => {
-                let inst_name = format!("Vec${}", self.type_key(key_type));
-                self.get_struct_type(&inst_name)?
-            }
-            Rvalue::MapVals { value_type, .. } => {
-                let inst_name = format!("Vec${}", self.type_key(value_type));
-                self.get_struct_type(&inst_name)?
-            }
-            _ => unsafe { LLVMVoidTypeInContext(self.context) },
-        };
-        Ok(unsafe { LLVMConstNull(llvm_ty) })
     }
 
     pub(super) fn codegen_map_init(

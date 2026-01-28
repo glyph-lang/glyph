@@ -1,7 +1,11 @@
 use super::*;
 
 impl CodegenContext {
-    pub(super) fn codegen_string_literal(&mut self, content: &str, global_name: &str) -> Result<LLVMValueRef> {
+    pub(super) fn codegen_string_literal(
+        &mut self,
+        content: &str,
+        global_name: &str,
+    ) -> Result<LLVMValueRef> {
         if let Some(&ptr) = self.string_globals.get(global_name) {
             return Ok(ptr);
         }
@@ -12,7 +16,7 @@ impl CodegenContext {
             bytes.push(0);
 
             let i8_ty = LLVMInt8TypeInContext(self.context);
-            let array_ty = LLVMArrayType(i8_ty, bytes.len() as u32);
+            let array_ty = LLVMArrayType2(i8_ty, bytes.len() as u64);
 
             let name_c = CString::new(global_name)?;
             let global = LLVMAddGlobal(self.module, array_ty, name_c.as_ptr());
@@ -23,7 +27,7 @@ impl CodegenContext {
                 .iter()
                 .map(|b| LLVMConstInt(i8_ty, *b as u64, 0))
                 .collect();
-            let init = LLVMConstArray(i8_ty, const_bytes.as_mut_ptr(), const_bytes.len() as u32);
+            let init = LLVMConstArray2(i8_ty, const_bytes.as_mut_ptr(), const_bytes.len() as u64);
             LLVMSetInitializer(global, init);
 
             // Pointer to first character
@@ -452,44 +456,36 @@ impl CodegenContext {
 
         let result = unsafe {
             let parent_bb = LLVMGetInsertBlock(self.builder);
-            let parent_fn = unsafe { LLVMGetBasicBlockParent(parent_bb) };
-            let empty_bb = unsafe {
-                LLVMAppendBasicBlockInContext(
-                    self.context,
-                    parent_fn,
-                    CString::new("str.trim.empty")?.as_ptr(),
-                )
-            };
-            let start_bb = unsafe {
-                LLVMAppendBasicBlockInContext(
-                    self.context,
-                    parent_fn,
-                    CString::new("str.trim.start")?.as_ptr(),
-                )
-            };
-            let done_bb = unsafe {
-                LLVMAppendBasicBlockInContext(
-                    self.context,
-                    parent_fn,
-                    CString::new("str.trim.done")?.as_ptr(),
-                )
-            };
-            let len_zero = unsafe {
-                LLVMBuildICmp(
-                    self.builder,
-                    llvm_sys::LLVMIntPredicate::LLVMIntEQ,
-                    len_val,
-                    zero,
-                    CString::new("str.trim.len.zero")?.as_ptr(),
-                )
-            };
-            unsafe { LLVMBuildCondBr(self.builder, len_zero, empty_bb, start_bb) };
+            let parent_fn = LLVMGetBasicBlockParent(parent_bb);
+            let empty_bb = LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.trim.empty")?.as_ptr(),
+            );
+            let start_bb = LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.trim.start")?.as_ptr(),
+            );
+            let done_bb = LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.trim.done")?.as_ptr(),
+            );
+            let len_zero = LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                len_val,
+                zero,
+                CString::new("str.trim.len.zero")?.as_ptr(),
+            );
+            LLVMBuildCondBr(self.builder, len_zero, empty_bb, start_bb);
 
-            unsafe { LLVMPositionBuilderAtEnd(self.builder, empty_bb) };
+            LLVMPositionBuilderAtEnd(self.builder, empty_bb);
             let empty_val = self.codegen_string_empty(functions)?;
-            unsafe { LLVMBuildBr(self.builder, done_bb) };
+            LLVMBuildBr(self.builder, done_bb);
 
-            unsafe { LLVMPositionBuilderAtEnd(self.builder, start_bb) };
+            LLVMPositionBuilderAtEnd(self.builder, start_bb);
             let start_slot = LLVMBuildAlloca(
                 self.builder,
                 usize_ty,
@@ -981,7 +977,11 @@ impl CodegenContext {
         Ok(cmp_val)
     }
 
-    pub(super) fn codegen_hash_bytes(&mut self, ptr: LLVMValueRef, len: LLVMValueRef) -> Result<LLVMValueRef> {
+    pub(super) fn codegen_hash_bytes(
+        &mut self,
+        ptr: LLVMValueRef,
+        len: LLVMValueRef,
+    ) -> Result<LLVMValueRef> {
         let u64_ty = unsafe { LLVMInt64TypeInContext(self.context) };
         let usize_ty = unsafe { LLVMInt64TypeInContext(self.context) };
         let i8_ty = unsafe { LLVMInt8TypeInContext(self.context) };
@@ -1210,50 +1210,42 @@ impl CodegenContext {
                 CString::new("str.starts.gt")?.as_ptr(),
             );
             let parent_bb = LLVMGetInsertBlock(self.builder);
-            let parent_fn = unsafe { LLVMGetBasicBlockParent(parent_bb) };
-            let fail_bb = unsafe {
-                LLVMAppendBasicBlockInContext(
-                    self.context,
-                    parent_fn,
-                    CString::new("str.starts.fail")?.as_ptr(),
-                )
-            };
-            let body_bb = unsafe {
-                LLVMAppendBasicBlockInContext(
-                    self.context,
-                    parent_fn,
-                    CString::new("str.starts.body")?.as_ptr(),
-                )
-            };
-            let done_bb = unsafe {
-                LLVMAppendBasicBlockInContext(
-                    self.context,
-                    parent_fn,
-                    CString::new("str.starts.done")?.as_ptr(),
-                )
-            };
-            unsafe { LLVMBuildCondBr(self.builder, too_long, fail_bb, body_bb) };
+            let parent_fn = LLVMGetBasicBlockParent(parent_bb);
+            let fail_bb = LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.starts.fail")?.as_ptr(),
+            );
+            let body_bb = LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.starts.body")?.as_ptr(),
+            );
+            let done_bb = LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.starts.done")?.as_ptr(),
+            );
+            LLVMBuildCondBr(self.builder, too_long, fail_bb, body_bb);
 
-            unsafe { LLVMPositionBuilderAtEnd(self.builder, fail_bb) };
+            LLVMPositionBuilderAtEnd(self.builder, fail_bb);
             let false_val = LLVMConstInt(LLVMInt1TypeInContext(self.context), 0, 0);
-            unsafe { LLVMBuildBr(self.builder, done_bb) };
+            LLVMBuildBr(self.builder, done_bb);
 
-            unsafe { LLVMPositionBuilderAtEnd(self.builder, body_bb) };
+            LLVMPositionBuilderAtEnd(self.builder, body_bb);
             let cmp_val =
                 self.codegen_string_compare(base_val, needle_val, needle_len, functions)?;
-            let cmp_zero = unsafe {
-                LLVMBuildICmp(
-                    self.builder,
-                    llvm_sys::LLVMIntPredicate::LLVMIntEQ,
-                    cmp_val,
-                    LLVMConstInt(LLVMInt32TypeInContext(self.context), 0, 0),
-                    CString::new("str.starts.eq")?.as_ptr(),
-                )
-            };
-            unsafe { LLVMBuildBr(self.builder, done_bb) };
+            let cmp_zero = LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                cmp_val,
+                LLVMConstInt(LLVMInt32TypeInContext(self.context), 0, 0),
+                CString::new("str.starts.eq")?.as_ptr(),
+            );
+            LLVMBuildBr(self.builder, done_bb);
 
-            unsafe { LLVMPositionBuilderAtEnd(self.builder, done_bb) };
-            let phi = unsafe {
+            LLVMPositionBuilderAtEnd(self.builder, done_bb);
+            let phi = {
                 let phi_name = CString::new("str.starts.result")?;
                 let phi_node = LLVMBuildPhi(
                     self.builder,
@@ -1296,35 +1288,29 @@ impl CodegenContext {
                 CString::new("str.ends.gt")?.as_ptr(),
             );
             let parent_bb = LLVMGetInsertBlock(self.builder);
-            let parent_fn = unsafe { LLVMGetBasicBlockParent(parent_bb) };
-            let fail_bb = unsafe {
-                LLVMAppendBasicBlockInContext(
-                    self.context,
-                    parent_fn,
-                    CString::new("str.ends.fail")?.as_ptr(),
-                )
-            };
-            let body_bb = unsafe {
-                LLVMAppendBasicBlockInContext(
-                    self.context,
-                    parent_fn,
-                    CString::new("str.ends.body")?.as_ptr(),
-                )
-            };
-            let done_bb = unsafe {
-                LLVMAppendBasicBlockInContext(
-                    self.context,
-                    parent_fn,
-                    CString::new("str.ends.done")?.as_ptr(),
-                )
-            };
-            unsafe { LLVMBuildCondBr(self.builder, too_long, fail_bb, body_bb) };
+            let parent_fn = LLVMGetBasicBlockParent(parent_bb);
+            let fail_bb = LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.ends.fail")?.as_ptr(),
+            );
+            let body_bb = LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.ends.body")?.as_ptr(),
+            );
+            let done_bb = LLVMAppendBasicBlockInContext(
+                self.context,
+                parent_fn,
+                CString::new("str.ends.done")?.as_ptr(),
+            );
+            LLVMBuildCondBr(self.builder, too_long, fail_bb, body_bb);
 
-            unsafe { LLVMPositionBuilderAtEnd(self.builder, fail_bb) };
+            LLVMPositionBuilderAtEnd(self.builder, fail_bb);
             let false_val = LLVMConstInt(LLVMInt1TypeInContext(self.context), 0, 0);
-            unsafe { LLVMBuildBr(self.builder, done_bb) };
+            LLVMBuildBr(self.builder, done_bb);
 
-            unsafe { LLVMPositionBuilderAtEnd(self.builder, body_bb) };
+            LLVMPositionBuilderAtEnd(self.builder, body_bb);
             let i8_ty = LLVMInt8TypeInContext(self.context);
             let base_i8 = LLVMBuildBitCast(
                 self.builder,
