@@ -426,12 +426,12 @@ pub(crate) fn lower_match<'a>(
     });
 
     // Result local if needed
-    let mut result_local = if require_value {
-        expected.map(|ty| {
-            let l = ctx.fresh_local(None);
+    let result_local = if require_value {
+        let l = ctx.fresh_local(None);
+        if let Some(ty) = expected {
             ctx.locals[l.0 as usize].ty = Some(ty.clone());
-            l
-        })
+        }
+        Some(l)
     } else {
         None
     };
@@ -517,6 +517,7 @@ pub(crate) fn lower_match<'a>(
     let base_len = ctx.local_states.len();
     let base_states = ctx.local_states.clone();
     let mut merged_states = base_states.clone();
+    let mut any_reaches_join = false;
 
     for (idx, arm) in arms.iter().enumerate() {
         let arm_block = arm_blocks[idx];
@@ -563,16 +564,15 @@ pub(crate) fn lower_match<'a>(
         let arm_val = lower_value_with_expected(ctx, &arm.expr, arm_expected_ty.as_ref());
         if require_value {
             if let Some(val) = arm_val {
-                let res_local = *result_local.get_or_insert_with(|| {
-                    let l = ctx.fresh_local(None);
-                    ctx.locals[l.0 as usize].ty = match &val {
+                let res_local = result_local.expect("match result local missing");
+                if ctx.locals[res_local.0 as usize].ty.is_none() {
+                    ctx.locals[res_local.0 as usize].ty = match &val {
                         MirValue::Local(id) => ctx.locals[id.0 as usize].ty.clone(),
                         MirValue::Int(_) => Some(Type::I32),
                         MirValue::Bool(_) => Some(Type::Bool),
                         MirValue::Unit => None,
                     };
-                    l
-                });
+                }
 
                 if let Some(rv) = rvalue_from_value(val) {
                     ctx.push_inst(MirInst::Assign {
@@ -583,26 +583,36 @@ pub(crate) fn lower_match<'a>(
             }
         }
 
-        if !ctx.terminated() {
+        let arm_reaches_join = !ctx.terminated();
+        if arm_reaches_join {
             ctx.push_inst(MirInst::Goto(join_block));
         }
         ctx.exit_scope();
 
-        // Merge move-state back into the join state.
-        for i in 0..base_len {
-            merged_states[i] = match (merged_states[i], ctx.local_states[i]) {
-                (LocalState::Moved, _) | (_, LocalState::Moved) => LocalState::Moved,
-                (LocalState::Uninitialized, _) | (_, LocalState::Uninitialized) => {
-                    LocalState::Uninitialized
-                }
-                _ => LocalState::Initialized,
-            };
+        if arm_reaches_join {
+            any_reaches_join = true;
+            // Merge move-state back into the join state.
+            for i in 0..base_len {
+                merged_states[i] = match (merged_states[i], ctx.local_states[i]) {
+                    (LocalState::Moved, _) | (_, LocalState::Moved) => LocalState::Moved,
+                    (LocalState::Uninitialized, _) | (_, LocalState::Uninitialized) => {
+                        LocalState::Uninitialized
+                    }
+                    _ => LocalState::Initialized,
+                };
+            }
         }
     }
 
     // Apply merged local state for the join point.
-    for i in 0..base_len {
-        ctx.local_states[i] = merged_states[i];
+    if any_reaches_join {
+        for i in 0..base_len {
+            ctx.local_states[i] = merged_states[i];
+        }
+    } else {
+        for i in 0..base_len {
+            ctx.local_states[i] = base_states[i];
+        }
     }
 
     ctx.switch_to(join_block);

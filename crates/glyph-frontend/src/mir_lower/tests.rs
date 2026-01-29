@@ -374,6 +374,228 @@ fn lowers_match_arm_block_expression_values() {
 }
 
 #[test]
+fn return_temporary_string_is_not_dropped() {
+    let span = Span::new(0, 5);
+    let func = Function {
+        name: Ident("main".into()),
+        params: vec![],
+        ret_type: Some(path_ty("String", span)),
+        body: Block {
+            span,
+            stmts: vec![Stmt::Ret(
+                Some(Expr::Call {
+                    callee: Box::new(Expr::Ident(Ident("String::from_str".into()), span)),
+                    args: vec![Expr::Lit(Literal::Str("hi".into()), span)],
+                    span,
+                }),
+                span,
+            )],
+        },
+        span,
+    };
+
+    let module = Module {
+        imports: vec![],
+        items: vec![Item::Function(func)],
+    };
+
+    let (resolver, diags) = resolve_types(&module);
+    assert!(diags.is_empty());
+
+    let (mir, lower_diags) = lower_module(&module, &resolver);
+    assert!(
+        lower_diags.is_empty(),
+        "unexpected diagnostics: {:?}",
+        lower_diags
+    );
+
+    let main = mir
+        .functions
+        .iter()
+        .find(|f| f.name == "main")
+        .expect("main exists");
+
+    let ret_local = main
+        .blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .find_map(|inst| match inst {
+            MirInst::Return(Some(MirValue::Local(id))) => Some(*id),
+            _ => None,
+        })
+        .expect("return local");
+
+    let has_drop = main
+        .blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .any(|inst| matches!(inst, MirInst::Drop(local) if *local == ret_local));
+
+    assert!(
+        !has_drop,
+        "return local should not be dropped before return"
+    );
+}
+
+#[test]
+fn match_merge_ignores_terminated_arms_for_drops() {
+    let span = Span::new(0, 5);
+
+    let enum_def = Item::Enum(EnumDef {
+        name: Ident("Flag".into()),
+        generic_params: Vec::new(),
+        variants: vec![
+            EnumVariantDef {
+                name: Ident("Yes".into()),
+                payload: None,
+                span,
+            },
+            EnumVariantDef {
+                name: Ident("No".into()),
+                payload: None,
+                span,
+            },
+        ],
+        span,
+    });
+
+    let consume_fn = Item::Function(Function {
+        name: Ident("consume".into()),
+        params: vec![Param {
+            name: Ident("s".into()),
+            ty: Some(path_ty("String", span)),
+            span,
+        }],
+        ret_type: Some(path_ty("i32", span)),
+        body: Block {
+            span,
+            stmts: vec![Stmt::Ret(Some(Expr::Lit(Literal::Int(0), span)), span)],
+        },
+        span,
+    });
+
+    let match_expr = Expr::Match {
+        scrutinee: Box::new(Expr::Ident(Ident("flag".into()), span)),
+        arms: vec![
+            MatchArm {
+                pattern: MatchPattern::Variant {
+                    name: Ident("Yes".into()),
+                    binding: None,
+                },
+                expr: Expr::Block(Block {
+                    span,
+                    stmts: vec![
+                        Stmt::Expr(
+                            Expr::Call {
+                                callee: Box::new(Expr::Ident(Ident("consume".into()), span)),
+                                args: vec![Expr::Ident(Ident("s".into()), span)],
+                                span,
+                            },
+                            span,
+                        ),
+                        Stmt::Ret(Some(Expr::Lit(Literal::Int(1), span)), span),
+                    ],
+                }),
+                span,
+            },
+            MatchArm {
+                pattern: MatchPattern::Variant {
+                    name: Ident("No".into()),
+                    binding: None,
+                },
+                expr: Expr::Lit(Literal::Int(0), span),
+                span,
+            },
+        ],
+        span,
+    };
+
+    let main_fn = Item::Function(Function {
+        name: Ident("main".into()),
+        params: vec![],
+        ret_type: Some(path_ty("i32", span)),
+        body: Block {
+            span,
+            stmts: vec![
+                Stmt::Let {
+                    name: Ident("s".into()),
+                    ty: Some(path_ty("String", span)),
+                    mutable: false,
+                    value: Some(Expr::Call {
+                        callee: Box::new(Expr::Ident(Ident("String::from_str".into()), span)),
+                        args: vec![Expr::Lit(Literal::Str("hi".into()), span)],
+                        span,
+                    }),
+                    span,
+                },
+                Stmt::Let {
+                    name: Ident("flag".into()),
+                    ty: None,
+                    mutable: false,
+                    value: Some(Expr::Call {
+                        callee: Box::new(Expr::Ident(Ident("Yes".into()), span)),
+                        args: vec![],
+                        span,
+                    }),
+                    span,
+                },
+                Stmt::Let {
+                    name: Ident("v".into()),
+                    ty: None,
+                    mutable: false,
+                    value: Some(match_expr),
+                    span,
+                },
+                Stmt::Ret(Some(Expr::Ident(Ident("v".into()), span)), span),
+            ],
+        },
+        span,
+    });
+
+    let module = Module {
+        imports: vec![],
+        items: vec![enum_def, consume_fn, main_fn],
+    };
+
+    let (resolver, diags) = resolve_types(&module);
+    assert!(diags.is_empty());
+
+    let (mir, lower_diags) = lower_module(&module, &resolver);
+    assert!(
+        lower_diags.is_empty(),
+        "unexpected diagnostics: {:?}",
+        lower_diags
+    );
+
+    let main = mir
+        .functions
+        .iter()
+        .find(|f| f.name == "main")
+        .expect("main exists");
+
+    let s_local = main
+        .locals
+        .iter()
+        .enumerate()
+        .find_map(|(idx, local)| {
+            if local.name.as_deref() == Some("s") {
+                Some(glyph_core::mir::LocalId(idx as u32))
+            } else {
+                None
+            }
+        })
+        .expect("s local");
+
+    let has_drop = main
+        .blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .any(|inst| matches!(inst, MirInst::Drop(local) if *local == s_local));
+
+    assert!(has_drop, "expected drop for s on reachable join path");
+}
+
+#[test]
 fn struct_literal_missing_field_reports_error() {
     let span = Span::new(0, 5);
     let point_struct = Item::Struct(StructDef {

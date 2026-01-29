@@ -188,20 +188,14 @@ impl CodegenContext {
                 arg_ptr_ptr,
                 CString::new("argv.arg")?.as_ptr(),
             );
-            let name = CString::new("strdup")?;
-            let strdup_fn = LLVMGetNamedFunction(self.module, name.as_ptr());
-            if strdup_fn.is_null() {
-                bail!("missing strdup declaration for argv initialization");
-            }
+            let strdup_fn = self.ensure_strdup_fn()?;
             let mut args = vec![arg_ptr];
-            let dup = LLVMBuildCall2(
-                self.builder,
+            let dup = self.build_call2(
                 self.strdup_function_type(),
                 strdup_fn,
-                args.as_mut_ptr(),
-                args.len() as u32,
-                CString::new("argv.dup")?.as_ptr(),
-            );
+                &mut args,
+                "argv.dup",
+            )?;
             self.codegen_vec_push_no_grow(vec_ptr, &Type::String, dup)?;
             let next_idx = LLVMBuildAdd(
                 self.builder,

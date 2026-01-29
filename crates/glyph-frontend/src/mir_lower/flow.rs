@@ -147,6 +147,11 @@ pub(crate) fn lower_block_with_expected<'a>(
                 let value = expr
                     .as_ref()
                     .and_then(|e| lower_value_with_expected(ctx, e, expected.as_ref()));
+                if let Some(MirValue::Local(local)) = value.as_ref() {
+                    if let Some(state) = ctx.local_states.get_mut(local.0 as usize) {
+                        *state = LocalState::Moved;
+                    }
+                }
                 ctx.drop_all_active_locals();
                 ctx.push_inst(MirInst::Return(value));
             }
