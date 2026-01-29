@@ -5,6 +5,9 @@ fn main() -> i32 {
   let base_concat = String::from_str("  hello world  ")
   let _concat = base_concat.concat(String::from_str("!"))
 
+  let base_plus = String::from_str("  hello ")
+  let _plus = base_plus + String::from_str("world")
+
   let base_slice = String::from_str("  hello world  ")
   let _slice = base_slice.slice(2, 5)
 

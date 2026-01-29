@@ -106,12 +106,15 @@ pub(crate) fn lower_map_add<'a>(
             return None;
         }
     };
-    let (key_type, value_type) = ctx
+    let Some((key_type, value_type)) = ctx
         .locals
         .get(receiver_local.0 as usize)
         .and_then(|l| l.ty.as_ref())
         .and_then(map_key_value_types)
-        .unwrap_or((Type::I32, Type::I32));
+    else {
+        ctx.error("get is only supported on Map", Some(span));
+        return None;
+    };
 
     let key = lower_value(ctx, &args[0])?;
     let value = lower_value(ctx, &args[1])?;

@@ -12,8 +12,8 @@ use super::builtins::{
     lower_own_from_raw, lower_own_into_raw, lower_own_new, lower_print_builtin, lower_shared_clone,
     lower_shared_new, lower_string_concat, lower_string_ends_with, lower_string_from,
     lower_string_len, lower_string_slice, lower_string_split, lower_string_starts_with,
-    lower_string_trim, lower_vec_len, lower_vec_pop, lower_vec_push, lower_vec_static_new,
-    lower_vec_static_with_capacity,
+    lower_string_trim, lower_vec_get, lower_vec_len, lower_vec_pop, lower_vec_push,
+    lower_vec_static_new, lower_vec_static_with_capacity,
 };
 use super::context::LowerCtx;
 use super::expr::{lower_array_len, lower_value};
@@ -232,7 +232,12 @@ pub(crate) fn lower_method_call<'a>(
         "add" => return lower_map_add(ctx, receiver, args, span),
         "update" => return lower_map_update(ctx, receiver, args, span),
         "del" => return lower_map_del(ctx, receiver, args, span),
-        "get" => return lower_map_get(ctx, receiver, args, span),
+        "get" => {
+            if let Some(rv) = lower_vec_get(ctx, receiver, args, span) {
+                return Some(rv);
+            }
+            return lower_map_get(ctx, receiver, args, span);
+        }
         "has" => return lower_map_has(ctx, receiver, args, span),
         "keys" => return lower_map_keys(ctx, receiver, args, span),
         "vals" => return lower_map_vals(ctx, receiver, args, span),

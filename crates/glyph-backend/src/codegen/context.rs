@@ -42,6 +42,37 @@ impl CodegenContext {
         }
     }
 
+    pub(super) fn build_call2(
+        &mut self,
+        fn_ty: LLVMTypeRef,
+        callee: LLVMValueRef,
+        args: &mut [LLVMValueRef],
+        name: &str,
+    ) -> Result<LLVMValueRef> {
+        unsafe {
+            let ret_ty = LLVMGetReturnType(fn_ty);
+            let name = if LLVMGetTypeKind(ret_ty) == llvm_sys::LLVMTypeKind::LLVMVoidTypeKind {
+                ""
+            } else {
+                name
+            };
+            let name_c = CString::new(name)?;
+            let args_ptr = if args.is_empty() {
+                std::ptr::null_mut()
+            } else {
+                args.as_mut_ptr()
+            };
+            Ok(LLVMBuildCall2(
+                self.builder,
+                fn_ty,
+                callee,
+                args_ptr,
+                args.len() as u32,
+                name_c.as_ptr(),
+            ))
+        }
+    }
+
     pub(super) fn debug_log(&self, msg: &str) {
         if std::env::var("GLYPH_DEBUG_CODEGEN").is_ok() {
             eprintln!("[codegen] {}", msg);

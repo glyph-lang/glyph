@@ -350,6 +350,25 @@ mod tests {
     }
 
     #[test]
+    fn string_from_str_rejects_non_string_arg() {
+        let source = "from std/enums import Option\nfn main() {\n  let x = Option::Some(1)\n  let y = String::from_str(x)\n}\n";
+        let output = compile_source(
+            source,
+            FrontendOptions {
+                emit_mir: true,
+                include_std: true,
+            },
+        );
+        assert!(
+            output.diagnostics.iter().any(|d| d
+                .message
+                .contains("String::from_str expects a str or String")),
+            "expected String::from_str diagnostic, got: {:?}",
+            output.diagnostics
+        );
+    }
+
+    #[test]
     fn compiles_local_imports_from_modules_map() {
         let main_src = "from utils import helper\nfn main() -> i32 { ret helper() }";
         let utils_src = "fn helper() -> i32 { ret 1 }";

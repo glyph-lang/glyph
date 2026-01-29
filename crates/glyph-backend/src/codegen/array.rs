@@ -93,7 +93,11 @@ impl CodegenContext {
         Ok(unsafe { LLVMBuildLoad2(self.builder, elem_llvm_ty, elem_ptr, load_name.as_ptr()) })
     }
 
-    pub(super) fn codegen_array_len(&mut self, base: LocalId, func: &MirFunction) -> Result<LLVMValueRef> {
+    pub(super) fn codegen_array_len(
+        &mut self,
+        base: LocalId,
+        func: &MirFunction,
+    ) -> Result<LLVMValueRef> {
         let base_ty = func
             .locals
             .get(base.0 as usize)
@@ -109,7 +113,11 @@ impl CodegenContext {
         Ok(unsafe { LLVMConstInt(i32_ty, size as u64, 0) })
     }
 
-    pub(super) fn emit_bounds_check(&mut self, index_val: LLVMValueRef, array_size: usize) -> Result<()> {
+    pub(super) fn emit_bounds_check(
+        &mut self,
+        index_val: LLVMValueRef,
+        array_size: usize,
+    ) -> Result<()> {
         unsafe {
             let i32_ty = LLVMInt32TypeInContext(self.context);
             let zero = LLVMConstInt(i32_ty, 0, 0);
@@ -225,15 +233,8 @@ impl CodegenContext {
             if trap_fn.is_null() {
                 trap_fn = LLVMAddFunction(self.module, trap_name.as_ptr(), trap_ty);
             }
-            let call_name = CString::new("panic.trap")?;
-            LLVMBuildCall2(
-                self.builder,
-                trap_ty,
-                trap_fn,
-                std::ptr::null_mut(),
-                0,
-                call_name.as_ptr(),
-            );
+            let mut args: Vec<LLVMValueRef> = Vec::new();
+            let _ = self.build_call2(trap_ty, trap_fn, &mut args, "panic.trap")?;
         }
         Ok(())
     }

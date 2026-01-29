@@ -333,10 +333,12 @@ fn rewrite_type(
             worklist,
             diagnostics,
         ))),
-        Type::Param(_p) => {
-            // Fallback: treat unresolved params as i32 to keep codegen moving.
-            // TODO: replace with proper contextual substitution.
-            Type::I32
+        Type::Param(p) => {
+            diagnostics.push(Diagnostic::error(
+                format!("unresolved generic parameter '{}'", p),
+                None,
+            ));
+            Type::Param(p.clone())
         }
         Type::Tuple(elem_types) => {
             let rewritten_elems: Vec<Type> = elem_types
@@ -1007,5 +1009,30 @@ mod tests {
         assert_eq!(en.variants.len(), 2);
         assert_eq!(en.variants[0].payload, Some(Type::I32));
         assert_eq!(en.variants[1].payload, Some(Type::String));
+    }
+
+    #[test]
+    fn monomorphize_reports_unresolved_param() {
+        let mut mir = MirModule::default();
+        mir.functions.push(glyph_core::mir::MirFunction {
+            name: "main".into(),
+            ret_type: None,
+            params: vec![],
+            locals: vec![glyph_core::mir::Local {
+                name: Some("x".into()),
+                ty: Some(Type::Param("T".into())),
+                mutable: false,
+            }],
+            blocks: vec![glyph_core::mir::MirBlock { insts: vec![] }],
+        });
+
+        let diags = monomorphize_mir(&mut mir, &HashMap::new());
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("unresolved generic parameter")),
+            "expected unresolved param diagnostic, got: {:?}",
+            diags
+        );
     }
 }

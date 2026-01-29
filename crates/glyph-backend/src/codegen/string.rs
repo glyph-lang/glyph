@@ -180,7 +180,10 @@ impl CodegenContext {
         functions: &HashMap<String, LLVMValueRef>,
     ) -> Result<LLVMValueRef> {
         let left_val = self.codegen_string_base_value(base, func, local_map)?;
-        let right_val = self.codegen_value(value, func, local_map)?;
+        let right_val = match value {
+            MirValue::Local(id) => self.codegen_string_base_value(*id, func, local_map)?,
+            _ => self.codegen_value(value, func, local_map)?,
+        };
         let left_len = self.codegen_string_len_value(left_val, functions)?;
         let right_len = self.codegen_string_len_value(right_val, functions)?;
         let total_len = unsafe {

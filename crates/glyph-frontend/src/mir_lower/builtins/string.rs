@@ -5,6 +5,7 @@ use glyph_core::types::Type;
 
 use super::super::context::LowerCtx;
 use super::super::expr::lower_value;
+use super::super::value::infer_value_type;
 
 fn string_receiver_local<'a>(
     ctx: &mut LowerCtx<'a>,
@@ -43,6 +44,14 @@ pub(crate) fn lower_string_from<'a>(
         return None;
     }
     let value = lower_value(ctx, &args[0])?;
+    if let Some(arg_ty) = infer_value_type(&value, ctx) {
+        let is_string_like = matches!(arg_ty, Type::Str | Type::String)
+            || matches!(arg_ty, Type::Ref(inner, _) if matches!(inner.as_ref(), Type::Str | Type::String));
+        if !is_string_like {
+            ctx.error("String::from_str expects a str or String", Some(span));
+            return None;
+        }
+    }
 
     let tmp = ctx.fresh_local(None);
     ctx.locals[tmp.0 as usize].ty = Some(Type::String);

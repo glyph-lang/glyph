@@ -180,6 +180,31 @@ fn lower_binary<'a>(
     let rhs_val = lower_value(ctx, rhs)?;
     let tmp = ctx.fresh_local(None);
 
+    if matches!(op, glyph_core::ast::BinaryOp::Add) {
+        let lhs_ty = infer_value_type(&lhs_val, ctx);
+        let rhs_ty = infer_value_type(&rhs_val, ctx);
+        let is_string_like = |ty: Option<&Type>| {
+            matches!(ty, Some(Type::String | Type::Str))
+                || matches!(ty, Some(Type::Ref(inner, _)) if matches!(inner.as_ref(), Type::String | Type::Str))
+        };
+
+        if is_string_like(lhs_ty.as_ref()) && is_string_like(rhs_ty.as_ref()) {
+            let base_local = match &lhs_val {
+                MirValue::Local(id) => *id,
+                _ => return None,
+            };
+            ctx.locals[tmp.0 as usize].ty = Some(Type::String);
+            ctx.push_inst(MirInst::Assign {
+                local: tmp,
+                value: Rvalue::StringConcat {
+                    base: base_local,
+                    value: rhs_val,
+                },
+            });
+            return Some(Rvalue::Move(tmp));
+        }
+    }
+
     // Comparisons always produce bool.
     //
     // If we leave the type unset, codegen will default the local slot to i32,

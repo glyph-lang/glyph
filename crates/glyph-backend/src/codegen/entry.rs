@@ -266,15 +266,8 @@ impl CodegenContext {
             let _ = self.codegen_sys_argv_build(argc_val, argv_param)?;
 
             let fn_ty = self.llvm_function_type(main_mir)?;
-            let call_name = CString::new("main.call")?;
-            let call_val = LLVMBuildCall2(
-                self.builder,
-                fn_ty,
-                user_main,
-                std::ptr::null_mut(),
-                0,
-                call_name.as_ptr(),
-            );
+            let mut args: Vec<LLVMValueRef> = Vec::new();
+            let call_val = self.build_call2(fn_ty, user_main, &mut args, "main.call")?;
 
             match main_mir.ret_type.as_ref() {
                 None | Some(Type::Void) => {

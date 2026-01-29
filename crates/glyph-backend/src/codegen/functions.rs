@@ -111,7 +111,10 @@ impl CodegenContext {
         })
     }
 
-    pub(super) fn llvm_extern_function_type(&self, func: &MirExternFunction) -> Result<LLVMTypeRef> {
+    pub(super) fn llvm_extern_function_type(
+        &self,
+        func: &MirExternFunction,
+    ) -> Result<LLVMTypeRef> {
         let ret_type = func
             .ret_type
             .as_ref()
@@ -236,17 +239,37 @@ impl CodegenContext {
                 MirInst::Assign { local, value } => {
                     self.debug_log(&format!("codegen_inst assign {}", self.rvalue_tag(value)));
                     let val = self.codegen_rvalue(value, func, local_map, functions, mir_module)?;
-                    let local_ptr = local_map
-                        .get(local)
-                        .ok_or_else(|| anyhow!("undefined local {:?}", local))?;
-                    LLVMBuildStore(self.builder, val, *local_ptr);
+                    let local_ty = func
+                        .locals
+                        .get(local.0 as usize)
+                        .and_then(|l| l.ty.as_ref());
+                    let is_void = matches!(local_ty, Some(Type::Void))
+                        || matches!(local_ty, Some(Type::Tuple(elem_types)) if elem_types.is_empty());
+                    if !is_void {
+                        let local_ptr = local_map
+                            .get(local)
+                            .ok_or_else(|| anyhow!("undefined local {:?}", local))?;
+                        LLVMBuildStore(self.builder, val, *local_ptr);
+                    }
                 }
                 MirInst::Return(val) => {
                     if let Some(v) = val {
                         let ret_val = self.codegen_value(v, func, local_map)?;
                         LLVMBuildRet(self.builder, ret_val);
                     } else {
-                        LLVMBuildRetVoid(self.builder);
+                        match func.ret_type.as_ref() {
+                            None | Some(Type::Void) => {
+                                LLVMBuildRetVoid(self.builder);
+                            }
+                            Some(Type::Tuple(elem_types)) if elem_types.is_empty() => {
+                                LLVMBuildRetVoid(self.builder);
+                            }
+                            Some(ret_ty) => {
+                                let llvm_ret_ty = self.get_llvm_type(ret_ty)?;
+                                let zero = LLVMConstNull(llvm_ret_ty);
+                                LLVMBuildRet(self.builder, zero);
+                            }
+                        }
                     }
                 }
                 MirInst::Goto(target) => {

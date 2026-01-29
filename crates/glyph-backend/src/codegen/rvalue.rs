@@ -197,15 +197,56 @@ impl CodegenContext {
                     }
                 }
                 Rvalue::Binary { op, lhs, rhs } => {
+                    use glyph_core::ast::BinaryOp;
+                    let name = CString::new("binop")?;
+
+                    let lhs_ty = self.mir_value_type(lhs, func);
+                    let rhs_ty = self.mir_value_type(rhs, func);
+                    let is_string_like = |ty: Option<&Type>| {
+                        matches!(ty, Some(Type::Str | Type::String))
+                            || matches!(
+                                ty,
+                                Some(Type::Ref(inner, _))
+                                    if matches!(inner.as_ref(), Type::Str | Type::String)
+                            )
+                    };
+
+                    if matches!(op, BinaryOp::Eq | BinaryOp::Ne)
+                        && is_string_like(lhs_ty.as_ref())
+                        && is_string_like(rhs_ty.as_ref())
+                    {
+                        let lhs_val = match lhs {
+                            MirValue::Local(id) => {
+                                self.codegen_string_base_value(*id, func, local_map)?
+                            }
+                            _ => self.codegen_value(lhs, func, local_map)?,
+                        };
+                        let rhs_val = match rhs {
+                            MirValue::Local(id) => {
+                                self.codegen_string_base_value(*id, func, local_map)?
+                            }
+                            _ => self.codegen_value(rhs, func, local_map)?,
+                        };
+                        let eq_val = self.codegen_string_eq(lhs_val, rhs_val, functions)?;
+                        if matches!(op, BinaryOp::Ne) {
+                            let one = LLVMConstInt(LLVMInt1TypeInContext(self.context), 1, 0);
+                            return Ok(LLVMBuildXor(
+                                self.builder,
+                                eq_val,
+                                one,
+                                CString::new("str.ne")?.as_ptr(),
+                            ));
+                        }
+                        return Ok(eq_val);
+                    }
+
                     let lhs_val0 = self.codegen_value(lhs, func, local_map)?;
                     let rhs_val0 = self.codegen_value(rhs, func, local_map)?;
-                    let name = CString::new("binop")?;
 
                     // Integer literals in MIR are currently untyped and codegen as i32.
                     // Coerce integer widths so operations like `usize + 1` work.
                     let (lhs_val, rhs_val) = self.coerce_int_binop(lhs_val0, rhs_val0);
 
-                    use glyph_core::ast::BinaryOp;
                     let result = match op {
                         BinaryOp::Add => {
                             LLVMBuildAdd(self.builder, lhs_val, rhs_val, name.as_ptr())
@@ -573,15 +614,7 @@ impl CodegenContext {
                         llvm_args.push(arg_val);
                     }
 
-                    let call_name = CString::new("call")?;
-                    Ok(LLVMBuildCall2(
-                        self.builder,
-                        fn_ty,
-                        callee,
-                        llvm_args.as_mut_ptr(),
-                        llvm_args.len() as u32,
-                        call_name.as_ptr(),
-                    ))
+                    self.build_call2(fn_ty, callee, &mut llvm_args, "call")
                 }
                 Rvalue::Ref { base, .. } => {
                     let base_ptr = local_map

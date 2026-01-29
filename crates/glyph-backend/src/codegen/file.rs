@@ -315,18 +315,9 @@ impl CodegenContext {
         unsafe { LLVMBuildBr(self.builder, done_bb) };
 
         unsafe { LLVMPositionBuilderAtEnd(self.builder, alloc_bb) };
-        unsafe {
-            let mut rewind_args = vec![handle_val];
-            let rewind_ty = self.function_type_for("rewind")?;
-            LLVMBuildCall2(
-                self.builder,
-                rewind_ty,
-                rewind_fn,
-                rewind_args.as_mut_ptr(),
-                rewind_args.len() as u32,
-                CString::new("file.rewind")?.as_ptr(),
-            );
-        }
+        let mut rewind_args = vec![handle_val];
+        let rewind_ty = self.function_type_for("rewind")?;
+        let _ = self.build_call2(rewind_ty, rewind_fn, &mut rewind_args, "file.rewind")?;
 
         let size_plus_one = unsafe {
             LLVMBuildAdd(
