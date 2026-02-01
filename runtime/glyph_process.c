@@ -20,16 +20,16 @@ typedef struct {
 
 extern char** environ;
 
-int32_t glyph_process_run(const char* cmd, GlyphVec args) {
+int32_t glyph_process_run(const char* cmd, const GlyphVec* args) {
     if (cmd == NULL) {
         return -EINVAL;
     }
 
-    // args.data points to an array of `char*`.
-    char** arg_ptrs = (char**)args.data;
+    // args->data points to an array of `char*`.
+    char** arg_ptrs = (char**)args->data;
 
     // argv layout: [cmd] + args + [NULL]
-    int64_t argc_extra = args.len;
+    int64_t argc_extra = args->len;
     if (argc_extra < 0) {
         return -EINVAL;
     }
@@ -41,7 +41,7 @@ int32_t glyph_process_run(const char* cmd, GlyphVec args) {
     }
 
     argv[0] = (char*)cmd;
-    for (int64_t i = 0; i < args.len; i++) {
+    for (int64_t i = 0; i < args->len; i++) {
         argv[(size_t)i + 1] = arg_ptrs[i];
     }
     argv[argv_len - 1] = NULL;
@@ -74,7 +74,7 @@ int32_t glyph_process_run(const char* cmd, GlyphVec args) {
 
 #include <errno.h>
 
-int32_t glyph_process_run(const char* cmd, GlyphVec args) {
+int32_t glyph_process_run(const char* cmd, const GlyphVec* args) {
     (void)cmd;
     (void)args;
     return -ENOSYS;

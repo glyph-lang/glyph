@@ -873,9 +873,13 @@ pub fn std_modules() -> HashMap<String, Module> {
             },
             Param {
                 name: Ident("args".into()),
-                ty: Some(TypeExpr::App {
-                    base: Box::new(tp("Vec", span)),
-                    args: vec![tp("String", span)],
+                ty: Some(TypeExpr::Ref {
+                    mutability: Mutability::Immutable,
+                    inner: Box::new(TypeExpr::App {
+                        base: Box::new(tp("Vec", span)),
+                        args: vec![tp("String", span)],
+                        span,
+                    }),
                     span,
                 }),
                 span,

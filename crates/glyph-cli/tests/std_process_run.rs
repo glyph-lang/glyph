@@ -61,7 +61,7 @@ fn std_process_run_true_returns_0() {
             let mut args: Vec<String> = Vec::new()
             args.push(String::from_str("x"))
             let _ = args.pop()
-            ret run("true", args)
+            ret run("true", &args)
         }
     "#;
     assert_eq!(build_and_run_exit_code(source), 0);
@@ -78,8 +78,25 @@ fn std_process_run_false_returns_1() {
             let mut args: Vec<String> = Vec::new()
             args.push(String::from_str("x"))
             let _ = args.pop()
-            ret run("false", args)
+            ret run("false", &args)
         }
     "#;
     assert_eq!(build_and_run_exit_code(source), 1);
+}
+
+#[cfg(all(feature = "codegen", unix))]
+#[test]
+fn std_process_run_with_args() {
+    let source = r#"
+        from std/process import run
+        from std/vec import Vec
+
+        fn main() -> i32 {
+            let mut args: Vec<String> = Vec::new()
+            args.push(String::from_str("-c"))
+            args.push(String::from_str("echo hi"))
+            ret run("sh", &args)
+        }
+    "#;
+    assert_eq!(build_and_run_exit_code(source), 0);
 }

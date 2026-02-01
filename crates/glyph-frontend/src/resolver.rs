@@ -6,7 +6,7 @@ use glyph_core::{
     ast::{BinaryOp, ConstDef, Expr, Ident, Item, Literal, Module, StructDef, TypeExpr},
     diag::Diagnostic,
     span::Span,
-    types::{EnumType, StructType, Type},
+    types::{EnumType, Mutability, StructType, Type},
 };
 
 /// Context containing resolved type information
@@ -1598,6 +1598,17 @@ fn resolve_ffi_type(name: &str) -> Option<Type> {
             base: "Vec".to_string(),
             args: vec![inner_ty],
         });
+    }
+
+    // Allow &Vec<T> for supported T (pass Vec by reference to C)
+    if trimmed.starts_with("&Vec<") && trimmed.ends_with('>') {
+        let inner = trimmed.trim_start_matches("&Vec<").trim_end_matches('>');
+        let inner_ty = resolve_ffi_type(inner)?;
+        let vec_ty = Type::App {
+            base: "Vec".to_string(),
+            args: vec![inner_ty],
+        };
+        return Some(Type::Ref(Box::new(vec_ty), Mutability::Immutable));
     }
 
     None
