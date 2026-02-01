@@ -67,7 +67,10 @@ impl Linker {
 
         // Link against the Glyph runtime library if available
         if let Some(runtime_path) = &opts.runtime_lib_path {
+            eprintln!("[DEBUG-LINKER] Using runtime library: {}", runtime_path.display());
             cmd.arg(runtime_path);
+        } else {
+            eprintln!("[DEBUG-LINKER] WARNING: No runtime library path provided!");
         }
 
         // Add library search paths
@@ -114,7 +117,10 @@ impl Linker {
 
         // Link against the Glyph runtime library if available
         if let Some(runtime_path) = &opts.runtime_lib_path {
+            eprintln!("[DEBUG-LINKER] Using runtime library: {}", runtime_path.display());
             cmd.arg(runtime_path);
+        } else {
+            eprintln!("[DEBUG-LINKER] WARNING: No runtime library path provided!");
         }
 
         // Add library search paths

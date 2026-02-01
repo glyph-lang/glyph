@@ -249,6 +249,9 @@ impl CodegenContext {
                         let local_ptr = local_map
                             .get(local)
                             .ok_or_else(|| anyhow!("undefined local {:?}", local))?;
+                        let target_ty = self.local_llvm_type(func, *local)?;
+                        let signed = matches!(local_ty, Some(Type::I8 | Type::I32 | Type::I64));
+                        let val = self.coerce_int_value(val, target_ty, signed);
                         LLVMBuildStore(self.builder, val, *local_ptr);
                     }
                 }
