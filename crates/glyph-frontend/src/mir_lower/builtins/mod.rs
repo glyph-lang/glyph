@@ -17,8 +17,9 @@ pub(crate) use ptr::{
     lower_own_from_raw, lower_own_into_raw, lower_own_new, lower_shared_clone, lower_shared_new,
 };
 pub(crate) use string::{
-    lower_string_concat, lower_string_ends_with, lower_string_from, lower_string_len,
-    lower_string_slice, lower_string_split, lower_string_starts_with, lower_string_trim,
+    lower_string_clone, lower_string_concat, lower_string_ends_with, lower_string_from,
+    lower_string_len, lower_string_slice, lower_string_split, lower_string_starts_with,
+    lower_string_trim,
 };
 pub(crate) use vec::{
     lower_vec_get, lower_vec_len, lower_vec_pop, lower_vec_push, lower_vec_static_new,

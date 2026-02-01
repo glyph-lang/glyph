@@ -1,0 +1,13 @@
+from std/process import run
+from std/vec import Vec
+from std import println
+
+fn main() -> i32 {
+  println("repro: run with args")
+
+  let mut args: Vec<String> = Vec::new()
+  args.push(String::from_str("-c"))
+  args.push(String::from_str("echo hi"))
+
+  ret run("sh", &args)
+}

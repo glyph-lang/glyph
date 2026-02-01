@@ -1,0 +1,117 @@
+from std import String
+from std/io import puts
+
+// Multiple nested structs to make the outer struct large (~160 bytes like Session)
+struct Config1 {
+  pub field1: String,
+  pub field2: String
+}
+
+struct Config2 {
+  pub field3: String,
+  pub field4: String,
+  pub field5: String
+}
+
+struct Config3 {
+  pub field6: String,
+  pub field7: String
+}
+
+struct Data {
+  pub item1: String,
+  pub item2: String,
+  pub item3: String,
+  pub item4: String,
+  pub item5: String,
+  pub item6: String,
+  pub item7: String
+}
+
+// Large outer struct containing multiple nested structs
+// Total size: ~160 bytes (similar to Session)
+struct LargeStruct {
+  pub id: i32,
+  pub name: String,
+  pub phase: String,
+  pub data: Data,
+  pub config1: Config1,
+  pub config2: Config3,
+  pub config3: Config2
+}
+
+// Helper function that encodes Config1
+fn encode_config1(cfg: Config1) -> String {
+  ret cfg.field1.clone() + "," + cfg.field2.clone()
+}
+
+// Helper function that encodes Config2
+fn encode_config2(cfg: Config2) -> String {
+  ret cfg.field3.clone() + "," + cfg.field4.clone() + "," + cfg.field5.clone()
+}
+
+// Helper function that encodes Config3
+fn encode_config3(cfg: Config3) -> String {
+  ret cfg.field6.clone() + "," + cfg.field7.clone()
+}
+
+// Helper function that encodes Data
+fn encode_data(data: Data) -> String {
+  ret data.item1.clone() + "," + data.item2.clone()
+}
+
+// This function takes LargeStruct by value and accesses nested struct fields
+// BUG: Passing nested structs by value to helper functions causes crash/corruption
+fn process_large(large: LargeStruct) -> String {
+  let mut result = large.name.clone()
+  result = result + ":" + large.phase.clone()
+  result = result + "|data=" + encode_data(large.data)
+  result = result + "|cfg1=" + encode_config1(large.config1)
+  result = result + "|cfg2=" + encode_config3(large.config2)
+  result = result + "|cfg3=" + encode_config2(large.config3)
+  ret result
+}
+
+fn main() -> i32 {
+  let data = Data {
+    item1: String::from_str("docs/prd.md"),
+    item2: String::from_str("docs/requirements.md"),
+    item3: String::from_str("docs/architecture.md"),
+    item4: String::from_str("docs/plan.md"),
+    item5: String::from_str("docs/plan.json"),
+    item6: String::from_str("docs/completion.md"),
+    item7: String::from_str("docs/completion.json")
+  }
+
+  let config1 = Config1 {
+    field1: String::from_str("value1"),
+    field2: String::from_str("value2")
+  }
+
+  let config2 = Config2 {
+    field3: String::from_str("value3"),
+    field4: String::from_str("value4"),
+    field5: String::from_str("value5")
+  }
+
+  let config3 = Config3 {
+    field6: String::from_str("epics"),
+    field7: String::from_str("5")
+  }
+
+  let large = LargeStruct {
+    id: 1,
+    name: String::from_str("test_project"),
+    phase: String::from_str("requirements"),
+    data: data,
+    config1: config1,
+    config2: config3,
+    config3: config2
+  }
+
+  // Passing LargeStruct by value and accessing nested struct fields
+  let result = process_large(large)
+  let _ = puts(result)
+
+  ret 0
+}

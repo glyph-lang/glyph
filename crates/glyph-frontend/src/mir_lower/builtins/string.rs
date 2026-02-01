@@ -3,7 +3,7 @@ use glyph_core::mir::{LocalId, MirInst, MirValue, Rvalue};
 use glyph_core::span::Span;
 use glyph_core::types::Type;
 
-use super::super::context::LowerCtx;
+use super::super::context::{LocalState, LowerCtx};
 use super::super::expr::lower_value;
 use super::super::value::infer_value_type;
 
@@ -207,6 +207,95 @@ pub(crate) fn lower_string_starts_with<'a>(
             needle,
         },
     });
+    Some(Rvalue::Move(tmp))
+}
+
+pub(crate) fn lower_string_clone<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if !args.is_empty() {
+        ctx.error("clone() does not take arguments", Some(span));
+        return None;
+    }
+
+    let (receiver_local, skip_drop) = match base {
+        Expr::Ident(name, _) => {
+            let Some(local) = ctx.bindings.get(name.0.as_str()).copied() else {
+                ctx.error(format!("unknown identifier '{}'", name.0), Some(span));
+                return None;
+            };
+            if !ctx.consume_local(local, Some(span)) {
+                return None;
+            }
+            if ctx.local_needs_drop(local) {
+                if let Some(state) = ctx.local_states.get_mut(local.0 as usize) {
+                    *state = LocalState::Initialized;
+                }
+            }
+            (local, false)
+        }
+        Expr::FieldAccess {
+            base: field_base, ..
+        } => {
+            let skip_drop = match field_base.as_ref() {
+                Expr::Ident(_, _) => true,
+                Expr::Ref { expr, .. } => matches!(expr.as_ref(), Expr::Ident(_, _)),
+                _ => false,
+            };
+            let field_val = lower_value(ctx, base)?;
+            let field_local = match field_val {
+                MirValue::Local(id) => id,
+                _ => {
+                    ctx.error("string clone receiver must be a local", Some(span));
+                    return None;
+                }
+            };
+            (field_local, skip_drop)
+        }
+        _ => {
+            let value = lower_value(ctx, base)?;
+            let local = match value {
+                MirValue::Local(id) => id,
+                _ => {
+                    ctx.error("string clone receiver must be a local", Some(span));
+                    return None;
+                }
+            };
+            (local, false)
+        }
+    };
+
+    let receiver_ty = ctx
+        .locals
+        .get(receiver_local.0 as usize)
+        .and_then(|l| l.ty.clone());
+    let is_string = matches!(receiver_ty.as_ref(), Some(Type::String | Type::Str))
+        || matches!(receiver_ty.as_ref(), Some(Type::Ref(inner, _)) if matches!(inner.as_ref(), Type::String | Type::Str));
+    if !is_string {
+        ctx.error("string clone requires a String receiver", Some(span));
+        return None;
+    }
+
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::String);
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::StringClone {
+            base: receiver_local,
+        },
+    });
+
+    if skip_drop {
+        if matches!(receiver_ty.as_ref(), Some(Type::String)) {
+            if let Some(state) = ctx.local_states.get_mut(receiver_local.0 as usize) {
+                *state = LocalState::Moved;
+            }
+        }
+    }
+
     Some(Rvalue::Move(tmp))
 }
 

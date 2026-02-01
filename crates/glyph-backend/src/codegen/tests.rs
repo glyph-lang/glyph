@@ -3,6 +3,7 @@ use glyph_core::mir::{
     Local, LocalId, MirBlock, MirExternFunction, MirFunction, MirInst, MirModule, MirValue, Rvalue,
 };
 use std::collections::HashMap;
+use std::fs;
 
 #[test]
 fn creates_empty_module() {
@@ -230,6 +231,27 @@ fn codegens_field_access() {
     let ir = ctx.dump_ir();
     assert!(ir.contains("getelementptr inbounds"));
     assert!(ir.contains("ret i32"));
+}
+
+#[test]
+fn emit_sets_module_datalayout() {
+    let mut ctx = CodegenContext::new("test").unwrap();
+    let mir = MirModule {
+        struct_types: HashMap::new(),
+        enum_types: HashMap::new(),
+        functions: vec![],
+        extern_functions: Vec::new(),
+    };
+    ctx.codegen_module(&mir).unwrap();
+
+    let obj_path = std::env::temp_dir().join(format!("glyph_layout_test_{}.o", std::process::id()));
+    let result = ctx.emit_object_file(&obj_path);
+    let _ = fs::remove_file(&obj_path);
+    result.unwrap();
+
+    let ir = ctx.dump_ir();
+    assert!(ir.contains("target datalayout"));
+    assert!(ir.contains("target triple"));
 }
 
 #[test]

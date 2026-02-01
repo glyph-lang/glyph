@@ -1359,4 +1359,16 @@ impl CodegenContext {
         };
         result
     }
+
+    pub(super) fn codegen_string_clone(
+        &mut self,
+        base: LocalId,
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+        functions: &HashMap<String, LLVMValueRef>,
+    ) -> Result<LLVMValueRef> {
+        let base_val = self.codegen_string_base_value(base, func, local_map)?;
+        let len_val = self.codegen_string_len_value(base_val, functions)?;
+        self.codegen_string_copy_from_ptr_len(base_val, len_val, functions)
+    }
 }

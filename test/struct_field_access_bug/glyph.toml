@@ -1,0 +1,9 @@
+[package]
+name = "struct_field_access_bug"
+version = "0.1.0"
+
+[dependencies]
+
+[[bin]]
+name = "struct_field_access_bug"
+path = "src/main.glyph"

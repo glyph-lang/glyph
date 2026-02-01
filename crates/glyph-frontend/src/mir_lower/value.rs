@@ -143,6 +143,7 @@ pub(crate) fn infer_rvalue_type(rv: &Rvalue, ctx: &LowerCtx) -> Option<Type> {
             .get(local.0 as usize)
             .and_then(|l| l.ty.as_ref().cloned()),
         Rvalue::StringLit { .. } => Some(Type::Str),
+        Rvalue::StringClone { .. } => Some(Type::String),
         Rvalue::Ref { base, mutability } => ctx
             .locals
             .get(base.0 as usize)

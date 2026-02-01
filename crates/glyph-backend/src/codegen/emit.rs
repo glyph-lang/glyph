@@ -47,6 +47,42 @@ impl CodegenContext {
             // Set explicit target triple to avoid ambiguities (e.g., aarch64 variants)
             let target_triple = LLVMGetDefaultTargetTriple();
             LLVMSetTarget(module_clone, target_triple);
+
+            let mut target = std::ptr::null_mut();
+            let mut error = std::ptr::null_mut();
+            if LLVMGetTargetFromTriple(target_triple, &mut target, &mut error) != 0 {
+                let err_msg = if error.is_null() {
+                    "unknown error".to_string()
+                } else {
+                    let msg = CStr::from_ptr(error).to_string_lossy().into_owned();
+                    LLVMDisposeMessage(error);
+                    msg
+                };
+                LLVMDisposeMessage(target_triple);
+                return Err(anyhow!("Failed to get target: {}", err_msg));
+            }
+
+            let cpu = CString::new("generic")?;
+            let features = CString::new("")?;
+            let target_machine = LLVMCreateTargetMachine(
+                target,
+                target_triple,
+                cpu.as_ptr(),
+                features.as_ptr(),
+                LLVMCodeGenOptLevel::LLVMCodeGenLevelNone,
+                LLVMRelocMode::LLVMRelocPIC,
+                LLVMCodeModel::LLVMCodeModelDefault,
+            );
+
+            if target_machine.is_null() {
+                LLVMDisposeMessage(target_triple);
+                return Err(anyhow!("Failed to create target machine"));
+            }
+
+            let data_layout = LLVMCreateTargetDataLayout(target_machine);
+            LLVMSetModuleDataLayout(module_clone, data_layout);
+            LLVMDisposeTargetData(data_layout);
+            LLVMDisposeTargetMachine(target_machine);
             LLVMDisposeMessage(target_triple);
 
             // Create MCJIT execution engine
@@ -165,6 +201,10 @@ impl CodegenContext {
                 LLVMDisposeMessage(target_triple);
                 return Err(anyhow!("Failed to create target machine"));
             }
+
+            let data_layout = LLVMCreateTargetDataLayout(target_machine);
+            LLVMSetModuleDataLayout(self.module, data_layout);
+            LLVMDisposeTargetData(data_layout);
 
             // Convert output path to C string
             let output_path_str = output_path

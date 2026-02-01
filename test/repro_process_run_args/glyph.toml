@@ -1,0 +1,10 @@
+[package]
+name = "repro_process_run_args"
+version = "0.1.0"
+
+[dependencies]
+# none yet
+
+[[bin]]
+name = "repro_process_run_args"
+path = "src/main.glyph"

@@ -215,3 +215,39 @@ fn std_string_concat_loop_bucket() {
     let code = build_and_run_exit_code(source);
     assert_eq!(code, 0, "concat length drifted in bucket {}", code);
 }
+
+#[cfg(all(feature = "codegen", unix))]
+#[test]
+fn std_string_clone_field() {
+    let source = r#"
+        from std/string import byte_at
+
+        struct Pair {
+          left: String,
+          right: String,
+        }
+
+        fn main() -> i32 {
+          let pair = Pair {
+            left: String::from_str("left"),
+            right: String::from_str("right"),
+          }
+          let pair_ref = &pair
+          let left1 = pair_ref.left.clone()
+          let left2 = pair_ref.left.clone()
+          let right1 = pair_ref.right.clone()
+          let l0: str = left1
+          let l1: str = left2
+          let r0: str = right1
+          if l0.len() != 4 { ret 1 }
+          if l1.len() != 4 { ret 2 }
+          if r0.len() != 5 { ret 3 }
+          if byte_at(l0, 0) != 108 { ret 4 }
+          if byte_at(l1, 3) != 116 { ret 5 }
+          if byte_at(r0, 0) != 114 { ret 6 }
+          ret 0
+        }
+    "#;
+
+    assert_eq!(build_and_run_exit_code(source), 0);
+}

@@ -10,5 +10,5 @@ The standard library keeps a tight surface area:
 - `std/process` for launching external processes
 - `std/sys` for low-level system access
 
-String utilities live on `String` and include `len`, `concat`, `slice`, `trim`, `split`,
-`starts_with`, and `ends_with`.
+String utilities live on `String` and include `clone`, `len`, `concat`, `slice`, `trim`,
+`split`, `starts_with`, and `ends_with`.

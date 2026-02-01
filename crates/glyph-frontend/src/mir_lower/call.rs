@@ -10,10 +10,10 @@ use super::builtins::{
     lower_map_add, lower_map_del, lower_map_get, lower_map_has, lower_map_keys,
     lower_map_static_new, lower_map_static_with_capacity, lower_map_update, lower_map_vals,
     lower_own_from_raw, lower_own_into_raw, lower_own_new, lower_print_builtin, lower_shared_clone,
-    lower_shared_new, lower_string_concat, lower_string_ends_with, lower_string_from,
-    lower_string_len, lower_string_slice, lower_string_split, lower_string_starts_with,
-    lower_string_trim, lower_vec_get, lower_vec_len, lower_vec_pop, lower_vec_push,
-    lower_vec_static_new, lower_vec_static_with_capacity,
+    lower_shared_new, lower_string_clone, lower_string_concat, lower_string_ends_with,
+    lower_string_from, lower_string_len, lower_string_slice, lower_string_split,
+    lower_string_starts_with, lower_string_trim, lower_vec_get, lower_vec_len, lower_vec_pop,
+    lower_vec_push, lower_vec_static_new, lower_vec_static_with_capacity,
 };
 use super::context::LowerCtx;
 use super::expr::{lower_array_len, lower_value};
@@ -266,6 +266,11 @@ pub(crate) fn lower_method_call<'a>(
             let base_ty = infer_expr_type(ctx, receiver)?;
             if matches!(base_ty, Type::Shared(_)) {
                 return lower_shared_clone(ctx, receiver, span);
+            }
+            let is_string_like = matches!(base_ty, Type::Str | Type::String)
+                || matches!(base_ty, Type::Ref(inner, _) if matches!(inner.as_ref(), Type::Str | Type::String));
+            if is_string_like {
+                return lower_string_clone(ctx, receiver, args, span);
             }
             // If not Shared, fall through to regular method dispatch
         }

@@ -91,6 +91,7 @@ impl CodegenContext {
             Rvalue::StringSplit { .. } => "StringSplit",
             Rvalue::StringStartsWith { .. } => "StringStartsWith",
             Rvalue::StringEndsWith { .. } => "StringEndsWith",
+            Rvalue::StringClone { .. } => "StringClone",
             Rvalue::Call { .. } => "Call",
             Rvalue::Ref { .. } => "Ref",
             Rvalue::ArrayLit { .. } => "ArrayLit",
@@ -466,6 +467,9 @@ impl CodegenContext {
                 }
                 Rvalue::StringEndsWith { base, needle } => {
                     self.codegen_string_ends_with(*base, needle, func, local_map, functions)
+                }
+                Rvalue::StringClone { base } => {
+                    self.codegen_string_clone(*base, func, local_map, functions)
                 }
                 Rvalue::Call { name, args } => {
                     if name == "argv" || name == "std::sys::argv" {

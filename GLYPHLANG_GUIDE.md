@@ -85,6 +85,7 @@ Strings:
 
 - String literals like `"hi"` are `str`.
 - Use `String::from_str("...")` to allocate an owned `String`.
+- Use `s.clone()` to duplicate a `String` without moving it.
 
 Generics:
 

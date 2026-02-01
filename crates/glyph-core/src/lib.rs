@@ -906,6 +906,9 @@ pub mod mir {
             base: LocalId,
             needle: MirValue,
         },
+        StringClone {
+            base: LocalId,
+        },
         OwnNew {
             value: MirValue,
             elem_type: Type,

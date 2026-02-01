@@ -413,7 +413,6 @@ fn build_bin(root: &Path, bin: &BinTarget, profile: &str, verbose: bool) -> Glyp
 
         let linker = Linker::new();
         let runtime_lib = Linker::get_runtime_lib_path();
-        eprintln!("[DEBUG] runtime_lib = {:?}", runtime_lib);
         let opts = LinkerOptions {
             output_path: exe_path.clone(),
             object_files: vec![obj_path.clone()],
