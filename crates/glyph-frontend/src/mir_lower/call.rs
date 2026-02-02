@@ -15,9 +15,22 @@ use super::builtins::{
     lower_string_starts_with, lower_string_trim, lower_vec_get, lower_vec_len, lower_vec_pop,
     lower_vec_push, lower_vec_static_new, lower_vec_static_with_capacity,
 };
-use super::context::LowerCtx;
+use super::context::{LocalState, LowerCtx};
 use super::expr::{lower_array_len, lower_value};
 use super::value::infer_value_type;
+
+fn consume_call_local(ctx: &mut LowerCtx<'_>, value: &MirValue, span: Span) {
+    let MirValue::Local(local) = value else {
+        return;
+    };
+    if matches!(
+        ctx.local_states.get(local.0 as usize),
+        Some(LocalState::Moved)
+    ) {
+        return;
+    }
+    let _ = ctx.consume_local(*local, Some(span));
+}
 
 pub(crate) fn lower_call<'a>(
     ctx: &mut LowerCtx<'a>,
@@ -79,7 +92,9 @@ pub(crate) fn lower_call<'a>(
 
     let mut lowered_args = Vec::new();
     for arg in args {
-        lowered_args.push(lower_value(ctx, arg)?);
+        let arg_val = lower_value(ctx, arg)?;
+        consume_call_local(ctx, &arg_val, span);
+        lowered_args.push(arg_val);
     }
 
     let tmp = ctx.fresh_local(None);
@@ -429,9 +444,11 @@ pub(crate) fn lower_method_call<'a>(
     };
 
     // 6. Lower remaining arguments
+    consume_call_local(ctx, &receiver_arg, span);
     let mut all_args = vec![receiver_arg];
     for arg in args {
         let arg_val = lower_value(ctx, arg)?;
+        consume_call_local(ctx, &arg_val, span);
         all_args.push(arg_val);
     }
 
