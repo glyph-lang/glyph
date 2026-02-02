@@ -28,25 +28,27 @@ pub struct CodegenContext {
     strdup_fn: Option<LLVMValueRef>,
     string_globals: HashMap<String, LLVMValueRef>,
     function_types: HashMap<String, LLVMTypeRef>,
+    sret_functions: HashMap<String, Type>,
+    target_data: Option<LLVMTargetDataRef>,
     argv_global: Option<LLVMValueRef>,
     argc_global: Option<LLVMValueRef>,
     argv_vec_global: Option<LLVMValueRef>,
 }
 
-mod context;
-mod types;
-mod externs;
-mod entry;
-mod functions;
-mod rvalue;
 mod aggregate;
 mod array;
-mod string;
-mod vec;
+mod context;
+mod emit;
+mod entry;
+mod externs;
+mod file;
+mod functions;
 mod map;
 mod ownership;
-mod file;
-mod emit;
+mod rvalue;
+mod string;
+mod types;
+mod vec;
 
 #[cfg(test)]
 mod tests;
@@ -54,6 +56,9 @@ mod tests;
 impl Drop for CodegenContext {
     fn drop(&mut self) {
         unsafe {
+            if let Some(target_data) = self.target_data {
+                LLVMDisposeTargetData(target_data);
+            }
             LLVMDisposeBuilder(self.builder);
             LLVMDisposeModule(self.module);
             LLVMContextDispose(self.context);

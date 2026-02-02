@@ -1,0 +1,16 @@
+struct Inner {
+  value: i32
+}
+
+struct Outer {
+  inner: Inner
+}
+
+fn get_value(inner: &Inner) -> i32 {
+  ret inner.value
+}
+
+fn main() -> i32 {
+  let outer = Outer { inner: Inner { value: 7 } }
+  ret get_value(&outer.inner)
+}

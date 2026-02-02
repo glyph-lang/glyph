@@ -149,6 +149,43 @@ pub(crate) fn infer_rvalue_type(rv: &Rvalue, ctx: &LowerCtx) -> Option<Type> {
             .get(base.0 as usize)
             .and_then(|l| l.ty.as_ref().cloned())
             .map(|inner| Type::Ref(Box::new(inner), *mutability)),
+        Rvalue::FieldRef {
+            base,
+            field_index,
+            mutability,
+            ..
+        } => {
+            let base_ty = ctx
+                .locals
+                .get(base.0 as usize)
+                .and_then(|l| l.ty.as_ref())?;
+            let mut inner = base_ty;
+            loop {
+                match inner {
+                    Type::Ref(inner_ty, _)
+                    | Type::Own(inner_ty)
+                    | Type::RawPtr(inner_ty)
+                    | Type::Shared(inner_ty) => {
+                        inner = inner_ty.as_ref();
+                    }
+                    _ => break,
+                }
+            }
+
+            let field_ty = match inner {
+                Type::Tuple(elem_types) => elem_types.get(*field_index as usize).cloned(),
+                _ => {
+                    let struct_name = struct_name_from_type(base_ty)?;
+                    let struct_type = ctx.resolver.get_struct(&struct_name)?;
+                    struct_type
+                        .fields
+                        .get(*field_index as usize)
+                        .map(|(_, ty)| ty.clone())
+                }
+            }?;
+
+            Some(Type::Ref(Box::new(field_ty), *mutability))
+        }
         Rvalue::ArrayLit {
             elem_type,
             elements,

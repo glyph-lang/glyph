@@ -467,7 +467,7 @@ impl CodegenContext {
                 let fn_ty = if let Some(target_func) =
                     mir_module.functions.iter().find(|f| f.name == hash_name)
                 {
-                    self.llvm_function_type(target_func)?
+                    self.llvm_function_type(target_func)?.0
                 } else {
                     bail!("missing hash function {}", hash_name);
                 };
@@ -575,7 +575,7 @@ impl CodegenContext {
                 let fn_ty = if let Some(target_func) =
                     mir_module.functions.iter().find(|f| f.name == hash_name)
                 {
-                    self.llvm_function_type(target_func)?
+                    self.llvm_function_type(target_func)?.0
                 } else {
                     bail!("missing hash function {}", hash_name);
                 };

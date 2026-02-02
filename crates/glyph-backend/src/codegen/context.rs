@@ -21,10 +21,90 @@ impl CodegenContext {
                 strdup_fn: None,
                 string_globals: HashMap::new(),
                 function_types: HashMap::new(),
+                sret_functions: HashMap::new(),
+                target_data: None,
                 argv_global: None,
                 argc_global: None,
                 argv_vec_global: None,
             })
+        }
+    }
+
+    pub(super) fn init_target_data(&mut self) -> Result<()> {
+        unsafe {
+            if self.target_data.is_some() {
+                return Ok(());
+            }
+
+            LLVM_InitializeAllTargetInfos();
+            LLVM_InitializeAllTargets();
+            LLVM_InitializeAllTargetMCs();
+            LLVM_InitializeAllAsmPrinters();
+
+            let target_triple = LLVMGetDefaultTargetTriple();
+            LLVMSetTarget(self.module, target_triple);
+
+            let mut target = std::ptr::null_mut();
+            let mut error = std::ptr::null_mut();
+            if LLVMGetTargetFromTriple(target_triple, &mut target, &mut error) != 0 {
+                let err_msg = if error.is_null() {
+                    "unknown error".to_string()
+                } else {
+                    let msg = CStr::from_ptr(error).to_string_lossy().into_owned();
+                    LLVMDisposeMessage(error);
+                    msg
+                };
+                LLVMDisposeMessage(target_triple);
+                return Err(anyhow!("Failed to get target: {}", err_msg));
+            }
+
+            let cpu = CString::new("generic")?;
+            let features = CString::new("")?;
+            let target_machine = LLVMCreateTargetMachine(
+                target,
+                target_triple,
+                cpu.as_ptr(),
+                features.as_ptr(),
+                LLVMCodeGenOptLevel::LLVMCodeGenLevelNone,
+                LLVMRelocMode::LLVMRelocPIC,
+                LLVMCodeModel::LLVMCodeModelDefault,
+            );
+
+            if target_machine.is_null() {
+                LLVMDisposeMessage(target_triple);
+                return Err(anyhow!("Failed to create target machine"));
+            }
+
+            let data_layout = LLVMCreateTargetDataLayout(target_machine);
+            LLVMSetModuleDataLayout(self.module, data_layout);
+            self.target_data = Some(data_layout);
+
+            LLVMDisposeTargetMachine(target_machine);
+            LLVMDisposeMessage(target_triple);
+        }
+
+        Ok(())
+    }
+
+    pub(super) fn add_sret_attribute(&self, func: LLVMValueRef, ret_ty: LLVMTypeRef) {
+        unsafe {
+            let kind = LLVMGetEnumAttributeKindForName(b"sret".as_ptr().cast(), 4);
+            if kind == 0 {
+                return;
+            }
+            let attr = LLVMCreateTypeAttribute(self.context, kind, ret_ty);
+            LLVMAddAttributeAtIndex(func, 1, attr);
+        }
+    }
+
+    pub(super) fn add_sret_call_attribute(&self, call: LLVMValueRef, ret_ty: LLVMTypeRef) {
+        unsafe {
+            let kind = LLVMGetEnumAttributeKindForName(b"sret".as_ptr().cast(), 4);
+            if kind == 0 {
+                return;
+            }
+            let attr = LLVMCreateTypeAttribute(self.context, kind, ret_ty);
+            LLVMAddCallSiteAttribute(call, 1, attr);
         }
     }
 

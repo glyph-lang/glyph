@@ -229,6 +229,29 @@ impl CodegenContext {
         Ok(unsafe { LLVMBuildLoad2(self.builder, llvm_field_ty, field_ptr, load_name.as_ptr()) })
     }
 
+    pub(super) fn codegen_field_ref(
+        &mut self,
+        base: LocalId,
+        field_index: usize,
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+    ) -> Result<LLVMValueRef> {
+        let (struct_name, struct_ptr) = self.struct_pointer_for_local(base, func, local_map)?;
+        let llvm_struct = self.get_struct_type(struct_name.as_str())?;
+
+        let gep_name = CString::new(format!("{}.field{}", struct_name, field_index))?;
+        let field_ptr = unsafe {
+            LLVMBuildStructGEP2(
+                self.builder,
+                llvm_struct,
+                struct_ptr,
+                field_index as u32,
+                gep_name.as_ptr(),
+            )
+        };
+        Ok(field_ptr)
+    }
+
     pub(super) fn struct_pointer_for_local(
         &mut self,
         local: LocalId,

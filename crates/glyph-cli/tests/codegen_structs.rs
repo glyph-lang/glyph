@@ -5,7 +5,7 @@ use std::path::Path;
 
 use glyph_backend::llvm::LlvmBackend;
 use glyph_backend::{Backend, CodegenOptions, EmitKind};
-use glyph_frontend::{FrontendOptions, compile_source};
+use glyph_frontend::{compile_source, FrontendOptions};
 
 fn load_fixture(name: &str) -> String {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/codegen");
@@ -107,6 +107,68 @@ fn codegen_struct_field_sum() {
     assert!(ir.contains("getelementptr inbounds"));
     assert!(ir.contains("add"));
     assert!(ir.contains("ret i32"));
+}
+
+#[test]
+fn codegen_struct_field_ref() {
+    let src = load_fixture("ref_field_access.glyph");
+    let out = compile_source(
+        &src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: false,
+        },
+    );
+    assert!(
+        out.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        out.diagnostics
+    );
+
+    let backend = LlvmBackend::default();
+    let artifact = backend
+        .emit(
+            &out.mir,
+            &CodegenOptions {
+                emit: EmitKind::LlvmIr,
+                ..Default::default()
+            },
+        )
+        .expect("backend emit");
+    let ir = artifact.llvm_ir.expect("llvm ir");
+    assert!(ir.contains("getelementptr inbounds"));
+    assert!(ir.contains("call i32 @get_value"));
+}
+
+#[test]
+fn codegen_struct_return_large_sret() {
+    let src = load_fixture("struct_return_large.glyph");
+    let out = compile_source(
+        &src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: false,
+        },
+    );
+    assert!(
+        out.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        out.diagnostics
+    );
+
+    let backend = LlvmBackend::default();
+    let artifact = backend
+        .emit(
+            &out.mir,
+            &CodegenOptions {
+                emit: EmitKind::LlvmIr,
+                ..Default::default()
+            },
+        )
+        .expect("backend emit");
+    let ir = artifact.llvm_ir.expect("llvm ir");
+    assert!(ir.contains("define void @make_big"));
+    assert!(ir.contains("sret"));
 }
 
 #[test]

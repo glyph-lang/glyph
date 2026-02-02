@@ -259,25 +259,66 @@ impl CodegenContext {
             );
             let _ = self.codegen_sys_argv_build(argc_val, argv_param)?;
 
-            let fn_ty = self.llvm_function_type(main_mir)?;
+            let (fn_ty, uses_sret) = self.llvm_function_type(main_mir)?;
             let mut args: Vec<LLVMValueRef> = Vec::new();
+            let mut sret_slot: Option<LLVMValueRef> = None;
+            if uses_sret {
+                if let Some(ret_ty) = main_mir.ret_type.as_ref() {
+                    let llvm_ret_ty = self.get_llvm_type(ret_ty)?;
+                    let slot = LLVMBuildAlloca(
+                        self.builder,
+                        llvm_ret_ty,
+                        CString::new("main.sret")?.as_ptr(),
+                    );
+                    args.push(slot);
+                    sret_slot = Some(slot);
+                }
+            }
             let call_val = self.build_call2(fn_ty, user_main, &mut args, "main.call")?;
+            if uses_sret {
+                if let Some(ret_ty) = main_mir.ret_type.as_ref() {
+                    let llvm_ret_ty = self.get_llvm_type(ret_ty)?;
+                    self.add_sret_call_attribute(call_val, llvm_ret_ty);
+                }
+            }
 
             match main_mir.ret_type.as_ref() {
                 None | Some(Type::Void) => {
                     LLVMBuildRet(self.builder, LLVMConstInt(i32_ty, 0, 0));
                 }
                 Some(Type::I32) => {
-                    LLVMBuildRet(self.builder, call_val);
+                    if uses_sret {
+                        LLVMBuildRet(self.builder, LLVMConstInt(i32_ty, 0, 0));
+                    } else {
+                        LLVMBuildRet(self.builder, call_val);
+                    }
                 }
                 Some(_) => {
-                    let cast_val = LLVMBuildTrunc(
-                        self.builder,
-                        call_val,
-                        i32_ty,
-                        CString::new("main.ret.cast")?.as_ptr(),
-                    );
-                    LLVMBuildRet(self.builder, cast_val);
+                    if let Some(slot) = sret_slot {
+                        let llvm_ret_ty =
+                            self.get_llvm_type(main_mir.ret_type.as_ref().unwrap())?;
+                        let load_val = LLVMBuildLoad2(
+                            self.builder,
+                            llvm_ret_ty,
+                            slot,
+                            CString::new("main.sret.load")?.as_ptr(),
+                        );
+                        let cast_val = LLVMBuildTrunc(
+                            self.builder,
+                            load_val,
+                            i32_ty,
+                            CString::new("main.ret.cast")?.as_ptr(),
+                        );
+                        LLVMBuildRet(self.builder, cast_val);
+                    } else {
+                        let cast_val = LLVMBuildTrunc(
+                            self.builder,
+                            call_val,
+                            i32_ty,
+                            CString::new("main.ret.cast")?.as_ptr(),
+                        );
+                        LLVMBuildRet(self.builder, cast_val);
+                    }
                 }
             };
         }

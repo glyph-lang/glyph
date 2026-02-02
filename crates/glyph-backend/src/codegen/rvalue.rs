@@ -77,6 +77,7 @@ impl CodegenContext {
             Rvalue::Binary { .. } => "Binary",
             Rvalue::StructLit { .. } => "StructLit",
             Rvalue::FieldAccess { .. } => "FieldAccess",
+            Rvalue::FieldRef { .. } => "FieldRef",
             Rvalue::EnumConstruct { .. } => "EnumConstruct",
             Rvalue::EnumTag { .. } => "EnumTag",
             Rvalue::EnumPayload { .. } => "EnumPayload",
@@ -318,6 +319,12 @@ impl CodegenContext {
                     field_name: _,
                     field_index,
                 } => self.codegen_field_access(*base, *field_index as usize, func, local_map),
+                Rvalue::FieldRef {
+                    base,
+                    field_name: _,
+                    field_index,
+                    mutability: _,
+                } => self.codegen_field_ref(*base, *field_index as usize, func, local_map),
                 Rvalue::EnumConstruct {
                     enum_name,
                     variant_index,
@@ -496,11 +503,11 @@ impl CodegenContext {
                     let fn_ty = if let Some(target_func) =
                         mir_module.functions.iter().find(|f| f.name == *name)
                     {
-                        self.llvm_function_type(target_func)?
+                        self.llvm_function_type(target_func)?.0
                     } else if let Some(extern_func) =
                         mir_module.extern_functions.iter().find(|f| f.name == *name)
                     {
-                        self.llvm_extern_function_type(extern_func)?
+                        self.llvm_extern_function_type(extern_func)?.0
                     } else {
                         match name.as_str() {
                             "malloc" => self.malloc_function_type(),
@@ -536,7 +543,19 @@ impl CodegenContext {
                     }
 
                     // Codegen arguments
+                    let sret_type = self.sret_functions.get(name).cloned();
+                    let mut sret_slot: Option<LLVMValueRef> = None;
                     let mut llvm_args: Vec<LLVMValueRef> = Vec::new();
+                    if let Some(ret_ty) = sret_type.as_ref() {
+                        let llvm_ret_ty = self.get_llvm_type(ret_ty)?;
+                        let slot = LLVMBuildAlloca(
+                            self.builder,
+                            llvm_ret_ty,
+                            CString::new("sret.tmp")?.as_ptr(),
+                        );
+                        llvm_args.push(slot);
+                        sret_slot = Some(slot);
+                    }
                     for (idx, arg) in args.iter().enumerate() {
                         let mut arg_val = self.codegen_value(arg, func, local_map)?;
 
@@ -618,7 +637,20 @@ impl CodegenContext {
                         llvm_args.push(arg_val);
                     }
 
-                    self.build_call2(fn_ty, callee, &mut llvm_args, "call")
+                    let call_val = self.build_call2(fn_ty, callee, &mut llvm_args, "call")?;
+                    if let (Some(ret_ty), Some(slot)) = (sret_type, sret_slot) {
+                        let llvm_ret_ty = self.get_llvm_type(&ret_ty)?;
+                        self.add_sret_call_attribute(call_val, llvm_ret_ty);
+                        let load_name = CString::new("sret.load")?;
+                        Ok(LLVMBuildLoad2(
+                            self.builder,
+                            llvm_ret_ty,
+                            slot,
+                            load_name.as_ptr(),
+                        ))
+                    } else {
+                        Ok(call_val)
+                    }
                 }
                 Rvalue::Ref { base, .. } => {
                     let base_ptr = local_map

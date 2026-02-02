@@ -774,6 +774,12 @@ pub mod mir {
             field_name: String,
             field_index: u32,
         },
+        FieldRef {
+            base: LocalId,
+            field_name: String,
+            field_index: u32,
+            mutability: Mutability,
+        },
         Ref {
             base: LocalId,
             mutability: Mutability,

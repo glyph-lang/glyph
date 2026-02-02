@@ -2,6 +2,7 @@ use super::*;
 
 impl CodegenContext {
     pub fn codegen_module(&mut self, mir_module: &MirModule) -> Result<()> {
+        self.init_target_data()?;
         self.debug_log("create_named_types start");
         self.create_named_types(mir_module)?;
         self.debug_log("register_struct_types start");
@@ -41,7 +42,7 @@ impl CodegenContext {
         let mut functions = HashMap::new();
 
         for func in &mir_module.functions {
-            let func_type = self.llvm_function_type(func)?;
+            let (func_type, uses_sret) = self.llvm_function_type(func)?;
             let llvm_name = if needs_sys_argv && func.name == "main" && func.params.is_empty() {
                 "__glyph_main"
             } else {
@@ -50,6 +51,16 @@ impl CodegenContext {
             let func_name = CString::new(llvm_name)?;
             let llvm_func = unsafe { LLVMAddFunction(self.module, func_name.as_ptr(), func_type) };
             self.function_types.insert(func.name.clone(), func_type);
+            if uses_sret {
+                let ret_ty = func
+                    .ret_type
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("sret function missing return type"))?;
+                let llvm_ret_ty = self.get_llvm_type(ret_ty)?;
+                self.add_sret_attribute(llvm_func, llvm_ret_ty);
+                self.sret_functions
+                    .insert(func.name.clone(), ret_ty.clone());
+            }
             functions.insert(func.name.clone(), llvm_func);
         }
 
@@ -57,7 +68,7 @@ impl CodegenContext {
             if functions.contains_key(&func.name) {
                 continue;
             }
-            let func_type = self.llvm_extern_function_type(func)?;
+            let (func_type, uses_sret) = self.llvm_extern_function_type(func)?;
             let symbol_name = func.link_name.as_ref().unwrap_or(&func.name);
             let func_name = CString::new(symbol_name.as_str())?;
             let llvm_func = unsafe { LLVMAddFunction(self.module, func_name.as_ptr(), func_type) };
@@ -65,6 +76,16 @@ impl CodegenContext {
             unsafe { LLVMSetLinkage(llvm_func, LLVMLinkage::LLVMExternalLinkage) };
             if symbol_name == "strdup" && self.strdup_fn.is_none() {
                 self.strdup_fn = Some(llvm_func);
+            }
+            if uses_sret {
+                let ret_ty = func
+                    .ret_type
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("sret extern missing return type"))?;
+                let llvm_ret_ty = self.get_llvm_type(ret_ty)?;
+                self.add_sret_attribute(llvm_func, llvm_ret_ty);
+                self.sret_functions
+                    .insert(func.name.clone(), ret_ty.clone());
             }
             // ABI mapping (v0: only "C" supported; default LLVM CC is C).
             if let Some(abi) = &func.abi {
@@ -79,17 +100,31 @@ impl CodegenContext {
         Ok(functions)
     }
 
-    pub(super) fn llvm_function_type(&self, func: &MirFunction) -> Result<LLVMTypeRef> {
+    pub(super) fn llvm_function_type(&self, func: &MirFunction) -> Result<(LLVMTypeRef, bool)> {
         // Determine return type
-        let ret_type = func
-            .ret_type
-            .as_ref()
-            .map(|t| self.get_llvm_type(t))
-            .transpose()?
-            .unwrap_or_else(|| unsafe { LLVMVoidTypeInContext(self.context) });
+        let mut uses_sret = false;
+        let ret_type = if let Some(ret_ty) = func.ret_type.as_ref() {
+            if self.ret_uses_sret(ret_ty)? {
+                uses_sret = true;
+                unsafe { LLVMVoidTypeInContext(self.context) }
+            } else {
+                self.get_llvm_type(ret_ty)?
+            }
+        } else {
+            unsafe { LLVMVoidTypeInContext(self.context) }
+        };
 
         // Build parameter types
         let mut param_types: Vec<LLVMTypeRef> = Vec::new();
+        if uses_sret {
+            let ret_ty = func
+                .ret_type
+                .as_ref()
+                .ok_or_else(|| anyhow!("sret function missing return type"))?;
+            let llvm_ret_ty = self.get_llvm_type(ret_ty)?;
+            let sret_ptr_ty = unsafe { LLVMPointerType(llvm_ret_ty, 0) };
+            param_types.push(sret_ptr_ty);
+        }
         for &param_id in &func.params {
             let local = &func.locals[param_id.0 as usize];
             let param_ty = local
@@ -101,40 +136,60 @@ impl CodegenContext {
             param_types.push(param_ty);
         }
 
-        Ok(unsafe {
-            LLVMFunctionType(
-                ret_type,
-                param_types.as_mut_ptr(),
-                param_types.len() as u32,
-                0, // not variadic
-            )
-        })
+        Ok((
+            unsafe {
+                LLVMFunctionType(
+                    ret_type,
+                    param_types.as_mut_ptr(),
+                    param_types.len() as u32,
+                    0, // not variadic
+                )
+            },
+            uses_sret,
+        ))
     }
 
     pub(super) fn llvm_extern_function_type(
         &self,
         func: &MirExternFunction,
-    ) -> Result<LLVMTypeRef> {
-        let ret_type = func
-            .ret_type
-            .as_ref()
-            .map(|t| self.get_llvm_type(t))
-            .transpose()?
-            .unwrap_or_else(|| unsafe { LLVMVoidTypeInContext(self.context) });
+    ) -> Result<(LLVMTypeRef, bool)> {
+        let mut uses_sret = false;
+        let ret_type = if let Some(ret_ty) = func.ret_type.as_ref() {
+            if self.ret_uses_sret(ret_ty)? {
+                uses_sret = true;
+                unsafe { LLVMVoidTypeInContext(self.context) }
+            } else {
+                self.get_llvm_type(ret_ty)?
+            }
+        } else {
+            unsafe { LLVMVoidTypeInContext(self.context) }
+        };
 
         let mut param_types: Vec<LLVMTypeRef> = Vec::new();
+        if uses_sret {
+            let ret_ty = func
+                .ret_type
+                .as_ref()
+                .ok_or_else(|| anyhow!("sret extern missing return type"))?;
+            let llvm_ret_ty = self.get_llvm_type(ret_ty)?;
+            let sret_ptr_ty = unsafe { LLVMPointerType(llvm_ret_ty, 0) };
+            param_types.push(sret_ptr_ty);
+        }
         for param_ty in &func.params {
             param_types.push(self.get_llvm_type(param_ty)?);
         }
 
-        Ok(unsafe {
-            LLVMFunctionType(
-                ret_type,
-                param_types.as_mut_ptr(),
-                param_types.len() as u32,
-                0, // not variadic in v0
-            )
-        })
+        Ok((
+            unsafe {
+                LLVMFunctionType(
+                    ret_type,
+                    param_types.as_mut_ptr(),
+                    param_types.len() as u32,
+                    0, // not variadic in v0
+                )
+            },
+            uses_sret,
+        ))
     }
 
     pub(super) fn codegen_function_body(
@@ -154,6 +209,11 @@ impl CodegenContext {
         }
 
         self.debug_log("codegen_function_body allocas start");
+
+        let sret_ptr = self
+            .sret_functions
+            .get(&func.name)
+            .map(|_| unsafe { LLVMGetParam(llvm_func, 0) });
 
         // Create local allocas
         let mut local_map: HashMap<LocalId, LLVMValueRef> = HashMap::new();
@@ -185,8 +245,9 @@ impl CodegenContext {
                 local_map.insert(local_id, alloca);
             }
 
+            let param_offset = if sret_ptr.is_some() { 1 } else { 0 };
             for (i, &param_id) in func.params.iter().enumerate() {
-                let param_val = unsafe { LLVMGetParam(llvm_func, i as u32) };
+                let param_val = unsafe { LLVMGetParam(llvm_func, (i + param_offset) as u32) };
                 let slot = local_map
                     .get(&param_id)
                     .ok_or_else(|| anyhow!("missing storage for param {:?}", param_id))?;
@@ -203,7 +264,9 @@ impl CodegenContext {
             self.debug_log(&format!("codegen_block start bb{}", i));
             let bb = bb_map.get(&BlockId(i as u32)).unwrap();
             unsafe { LLVMPositionBuilderAtEnd(self.builder, *bb) };
-            self.codegen_block(func, block, &local_map, &bb_map, functions, mir_module)?;
+            self.codegen_block(
+                func, block, &local_map, &bb_map, functions, mir_module, sret_ptr,
+            )?;
             self.debug_log(&format!("codegen_block done bb{}", i));
         }
 
@@ -218,9 +281,12 @@ impl CodegenContext {
         bb_map: &HashMap<BlockId, LLVMBasicBlockRef>,
         functions: &HashMap<String, LLVMValueRef>,
         mir_module: &MirModule,
+        sret_ptr: Option<LLVMValueRef>,
     ) -> Result<()> {
         for inst in &block.insts {
-            self.codegen_inst(func, inst, local_map, bb_map, functions, mir_module)?;
+            self.codegen_inst(
+                func, inst, local_map, bb_map, functions, mir_module, sret_ptr,
+            )?;
         }
         Ok(())
     }
@@ -233,6 +299,7 @@ impl CodegenContext {
         bb_map: &HashMap<BlockId, LLVMBasicBlockRef>,
         functions: &HashMap<String, LLVMValueRef>,
         mir_module: &MirModule,
+        sret_ptr: Option<LLVMValueRef>,
     ) -> Result<()> {
         unsafe {
             match inst {
@@ -256,7 +323,17 @@ impl CodegenContext {
                     }
                 }
                 MirInst::Return(val) => {
-                    if let Some(v) = val {
+                    if let Some(sret_ptr) = sret_ptr {
+                        if let Some(v) = val {
+                            let ret_val = self.codegen_value(v, func, local_map)?;
+                            LLVMBuildStore(self.builder, ret_val, sret_ptr);
+                        } else if let Some(ret_ty) = func.ret_type.as_ref() {
+                            let llvm_ret_ty = self.get_llvm_type(ret_ty)?;
+                            let zero = LLVMConstNull(llvm_ret_ty);
+                            LLVMBuildStore(self.builder, zero, sret_ptr);
+                        }
+                        LLVMBuildRetVoid(self.builder);
+                    } else if let Some(v) = val {
                         let ret_val = self.codegen_value(v, func, local_map)?;
                         LLVMBuildRet(self.builder, ret_val);
                     } else {

@@ -1036,6 +1036,98 @@ pub(crate) fn lower_ref_expr<'a>(
                 mutability,
             })
         }
+        Expr::FieldAccess { base, field, .. } => {
+            let base_local = match base.as_ref() {
+                Expr::Ident(ident, _) => {
+                    let Some(local) = ctx.bindings.get(ident.0.as_str()).copied() else {
+                        ctx.error(format!("unknown identifier '{}'", ident.0), Some(span));
+                        return None;
+                    };
+                    local
+                }
+                _ => {
+                    ctx.error("field reference base must be a local", Some(span));
+                    return None;
+                }
+            };
+
+            let base_type = ctx
+                .locals
+                .get(base_local.0 as usize)
+                .and_then(|l| l.ty.as_ref());
+            let mut inner = match base_type {
+                Some(ty) => ty,
+                None => {
+                    ctx.error("field access base has unknown type", Some(span));
+                    return None;
+                }
+            };
+            loop {
+                match inner {
+                    Type::Ref(inner_ty, _)
+                    | Type::Own(inner_ty)
+                    | Type::RawPtr(inner_ty)
+                    | Type::Shared(inner_ty) => {
+                        inner = inner_ty.as_ref();
+                    }
+                    _ => break,
+                }
+            }
+
+            let (_field_type, field_index, _struct_name) = match inner {
+                Type::Tuple(elem_types) => {
+                    if let Ok(idx) = field.0.parse::<usize>() {
+                        if idx < elem_types.len() {
+                            (elem_types[idx].clone(), idx, tuple_struct_name(elem_types))
+                        } else {
+                            ctx.error(
+                                format!(
+                                    "tuple index {} out of bounds (len is {})",
+                                    idx,
+                                    elem_types.len()
+                                ),
+                                Some(span),
+                            );
+                            return None;
+                        }
+                    } else {
+                        ctx.error(
+                            format!(
+                                "tuple field access must use numeric index, got '{}'",
+                                field.0
+                            ),
+                            Some(span),
+                        );
+                        return None;
+                    }
+                }
+                _ => {
+                    let Some(struct_name) = local_struct_name(ctx, base_local) else {
+                        ctx.error("field access base is not a struct", Some(span));
+                        return None;
+                    };
+
+                    let Some((field_type, field_index)) =
+                        ctx.resolver.get_field(&struct_name, &field.0)
+                    else {
+                        ctx.error(
+                            format!("struct '{}' has no field named '{}'", struct_name, field.0),
+                            Some(span),
+                        );
+                        return None;
+                    };
+
+                    (field_type, field_index, struct_name)
+                }
+            };
+
+            Some(Rvalue::FieldRef {
+                base: base_local,
+                field_name: field.0.clone(),
+                field_index: field_index as u32,
+                mutability,
+            })
+        }
         _ => {
             ctx.error("references can only be taken to locals", Some(span));
             None

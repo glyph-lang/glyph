@@ -121,7 +121,7 @@ Useful subagents:
 9. Clean Code
 - files over 2500 LOC are candidates for refactoring into smaller units (keep Agent context windows in mind!)
 - when making additions to the language, consider creating a new file or module
-- TDD: always run tests, or create tests for new feature. Do not consider testing an additional "ask"
+- TDD: always run tests, or create tests for new feature, create tests for things we haven't thought about yet!. Do not consider testing an additional "ask"
 
 
 Summary Checklist for Agents
@@ -136,6 +136,8 @@ Before responding, mentally confirm:
 [ ] I respected existing structure
 [ ] I kept things clear and intentional
 [ ] Read Files completely if possible for better context
+[ ] I wrote tests for the functionality I added
+[ ] I verified all tests are passing
 
 If any box is unchecked — fix it first.
 

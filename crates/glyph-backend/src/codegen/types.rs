@@ -178,6 +178,24 @@ impl CodegenContext {
             .ok_or_else(|| anyhow!("unknown struct type {}", name))
     }
 
+    pub(super) fn ret_uses_sret(&self, ret_ty: &Type) -> Result<bool> {
+        match ret_ty {
+            Type::Named(_)
+            | Type::Tuple(_)
+            | Type::Enum(_)
+            | Type::Array(_, _)
+            | Type::App { .. } => {}
+            _ => return Ok(false),
+        }
+
+        let target_data = self
+            .target_data
+            .ok_or_else(|| anyhow!("missing target data for ABI sizing"))?;
+        let llvm_ty = self.get_llvm_type(ret_ty)?;
+        let size = unsafe { llvm_sys::target::LLVMABISizeOfType(target_data, llvm_ty) };
+        Ok(size > 16)
+    }
+
     pub(super) fn get_enum_type(&self, name: &str) -> Result<LLVMTypeRef> {
         self.enum_types
             .get(name)
