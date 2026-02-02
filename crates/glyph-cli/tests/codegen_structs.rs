@@ -108,3 +108,34 @@ fn codegen_struct_field_sum() {
     assert!(ir.contains("add"));
     assert!(ir.contains("ret i32"));
 }
+
+#[test]
+fn codegen_struct_return_strings_sret() {
+    let src = load_fixture("struct_return_strings.glyph");
+    let out = compile_source(
+        &src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: true,
+        },
+    );
+    assert!(
+        out.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        out.diagnostics
+    );
+
+    let backend = LlvmBackend::default();
+    let artifact = backend
+        .emit(
+            &out.mir,
+            &CodegenOptions {
+                emit: EmitKind::LlvmIr,
+                ..Default::default()
+            },
+        )
+        .expect("backend emit");
+    let ir = artifact.llvm_ir.expect("llvm ir");
+    assert!(ir.contains("define void @make_large"));
+    assert!(ir.contains("sret"));
+}

@@ -1,0 +1,27 @@
+from std import String
+from std/io import puts
+
+struct LargeStruct {
+  a: String,
+  b: String,
+  c: String
+}
+
+fn make_large() -> LargeStruct {
+  ret LargeStruct {
+    a: String::from_str("first"),
+    b: String::from_str("second"),
+    c: String::from_str("third")
+  }
+}
+
+fn main() -> i32 {
+  let large = make_large()
+  let a_val: str = large.a
+  let _ = puts(a_val)
+  let b_val: str = large.b
+  let _ = puts(b_val)
+  let c_val: str = large.c
+  let _ = puts(c_val)
+  ret 0
+}

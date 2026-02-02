@@ -14,6 +14,19 @@ use super::value::{
     rvalue_from_value, rvalue_to_value, update_local_type_from_rvalue,
 };
 
+fn consume_value_local(ctx: &mut LowerCtx<'_>, value: &MirValue, span: Span) {
+    let MirValue::Local(local) = value else {
+        return;
+    };
+    if matches!(
+        ctx.local_states.get(local.0 as usize),
+        Some(LocalState::Moved)
+    ) {
+        return;
+    }
+    let _ = ctx.consume_local(*local, Some(span));
+}
+
 pub(crate) fn lower_expr<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr) -> Option<Rvalue> {
     lower_expr_with_expected(ctx, expr, None)
 }
@@ -660,7 +673,10 @@ pub(crate) fn lower_struct_lit<'a>(
         }
 
         match lower_value(ctx, expr) {
-            Some(value) => lowered_fields.push((field_name.0.clone(), value)),
+            Some(value) => {
+                consume_value_local(ctx, &value, span);
+                lowered_fields.push((field_name.0.clone(), value));
+            }
             None => ok = false,
         }
     }
@@ -712,6 +728,7 @@ pub(crate) fn lower_tuple_expr<'a>(
     // Lower each element and infer its type
     for elem_expr in elements {
         let val = lower_value(ctx, elem_expr)?;
+        consume_value_local(ctx, &val, span);
 
         // Infer type from the element expression
         let ty = match &val {
@@ -771,6 +788,7 @@ pub(crate) fn lower_array_lit<'a>(
     let mut mir_elements = Vec::new();
     for elem in elements {
         let mir_val = lower_value(ctx, elem)?;
+        consume_value_local(ctx, &mir_val, span);
         mir_elements.push(mir_val);
     }
 
