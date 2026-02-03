@@ -596,6 +596,67 @@ fn match_merge_ignores_terminated_arms_for_drops() {
 }
 
 #[test]
+fn if_return_does_not_poison_move_state() {
+    let span = Span::new(0, 5);
+    let if_expr = Expr::If {
+        cond: Box::new(Expr::Lit(Literal::Bool(true), span)),
+        then_block: Block {
+            span,
+            stmts: vec![Stmt::Ret(Some(Expr::Lit(Literal::Int(1), span)), span)],
+        },
+        else_block: None,
+        span,
+    };
+
+    let func = Function {
+        name: Ident("main".into()),
+        params: vec![],
+        ret_type: Some(path_ty("i32", span)),
+        body: Block {
+            span,
+            stmts: vec![
+                Stmt::Let {
+                    name: Ident("s".into()),
+                    ty: Some(path_ty("String", span)),
+                    mutable: false,
+                    value: Some(Expr::Call {
+                        callee: Box::new(Expr::Ident(Ident("String::from_str".into()), span)),
+                        args: vec![Expr::Lit(Literal::Str("hi".into()), span)],
+                        span,
+                    }),
+                    span,
+                },
+                Stmt::Expr(if_expr, span),
+                Stmt::Let {
+                    name: Ident("t".into()),
+                    ty: None,
+                    mutable: false,
+                    value: Some(Expr::Ident(Ident("s".into()), span)),
+                    span,
+                },
+                Stmt::Ret(Some(Expr::Lit(Literal::Int(0), span)), span),
+            ],
+        },
+        span,
+    };
+
+    let module = Module {
+        imports: vec![],
+        items: vec![Item::Function(func)],
+    };
+
+    let (resolver, diags) = resolve_types(&module);
+    assert!(diags.is_empty());
+
+    let (_mir, lower_diags) = lower_module(&module, &resolver);
+    assert!(
+        lower_diags.is_empty(),
+        "unexpected diagnostics: {:?}",
+        lower_diags
+    );
+}
+
+#[test]
 fn struct_literal_missing_field_reports_error() {
     let span = Span::new(0, 5);
     let point_struct = Item::Struct(StructDef {
@@ -703,6 +764,54 @@ fn lowers_assignment_statements_to_mir() {
     assert!(assigns
         .iter()
         .any(|(local, value)| { local.0 == 0 && matches!(value, Rvalue::ConstInt(2)) }));
+}
+
+#[test]
+fn lowers_struct_field_assignment() {
+    let src = r#"
+struct Run {
+  max_iterations: i32
+}
+
+struct Session {
+  run: Run
+}
+
+fn main() {
+  let mut session = Session { run: Run { max_iterations: 1 } }
+  session.run.max_iterations = 2
+}
+"#;
+
+    let out = compile_source(
+        src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: false,
+        },
+    );
+
+    assert!(
+        out.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        out.diagnostics
+    );
+
+    let main_fn = out
+        .mir
+        .functions
+        .iter()
+        .find(|f| f.name == "main")
+        .expect("main function present");
+
+    let has_assign = main_fn.blocks.iter().flat_map(|b| &b.insts).any(|inst| {
+        matches!(
+            inst,
+            MirInst::AssignField { field_name, .. } if field_name == "max_iterations"
+        )
+    });
+
+    assert!(has_assign, "expected field assignment in MIR");
 }
 
 #[test]
@@ -967,4 +1076,115 @@ fn lowers_usize_add_literal_to_usize_temp() {
         }
     }
     assert!(found, "expected an Add binary temp assignment");
+}
+
+fn compile_ok(src: &str) {
+    let out = compile_source(
+        src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: true,
+        },
+    );
+    assert!(
+        out.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        out.diagnostics
+    );
+}
+
+#[test]
+fn if_return_then_allows_use_after() {
+    let src = r#"
+        fn main() -> i32 {
+          let s = String::from_str("hi")
+          if false { ret 1 }
+          let t = s
+          let t_ref: str = t
+          if t_ref.len() != 2 { ret 2 }
+          ret 0
+        }
+    "#;
+
+    compile_ok(src);
+}
+
+#[test]
+fn if_return_else_allows_use_after() {
+    let src = r#"
+        fn main() -> i32 {
+          let s = String::from_str("hi")
+          if true { } else { ret 1 }
+          let t = s
+          let t_ref: str = t
+          if t_ref.len() != 2 { ret 2 }
+          ret 0
+        }
+    "#;
+
+    compile_ok(src);
+}
+
+#[test]
+fn nested_if_return_allows_use_after() {
+    let src = r#"
+        fn main() -> i32 {
+          let s = String::from_str("hi")
+          if true {
+            if false { ret 1 }
+          }
+          let t = s
+          let t_ref: str = t
+          if t_ref.len() != 2 { ret 2 }
+          ret 0
+        }
+    "#;
+
+    compile_ok(src);
+}
+
+#[test]
+fn if_expression_allows_diverging_then() {
+    let src = r#"
+        fn main() -> i32 {
+          let v = if false { ret 1 } else { 2 }
+          ret v
+        }
+    "#;
+
+    compile_ok(src);
+}
+
+#[test]
+fn if_expression_allows_diverging_else() {
+    let src = r#"
+        fn main() -> i32 {
+          let v = if true { 2 } else { ret 1 }
+          ret v
+        }
+    "#;
+
+    compile_ok(src);
+}
+
+#[test]
+fn match_expression_allows_diverging_arm() {
+    let src = r#"
+        enum Flag { A, B }
+
+        fn main() -> i32 {
+          let s = String::from_str("hi")
+          let flag = B()
+          let v = match flag {
+            A => { ret 1 }
+            B => 2
+          }
+          let t = s
+          let t_ref: str = t
+          if t_ref.len() != 2 { ret 3 }
+          ret v
+        }
+    "#;
+
+    compile_ok(src);
 }

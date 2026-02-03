@@ -736,6 +736,12 @@ pub mod mir {
             local: LocalId,
             value: Rvalue,
         },
+        AssignField {
+            base: LocalId,
+            field_name: String,
+            field_index: u32,
+            value: Rvalue,
+        },
         Return(Option<MirValue>),
         Goto(BlockId),
         If {

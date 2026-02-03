@@ -333,6 +333,22 @@ mod tests {
     }
 
     #[test]
+    fn if_without_else_can_be_unit_expression() {
+        let output = compile_source(
+            "fn main() { let x = if true { () } }",
+            FrontendOptions {
+                emit_mir: true,
+                include_std: false,
+            },
+        );
+        assert!(
+            output.diagnostics.is_empty(),
+            "diags: {:?}",
+            output.diagnostics
+        );
+    }
+
+    #[test]
     fn compiles_std_println_from_import() {
         let source = "from std import println\nfn main() { println(\"hi\") }";
         let output = compile_source(

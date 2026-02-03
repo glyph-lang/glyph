@@ -231,7 +231,7 @@ fn main() -> i32 {
   - Bad: `String::from_str("hi").len()`
 - String interpolation with `{expr}` is supported in `print`/`println`, but not in general expressions.
 - `Vec::new()` defaults to `Vec<i32>`; annotate when using other element types.
-- Assignment targets must be identifiers. Field and index assignment are not supported.
+- Assignment targets can be identifiers or struct/tuple fields. Index assignment is not supported.
 - References can only be taken to locals (`&local`), not to temporaries.
 - Array `.len()` only works on local array variables.
 - The `?` operator token exists but is not parsed yet; use `match` on `Result`.

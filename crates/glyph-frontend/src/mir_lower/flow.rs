@@ -1,7 +1,7 @@
 use glyph_core::ast::{Block, Expr, Function, Ident, Stmt};
 use glyph_core::mir::{BlockId, LocalId, MirFunction, MirInst, MirValue, Rvalue};
 use glyph_core::span::Span;
-use glyph_core::types::Type;
+use glyph_core::types::{Mutability, Type};
 
 use crate::resolver::ResolverContext;
 
@@ -9,7 +9,8 @@ use super::context::{LocalState, LowerCtx};
 use super::expr::{lower_expr, lower_expr_with_expected, lower_value, lower_value_with_expected};
 use super::types::{resolve_type_name, type_expr_to_string};
 use super::value::{
-    coerce_to_bool, expr_span, infer_value_type, rvalue_from_value, update_local_type_from_rvalue,
+    coerce_to_bool, expr_span, infer_value_type, local_struct_name, rvalue_from_value,
+    update_local_type_from_rvalue,
 };
 
 fn imports_sys_argv(resolver: &ResolverContext) -> bool {
@@ -250,19 +251,52 @@ pub(crate) fn lower_block_with_expected<'a>(
                     }
                 }
             }
-            Stmt::Assign { target, value, .. } => {
-                if let Some(local) = lower_assignment_target(ctx, target) {
-                    let expected = ctx.locals[local.0 as usize].ty.clone();
-                    if let Some(mut rv) = lower_expr_with_expected(ctx, value, expected.as_ref()) {
-                        update_local_type_from_rvalue(ctx, local, &mut rv);
-                        ctx.push_inst(MirInst::Assign { local, value: rv });
-                    } else {
-                        ctx.push_inst(MirInst::Nop);
+            Stmt::Assign {
+                target,
+                value,
+                span,
+            } => {
+                if let Some(assign_target) = lower_assignment_target(ctx, target, *span) {
+                    match assign_target {
+                        AssignmentTarget::Local(local) => {
+                            let expected = ctx.locals[local.0 as usize].ty.clone();
+                            if let Some(mut rv) =
+                                lower_expr_with_expected(ctx, value, expected.as_ref())
+                            {
+                                update_local_type_from_rvalue(ctx, local, &mut rv);
+                                ctx.push_inst(MirInst::Assign { local, value: rv });
+                            } else {
+                                ctx.push_inst(MirInst::Nop);
+                            }
+                        }
+                        AssignmentTarget::Field {
+                            base,
+                            field_name,
+                            field_index,
+                            field_type,
+                        } => {
+                            if let Some(rv) =
+                                lower_expr_with_expected(ctx, value, Some(&field_type))
+                            {
+                                ctx.push_inst(MirInst::AssignField {
+                                    base,
+                                    field_name,
+                                    field_index,
+                                    value: rv,
+                                });
+                            } else {
+                                ctx.push_inst(MirInst::Nop);
+                            }
+                        }
                     }
                 } else {
                     ctx.push_inst(MirInst::Nop);
                 }
             }
+        }
+
+        if ctx.terminated() {
+            break;
         }
     }
 
@@ -277,6 +311,24 @@ pub(crate) fn lower_block_with_expected<'a>(
     let result = last_value;
     ctx.exit_scope();
     result
+}
+
+fn merge_local_states(merged: &mut [LocalState], current: &[LocalState]) {
+    for (merged_state, current_state) in merged.iter_mut().zip(current.iter()) {
+        *merged_state = match (*merged_state, *current_state) {
+            (LocalState::Moved, _) | (_, LocalState::Moved) => LocalState::Moved,
+            (LocalState::Uninitialized, _) | (_, LocalState::Uninitialized) => {
+                LocalState::Uninitialized
+            }
+            _ => LocalState::Initialized,
+        };
+    }
+}
+
+fn restore_local_states(ctx: &mut LowerCtx<'_>, states: &[LocalState], len: usize) {
+    for i in 0..len {
+        ctx.local_states[i] = states[i];
+    }
 }
 
 pub(crate) fn lower_if<'a>(
@@ -296,19 +348,49 @@ pub(crate) fn lower_if<'a>(
     ctx.switch_to(header);
     lower_cond_branch(ctx, cond, then_id, else_id.unwrap_or(join_id));
 
+    let base_len = ctx.local_states.len();
+    let base_states = ctx.local_states.clone();
+    let mut merged_states = base_states.clone();
+    let mut any_reaches_join = false;
+
     ctx.switch_to(then_id);
     let _ = lower_block(ctx, then_blk);
-    if !ctx.terminated() {
+    let then_terminated = ctx.terminated();
+    if !then_terminated {
         ctx.push_inst(MirInst::Goto(join_id));
+    }
+    if !then_terminated {
+        any_reaches_join = true;
+        merge_local_states(
+            &mut merged_states[..base_len],
+            &ctx.local_states[..base_len],
+        );
     }
 
     if let Some(else_block) = else_blk {
         let else_id = else_id.unwrap();
+        restore_local_states(ctx, &base_states, base_len);
         ctx.switch_to(else_id);
         let _ = lower_block(ctx, else_block);
-        if !ctx.terminated() {
+        let else_terminated = ctx.terminated();
+        if !else_terminated {
             ctx.push_inst(MirInst::Goto(join_id));
         }
+        if !else_terminated {
+            any_reaches_join = true;
+            merge_local_states(
+                &mut merged_states[..base_len],
+                &ctx.local_states[..base_len],
+            );
+        }
+    } else {
+        any_reaches_join = true;
+    }
+
+    if any_reaches_join {
+        restore_local_states(ctx, &merged_states, base_len);
+    } else {
+        restore_local_states(ctx, &base_states, base_len);
     }
 
     ctx.switch_to(join_id);
@@ -322,9 +404,6 @@ pub(crate) fn lower_if_value<'a>(
     expected: Option<&Type>,
 ) -> Option<MirValue> {
     let Some(else_block) = else_blk else {
-        if !matches!(expected, Some(Type::Void)) {
-            ctx.error("if expression requires an else branch", Some(then_blk.span));
-        }
         lower_if(ctx, cond, then_blk, None);
         return Some(MirValue::Unit);
     };
@@ -341,6 +420,11 @@ pub(crate) fn lower_if_value<'a>(
     if let Some(ty) = expected {
         ctx.locals[result_local.0 as usize].ty = Some(ty.clone());
     }
+
+    let base_len = ctx.local_states.len();
+    let base_states = ctx.local_states.clone();
+    let mut merged_states = base_states.clone();
+    let mut any_reaches_join = false;
 
     let assign_result = |ctx: &mut LowerCtx<'a>, value: Option<MirValue>, span: Span| {
         let Some(value) = value else {
@@ -368,16 +452,35 @@ pub(crate) fn lower_if_value<'a>(
 
     ctx.switch_to(then_id);
     let then_val = lower_block_with_expected(ctx, then_blk, expected, true, true);
-    assign_result(ctx, then_val, then_blk.span);
-    if !ctx.terminated() {
+    let then_terminated = ctx.terminated();
+    if !then_terminated {
+        assign_result(ctx, then_val, then_blk.span);
         ctx.push_inst(MirInst::Goto(join_id));
+        any_reaches_join = true;
+        merge_local_states(
+            &mut merged_states[..base_len],
+            &ctx.local_states[..base_len],
+        );
     }
 
+    restore_local_states(ctx, &base_states, base_len);
     ctx.switch_to(else_id);
     let else_val = lower_block_with_expected(ctx, else_block, expected, true, true);
-    assign_result(ctx, else_val, else_block.span);
-    if !ctx.terminated() {
+    let else_terminated = ctx.terminated();
+    if !else_terminated {
+        assign_result(ctx, else_val, else_block.span);
         ctx.push_inst(MirInst::Goto(join_id));
+        any_reaches_join = true;
+        merge_local_states(
+            &mut merged_states[..base_len],
+            &ctx.local_states[..base_len],
+        );
+    }
+
+    if any_reaches_join {
+        restore_local_states(ctx, &merged_states, base_len);
+    } else {
+        restore_local_states(ctx, &base_states, base_len);
     }
 
     ctx.switch_to(join_id);
@@ -445,15 +548,35 @@ pub(crate) fn lower_while<'a>(ctx: &mut LowerCtx<'a>, cond: &'a Expr, body_block
     ctx.switch_to(header_block);
     lower_cond_branch(ctx, cond, body_bb, exit_bb);
 
+    let base_len = ctx.local_states.len();
+    let base_states = ctx.local_states.clone();
+    let mut merged_states = base_states.clone();
+
     // Body: lower statements, add back edge
     ctx.switch_to(body_bb);
     ctx.enter_loop(header_block, exit_bb);
     let _ = lower_block(ctx, body_block);
     ctx.exit_loop();
 
-    if !ctx.terminated() {
+    let body_terminated = ctx.terminated();
+    if !body_terminated {
         ctx.push_inst(MirInst::Goto(header_block)); // Back edge
     }
+
+    let body_returns = ctx
+        .blocks
+        .get(ctx.current.0 as usize)
+        .and_then(|block| block.insts.last())
+        .map(|inst| matches!(inst, MirInst::Return(_)))
+        .unwrap_or(false);
+
+    if !body_returns {
+        merge_local_states(
+            &mut merged_states[..base_len],
+            &ctx.local_states[..base_len],
+        );
+    }
+    restore_local_states(ctx, &merged_states, base_len);
 
     // Exit: continue after loop
     ctx.switch_to(exit_bb);
@@ -510,6 +633,10 @@ pub(crate) fn lower_for<'a>(
         else_bb: exit_bb,
     });
 
+    let base_len = ctx.local_states.len();
+    let base_states = ctx.local_states.clone();
+    let mut merged_states = base_states.clone();
+
     // Body: execute loop body and increment
     ctx.switch_to(body_bb);
     ctx.enter_loop(header_block, exit_bb);
@@ -517,7 +644,8 @@ pub(crate) fn lower_for<'a>(
     ctx.exit_loop();
 
     // Increment: var = var + 1
-    if !ctx.terminated() {
+    let body_terminated = ctx.terminated();
+    if !body_terminated {
         let inc_temp = ctx.fresh_local(None);
         ctx.locals[inc_temp.0 as usize].ty = ctx.locals[var_local.0 as usize].ty.clone();
         ctx.push_inst(MirInst::Assign {
@@ -535,40 +663,239 @@ pub(crate) fn lower_for<'a>(
         ctx.push_inst(MirInst::Goto(header_block));
     }
 
+    let body_returns = ctx
+        .blocks
+        .get(ctx.current.0 as usize)
+        .and_then(|block| block.insts.last())
+        .map(|inst| matches!(inst, MirInst::Return(_)))
+        .unwrap_or(false);
+
+    if !body_returns {
+        merge_local_states(
+            &mut merged_states[..base_len],
+            &ctx.local_states[..base_len],
+        );
+    }
+    restore_local_states(ctx, &merged_states, base_len);
+
     // Exit: continue after loop
     ctx.switch_to(exit_bb);
 }
 
-pub(crate) fn lower_assignment_target<'a>(
+enum AssignmentTarget {
+    Local(LocalId),
+    Field {
+        base: LocalId,
+        field_name: String,
+        field_index: u32,
+        field_type: Type,
+    },
+}
+
+fn collect_field_chain<'a>(expr: &'a Expr, fields: &mut Vec<&'a Ident>) -> &'a Expr {
+    match expr {
+        Expr::FieldAccess { base, field, .. } => {
+            fields.push(field);
+            collect_field_chain(base, fields)
+        }
+        _ => expr,
+    }
+}
+
+fn assignment_root_is_mutable(
+    ctx: &mut LowerCtx<'_>,
+    local_id: LocalId,
+    name: &str,
+    span: Span,
+) -> bool {
+    let Some(local) = ctx.locals.get(local_id.0 as usize) else {
+        return true;
+    };
+
+    match local.ty.as_ref() {
+        Some(Type::Ref(_, Mutability::Immutable)) => {
+            ctx.error("cannot assign through immutable reference", Some(span));
+            false
+        }
+        Some(Type::Ref(_, Mutability::Mutable)) => true,
+        _ => {
+            if !local.mutable {
+                ctx.error(
+                    format!("cannot assign to immutable variable '{}'", name),
+                    Some(span),
+                );
+                false
+            } else {
+                true
+            }
+        }
+    }
+}
+
+fn resolve_field_info(
+    ctx: &mut LowerCtx<'_>,
+    base_local: LocalId,
+    field: &Ident,
+    span: Span,
+) -> Option<(Type, u32)> {
+    let base_type = match ctx
+        .locals
+        .get(base_local.0 as usize)
+        .and_then(|l| l.ty.as_ref())
+    {
+        Some(ty) => ty,
+        None => {
+            ctx.error("field access base has unknown type", Some(span));
+            return None;
+        }
+    };
+
+    let mut inner = base_type;
+    loop {
+        match inner {
+            Type::Ref(inner_ty, _)
+            | Type::Own(inner_ty)
+            | Type::RawPtr(inner_ty)
+            | Type::Shared(inner_ty) => {
+                inner = inner_ty.as_ref();
+            }
+            _ => break,
+        }
+    }
+
+    if let Type::Tuple(elem_types) = inner {
+        let Ok(idx) = field.0.parse::<usize>() else {
+            ctx.error(
+                format!(
+                    "tuple field access must use numeric index, got '{}'",
+                    field.0
+                ),
+                Some(span),
+            );
+            return None;
+        };
+
+        if idx >= elem_types.len() {
+            ctx.error(
+                format!(
+                    "tuple index {} out of bounds (len is {})",
+                    idx,
+                    elem_types.len()
+                ),
+                Some(span),
+            );
+            return None;
+        }
+
+        return Some((elem_types[idx].clone(), idx as u32));
+    }
+
+    let Some(struct_name) = local_struct_name(ctx, base_local) else {
+        ctx.error("field access base is not a struct", Some(span));
+        return None;
+    };
+
+    let Some((field_type, field_index)) = ctx.resolver.get_field(&struct_name, &field.0) else {
+        ctx.error(
+            format!("struct '{}' has no field named '{}'", struct_name, field.0),
+            Some(span),
+        );
+        return None;
+    };
+
+    Some((field_type, field_index as u32))
+}
+
+fn lower_assignment_target<'a>(
     ctx: &mut LowerCtx<'a>,
     target: &'a Expr,
-) -> Option<LocalId> {
+    span: Span,
+) -> Option<AssignmentTarget> {
     match target {
-        Expr::Ident(ident, span) => {
+        Expr::Ident(ident, ident_span) => {
             let local_id = ctx.bindings.get(ident.0.as_str()).copied().or_else(|| {
-                ctx.error(format!("unknown identifier '{}'", ident.0), Some(*span));
+                ctx.error(
+                    format!("unknown identifier '{}'", ident.0),
+                    Some(*ident_span),
+                );
                 None
             })?;
 
-            // Check mutability
-            if let Some(local) = ctx.locals.get(local_id.0 as usize) {
-                if !local.mutable {
-                    ctx.error(
-                        format!("cannot assign to immutable variable '{}'", ident.0),
-                        Some(*span),
-                    );
-                    return None;
-                }
+            if !assignment_root_is_mutable(ctx, local_id, &ident.0, *ident_span) {
+                return None;
             }
 
-            Some(local_id)
+            Some(AssignmentTarget::Local(local_id))
         }
-        Expr::FieldAccess { span, .. } => {
-            ctx.error("assignment to fields is not supported yet", Some(*span));
-            None
+        Expr::FieldAccess { .. } => {
+            let mut fields = Vec::new();
+            let root = collect_field_chain(target, &mut fields);
+            fields.reverse();
+
+            let Some((last_field, rest)) = fields.split_last() else {
+                ctx.error(
+                    "assignment target must be an identifier or field access",
+                    Some(span),
+                );
+                return None;
+            };
+
+            let Expr::Ident(root_ident, root_span) = root else {
+                ctx.error(
+                    "assignment target must start with an identifier",
+                    expr_span(root).or(Some(span)),
+                );
+                return None;
+            };
+
+            let root_local = ctx
+                .bindings
+                .get(root_ident.0.as_str())
+                .copied()
+                .or_else(|| {
+                    ctx.error(
+                        format!("unknown identifier '{}'", root_ident.0),
+                        Some(*root_span),
+                    );
+                    None
+                })?;
+
+            if !assignment_root_is_mutable(ctx, root_local, &root_ident.0, *root_span) {
+                return None;
+            }
+
+            let mut base_local = root_local;
+            for field in rest.iter() {
+                let (_, field_index) = resolve_field_info(ctx, base_local, field, span)?;
+                let mut rv = Rvalue::FieldRef {
+                    base: base_local,
+                    field_name: field.0.clone(),
+                    field_index,
+                    mutability: Mutability::Mutable,
+                };
+                let tmp = ctx.fresh_local(None);
+                update_local_type_from_rvalue(ctx, tmp, &mut rv);
+                ctx.push_inst(MirInst::Assign {
+                    local: tmp,
+                    value: rv,
+                });
+                base_local = tmp;
+            }
+
+            let (field_type, field_index) = resolve_field_info(ctx, base_local, last_field, span)?;
+
+            Some(AssignmentTarget::Field {
+                base: base_local,
+                field_name: last_field.0.clone(),
+                field_index,
+                field_type,
+            })
         }
         _ => {
-            ctx.error("assignment target must be an identifier", expr_span(target));
+            ctx.error(
+                "assignment target must be an identifier or field access",
+                expr_span(target).or(Some(span)),
+            );
             None
         }
     }

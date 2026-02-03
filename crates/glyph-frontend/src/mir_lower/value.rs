@@ -11,7 +11,7 @@ pub(crate) fn rvalue_from_value(val: MirValue) -> Option<Rvalue> {
         MirValue::Int(i) => Some(Rvalue::ConstInt(i)),
         MirValue::Bool(b) => Some(Rvalue::ConstBool(b)),
         MirValue::Local(id) => Some(Rvalue::Move(id)),
-        MirValue::Unit => None,
+        MirValue::Unit => Some(Rvalue::ConstInt(0)),
     }
 }
 

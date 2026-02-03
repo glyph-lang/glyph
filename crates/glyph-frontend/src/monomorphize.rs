@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use glyph_core::{
     ast::{Item, Module, TypeExpr},
     diag::Diagnostic,
-    mir::{MirInst, MirModule, Rvalue},
+    mir::{LocalId, MirInst, MirModule, Rvalue},
     types::{EnumType, EnumVariant, Mutability, StructType, Type},
 };
 
@@ -508,6 +508,57 @@ fn rewrite_rvalue(
     }
 }
 
+fn field_assignment_type(
+    base: LocalId,
+    field_index: u32,
+    locals: &[glyph_core::mir::Local],
+    struct_types: &HashMap<String, StructType>,
+    templates: &HashMap<String, Template>,
+    instantiations: &HashMap<(String, Vec<Type>), String>,
+) -> Option<Type> {
+    let mut ty = locals.get(base.0 as usize).and_then(|l| l.ty.clone())?;
+
+    loop {
+        match ty {
+            Type::Ref(inner, _) | Type::Own(inner) | Type::RawPtr(inner) | Type::Shared(inner) => {
+                ty = *inner;
+            }
+            Type::Tuple(elem_types) => {
+                return elem_types.get(field_index as usize).cloned();
+            }
+            Type::Named(name) => {
+                if let Some(struct_type) = struct_types.get(&name) {
+                    return struct_type
+                        .fields
+                        .get(field_index as usize)
+                        .map(|(_, ty)| ty.clone());
+                }
+
+                let (base_name, args) = instantiations.iter().find_map(|(key, inst_name)| {
+                    if inst_name == &name {
+                        Some((key.0.clone(), key.1.clone()))
+                    } else {
+                        None
+                    }
+                })?;
+                let Template::Struct { params, fields } = templates.get(&base_name)? else {
+                    return None;
+                };
+                let (_, field_ty) = fields.get(field_index as usize)?;
+                let subst: HashMap<String, Type> =
+                    params.iter().cloned().zip(args.iter().cloned()).collect();
+                let substituted = substitute(field_ty, &subst);
+                return Some(rewrite_type_with_instantiations(
+                    &substituted,
+                    templates,
+                    instantiations,
+                ));
+            }
+            _ => return None,
+        }
+    }
+}
+
 fn instantiate_all(
     mir: &mut MirModule,
     templates: &HashMap<String, Template>,
@@ -616,6 +667,8 @@ pub fn monomorphize_mir(mir: &mut MirModule, modules: &HashMap<String, Module>) 
         }
     }
 
+    let struct_types_snapshot = mir.struct_types.clone();
+
     for func in &mut mir.functions {
         if let Some(ret) = &mut func.ret_type {
             *ret = normalize_enum_named_types(ret, &enum_names);
@@ -640,21 +693,49 @@ pub fn monomorphize_mir(mir: &mut MirModule, modules: &HashMap<String, Module>) 
             }
         }
 
+        let locals_snapshot = func.locals.clone();
+
         for block in &mut func.blocks {
             for inst in &mut block.insts {
-                if let MirInst::Assign { local, value } = inst {
-                    let assigned_ty = func
-                        .locals
-                        .get(local.0 as usize)
-                        .and_then(|l| l.ty.as_ref());
-                    rewrite_rvalue(
+                match inst {
+                    MirInst::Assign { local, value } => {
+                        let assigned_ty = func
+                            .locals
+                            .get(local.0 as usize)
+                            .and_then(|l| l.ty.as_ref());
+                        rewrite_rvalue(
+                            value,
+                            assigned_ty,
+                            &templates,
+                            &mut instantiations,
+                            &mut worklist,
+                            &mut diagnostics,
+                        );
+                    }
+                    MirInst::AssignField {
+                        base,
+                        field_index,
                         value,
-                        assigned_ty,
-                        &templates,
-                        &mut instantiations,
-                        &mut worklist,
-                        &mut diagnostics,
-                    );
+                        ..
+                    } => {
+                        let assigned_ty = field_assignment_type(
+                            *base,
+                            *field_index,
+                            &locals_snapshot,
+                            &struct_types_snapshot,
+                            &templates,
+                            &instantiations,
+                        );
+                        rewrite_rvalue(
+                            value,
+                            assigned_ty.as_ref(),
+                            &templates,
+                            &mut instantiations,
+                            &mut worklist,
+                            &mut diagnostics,
+                        );
+                    }
+                    _ => {}
                 }
             }
         }

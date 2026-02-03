@@ -322,6 +322,53 @@ impl CodegenContext {
                         LLVMBuildStore(self.builder, val, *local_ptr);
                     }
                 }
+                MirInst::AssignField {
+                    base,
+                    field_index,
+                    value,
+                    ..
+                } => {
+                    self.debug_log(&format!(
+                        "codegen_inst assign_field {}",
+                        self.rvalue_tag(value)
+                    ));
+                    let val = self.codegen_rvalue(value, func, local_map, functions, mir_module)?;
+
+                    let (struct_name, struct_ptr) =
+                        self.struct_pointer_for_local(*base, func, local_map)?;
+                    let llvm_struct = self.get_struct_type(struct_name.as_str())?;
+                    let field_ty = {
+                        let layout = self
+                            .struct_layouts
+                            .get(&struct_name)
+                            .ok_or_else(|| anyhow!("missing layout for struct {}", struct_name))?;
+                        layout
+                            .fields
+                            .get(*field_index as usize)
+                            .map(|(_, ty)| ty.clone())
+                            .ok_or_else(|| {
+                                anyhow!("invalid field index {} for {}", field_index, struct_name)
+                            })?
+                    };
+
+                    let is_void = matches!(field_ty, Type::Void)
+                        || matches!(&field_ty, Type::Tuple(elem_types) if elem_types.is_empty());
+                    if !is_void {
+                        let gep_name =
+                            CString::new(format!("{}.field{}", struct_name, field_index))?;
+                        let field_ptr = LLVMBuildStructGEP2(
+                            self.builder,
+                            llvm_struct,
+                            struct_ptr,
+                            *field_index,
+                            gep_name.as_ptr(),
+                        );
+                        let llvm_field_ty = self.get_llvm_type(&field_ty)?;
+                        let signed = matches!(field_ty, Type::I8 | Type::I32 | Type::I64);
+                        let val = self.coerce_int_value(val, llvm_field_ty, signed);
+                        LLVMBuildStore(self.builder, val, field_ptr);
+                    }
+                }
                 MirInst::Return(val) => {
                     if let Some(sret_ptr) = sret_ptr {
                         if let Some(v) = val {

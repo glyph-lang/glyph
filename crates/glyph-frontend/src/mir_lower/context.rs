@@ -78,16 +78,26 @@ impl<'a> LowerCtx<'a> {
     }
 
     pub(crate) fn push_inst(&mut self, inst: MirInst) {
-        if let MirInst::Assign { local, value } = &inst {
-            self.handle_reassign(*local);
-            if let Some(state) = self.local_states.get_mut(local.0 as usize) {
-                *state = LocalState::Initialized;
-            }
-            if let Rvalue::Move(src) = value {
-                if let Some(state) = self.local_states.get_mut(src.0 as usize) {
-                    *state = LocalState::Moved;
+        match &inst {
+            MirInst::Assign { local, value } => {
+                self.handle_reassign(*local);
+                if let Some(state) = self.local_states.get_mut(local.0 as usize) {
+                    *state = LocalState::Initialized;
+                }
+                if let Rvalue::Move(src) = value {
+                    if let Some(state) = self.local_states.get_mut(src.0 as usize) {
+                        *state = LocalState::Moved;
+                    }
                 }
             }
+            MirInst::AssignField { value, .. } => {
+                if let Rvalue::Move(src) = value {
+                    if let Some(state) = self.local_states.get_mut(src.0 as usize) {
+                        *state = LocalState::Moved;
+                    }
+                }
+            }
+            _ => {}
         }
         self.current_block_mut().insts.push(inst);
     }

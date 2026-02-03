@@ -5,12 +5,15 @@ impl CodegenContext {
         for func in &mir_module.functions {
             for block in &func.blocks {
                 for inst in &block.insts {
-                    if let MirInst::Assign { value, .. } = inst {
-                        if let Rvalue::Call { name, .. } = value {
-                            if name == "argv" || name == "std::sys::argv" {
-                                return true;
+                    match inst {
+                        MirInst::Assign { value, .. } | MirInst::AssignField { value, .. } => {
+                            if let Rvalue::Call { name, .. } = value {
+                                if name == "argv" || name == "std::sys::argv" {
+                                    return true;
+                                }
                             }
                         }
+                        _ => {}
                     }
                 }
             }
