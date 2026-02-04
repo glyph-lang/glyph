@@ -229,6 +229,7 @@ fn main() -> i32 {
 - Many std methods require the receiver to be a local variable (not a temporary). Always assign before calling:
   - Good: `let s = String::from_str("hi"); s.len()`
   - Bad: `String::from_str("hi").len()`
+- Struct fields are not moveable by value. Borrow (`let x: str = s.field`), clone (`s.field.clone()`), or move the whole struct.
 - String interpolation with `{expr}` is supported in `print`/`println`, but not in general expressions.
 - `Vec::new()` defaults to `Vec<i32>`; annotate when using other element types.
 - Assignment targets can be identifiers or struct/tuple fields. Index assignment is not supported.

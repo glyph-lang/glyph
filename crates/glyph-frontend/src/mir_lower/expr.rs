@@ -1,5 +1,5 @@
 use glyph_core::ast::{BinaryOp, Expr, Ident, UnaryOp};
-use glyph_core::mir::{MirInst, MirValue, Rvalue};
+use glyph_core::mir::{LocalId, MirInst, MirValue, Rvalue};
 use glyph_core::span::Span;
 use glyph_core::types::{Mutability, Type};
 
@@ -25,6 +25,147 @@ fn consume_value_local(ctx: &mut LowerCtx<'_>, value: &MirValue, span: Span) {
         return;
     }
     let _ = ctx.consume_local(*local, Some(span));
+}
+
+fn type_is_copy(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::I8
+            | Type::I32
+            | Type::I64
+            | Type::U8
+            | Type::U32
+            | Type::U64
+            | Type::Usize
+            | Type::F32
+            | Type::F64
+            | Type::Bool
+            | Type::Char
+            | Type::Str
+            | Type::Ref(_, _)
+            | Type::RawPtr(_)
+            | Type::Shared(_)
+    )
+}
+
+fn is_move_context(expected: Option<&Type>, field_type: &Type) -> bool {
+    match expected {
+        Some(Type::Str) if matches!(field_type, Type::String | Type::Str) => false,
+        _ => true,
+    }
+}
+
+fn resolve_field_info(
+    ctx: &mut LowerCtx<'_>,
+    base_local: LocalId,
+    field: &Ident,
+    span: Span,
+) -> Option<(Type, u32)> {
+    let base_type = match ctx
+        .locals
+        .get(base_local.0 as usize)
+        .and_then(|l| l.ty.as_ref())
+    {
+        Some(ty) => ty,
+        None => {
+            ctx.error("field access base has unknown type", Some(span));
+            return None;
+        }
+    };
+
+    let mut inner = base_type;
+    loop {
+        match inner {
+            Type::Ref(inner_ty, _)
+            | Type::Own(inner_ty)
+            | Type::RawPtr(inner_ty)
+            | Type::Shared(inner_ty) => {
+                inner = inner_ty.as_ref();
+            }
+            _ => break,
+        }
+    }
+
+    if let Type::Tuple(elem_types) = inner {
+        let Ok(idx) = field.0.parse::<usize>() else {
+            ctx.error(
+                format!(
+                    "tuple field access must use numeric index, got '{}'",
+                    field.0
+                ),
+                Some(span),
+            );
+            return None;
+        };
+
+        if idx >= elem_types.len() {
+            ctx.error(
+                format!(
+                    "tuple index {} out of bounds (len is {})",
+                    idx,
+                    elem_types.len()
+                ),
+                Some(span),
+            );
+            return None;
+        }
+
+        return Some((elem_types[idx].clone(), idx as u32));
+    }
+
+    let Some(struct_name) = local_struct_name(ctx, base_local) else {
+        ctx.error("field access base is not a struct", Some(span));
+        return None;
+    };
+
+    let Some((field_type, field_index)) = ctx.resolver.get_field(&struct_name, &field.0) else {
+        ctx.error(
+            format!("struct '{}' has no field named '{}'", struct_name, field.0),
+            Some(span),
+        );
+        return None;
+    };
+
+    Some((field_type, field_index as u32))
+}
+
+fn lower_field_access_ref<'a>(
+    ctx: &mut LowerCtx<'a>,
+    expr: &'a Expr,
+    span: Span,
+) -> Option<LocalId> {
+    match expr {
+        Expr::Ident(ident, ident_span) => {
+            ctx.bindings.get(ident.0.as_str()).copied().or_else(|| {
+                ctx.error(
+                    format!("unknown identifier '{}'", ident.0),
+                    Some(*ident_span),
+                );
+                None
+            })
+        }
+        Expr::FieldAccess { base, field, span } => {
+            let base_local = lower_field_access_ref(ctx, base, *span)?;
+            let (_, field_index) = resolve_field_info(ctx, base_local, field, *span)?;
+            let mut rv = Rvalue::FieldRef {
+                base: base_local,
+                field_name: field.0.clone(),
+                field_index,
+                mutability: Mutability::Immutable,
+            };
+            let tmp = ctx.fresh_local(None);
+            update_local_type_from_rvalue(ctx, tmp, &mut rv);
+            ctx.push_inst(MirInst::Assign {
+                local: tmp,
+                value: rv,
+            });
+            Some(tmp)
+        }
+        _ => {
+            ctx.error("field access base must be a local", Some(span));
+            None
+        }
+    }
 }
 
 pub(crate) fn lower_expr<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr) -> Option<Rvalue> {
@@ -99,7 +240,9 @@ pub(crate) fn lower_expr_with_expected<'a>(
             None
         }
         Expr::StructLit { name, fields, span } => lower_struct_lit(ctx, name, fields, *span),
-        Expr::FieldAccess { base, field, span } => lower_field_access(ctx, base, field, *span),
+        Expr::FieldAccess { base, field, span } => {
+            lower_field_access(ctx, base, field, *span, expected)
+        }
         Expr::Ref {
             expr,
             mutability,
@@ -944,68 +1087,54 @@ pub(crate) fn lower_field_access<'a>(
     base: &'a Expr,
     field: &'a Ident,
     span: Span,
+    expected: Option<&Type>,
 ) -> Option<Rvalue> {
-    let base_val = lower_value(ctx, base)?;
-    let base_local = match base_val {
-        MirValue::Local(id) => id,
+    let base_local = match base {
+        Expr::FieldAccess { .. } => lower_field_access_ref(ctx, base, span)?,
         _ => {
-            ctx.error("field access base must be a local", Some(span));
-            return None;
+            let base_val = lower_value(ctx, base)?;
+            match base_val {
+                MirValue::Local(id) => id,
+                _ => {
+                    ctx.error("field access base must be a local", Some(span));
+                    return None;
+                }
+            }
         }
     };
 
-    // Check if this is a tuple type
-    let base_type = ctx
-        .locals
-        .get(base_local.0 as usize)
-        .and_then(|l| l.ty.as_ref());
+    let (field_type, field_index) = resolve_field_info(ctx, base_local, field, span)?;
 
-    let (field_type, field_index, _struct_name) = if let Some(Type::Tuple(elem_types)) = base_type {
-        // Handle tuple field access
-        if let Ok(idx) = field.0.parse::<usize>() {
-            if idx < elem_types.len() {
-                (elem_types[idx].clone(), idx, tuple_struct_name(elem_types))
-            } else {
-                ctx.error(
-                    format!(
-                        "tuple index {} out of bounds (len is {})",
-                        idx,
-                        elem_types.len()
-                    ),
-                    Some(span),
-                );
-                return None;
-            }
-        } else {
-            ctx.error(
-                format!(
-                    "tuple field access must use numeric index, got '{}'",
-                    field.0
-                ),
-                Some(span),
-            );
-            return None;
-        }
+    if matches!(expected, Some(Type::String)) && matches!(field_type, Type::Str) {
+        ctx.error(
+            format!(
+                "cannot move borrowed `str` field '{}' into `String`; use `String::from_str(<struct>.{})`",
+                field.0, field.0
+            ),
+            Some(span),
+        );
+        return None;
+    }
+
+    if is_move_context(expected, &field_type) && !type_is_copy(&field_type) {
+        ctx.error(
+            format!(
+                "cannot move field '{}' out of a struct; borrow it (`let x: str = <struct>.{}`), clone it (`<struct>.{}.clone()`), or move the whole struct",
+                field.0, field.0, field.0
+            ),
+            Some(span),
+        );
+        return None;
+    }
+
+    let result_type = if matches!(expected, Some(Type::Str)) && matches!(field_type, Type::String) {
+        Type::Str
     } else {
-        // Handle regular struct field access
-        let Some(struct_name) = local_struct_name(ctx, base_local) else {
-            ctx.error("field access base is not a struct", Some(span));
-            return None;
-        };
-
-        let Some((field_type, field_index)) = ctx.resolver.get_field(&struct_name, &field.0) else {
-            ctx.error(
-                format!("struct '{}' has no field named '{}'", struct_name, field.0),
-                Some(span),
-            );
-            return None;
-        };
-
-        (field_type, field_index, struct_name)
+        field_type
     };
 
     let tmp = ctx.fresh_local(None);
-    ctx.locals[tmp.0 as usize].ty = Some(field_type);
+    ctx.locals[tmp.0 as usize].ty = Some(result_type);
 
     ctx.push_inst(MirInst::Assign {
         local: tmp,
@@ -1226,7 +1355,7 @@ pub(crate) fn lower_value_with_expected<'a>(
             lower_struct_lit(ctx, name, fields, *span).and_then(rvalue_to_value)
         }
         Expr::FieldAccess { base, field, span } => {
-            lower_field_access(ctx, base, field, *span).and_then(rvalue_to_value)
+            lower_field_access(ctx, base, field, *span, expected).and_then(rvalue_to_value)
         }
         Expr::Ref {
             expr,

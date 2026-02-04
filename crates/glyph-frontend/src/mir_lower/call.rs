@@ -16,7 +16,7 @@ use super::builtins::{
     lower_vec_push, lower_vec_static_new, lower_vec_static_with_capacity,
 };
 use super::context::{LocalState, LowerCtx};
-use super::expr::{lower_array_len, lower_value};
+use super::expr::{lower_array_len, lower_value, lower_value_with_expected};
 use super::value::infer_value_type;
 
 fn consume_call_local(ctx: &mut LowerCtx<'_>, value: &MirValue, span: Span) {
@@ -91,8 +91,9 @@ pub(crate) fn lower_call<'a>(
     }
 
     let mut lowered_args = Vec::new();
-    for arg in args {
-        let arg_val = lower_value(ctx, arg)?;
+    for (idx, arg) in args.iter().enumerate() {
+        let expected_arg = sig.params.get(idx).and_then(|ty| ty.as_ref());
+        let arg_val = lower_value_with_expected(ctx, arg, expected_arg)?;
         consume_call_local(ctx, &arg_val, span);
         lowered_args.push(arg_val);
     }
@@ -446,8 +447,12 @@ pub(crate) fn lower_method_call<'a>(
     // 6. Lower remaining arguments
     consume_call_local(ctx, &receiver_arg, span);
     let mut all_args = vec![receiver_arg];
-    for arg in args {
-        let arg_val = lower_value(ctx, arg)?;
+    let sig = ctx.fn_sigs.get(&mangled_name);
+    for (idx, arg) in args.iter().enumerate() {
+        let expected_arg = sig
+            .and_then(|sig| sig.params.get(idx + 1))
+            .and_then(|ty| ty.as_ref());
+        let arg_val = lower_value_with_expected(ctx, arg, expected_arg)?;
         consume_call_local(ctx, &arg_val, span);
         all_args.push(arg_val);
     }

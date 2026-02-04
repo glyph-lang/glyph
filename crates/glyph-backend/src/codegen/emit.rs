@@ -1,4 +1,19 @@
 use super::*;
+use std::sync::{Mutex, Once};
+
+fn jit_lock() -> &'static Mutex<()> {
+    static JIT_LOCK: Mutex<()> = Mutex::new(());
+    &JIT_LOCK
+}
+
+fn init_native_jit() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| unsafe {
+        llvm_sys::target::LLVM_InitializeNativeTarget();
+        llvm_sys::target::LLVM_InitializeNativeAsmPrinter();
+        llvm_sys::execution_engine::LLVMLinkInMCJIT();
+    });
+}
 
 impl CodegenContext {
     /// Execute a function via JIT for testing purposes
@@ -19,9 +34,8 @@ impl CodegenContext {
         use llvm_sys::target::*;
 
         unsafe {
-            // Initialize native target for JIT
-            LLVM_InitializeNativeTarget();
-            LLVM_InitializeNativeAsmPrinter();
+            let _guard = jit_lock().lock().unwrap_or_else(|e| e.into_inner());
+            init_native_jit();
 
             // Clone the module so the execution engine can take ownership
             let module_clone = LLVMCloneModule(self.module);
@@ -88,8 +102,6 @@ impl CodegenContext {
             // Create MCJIT execution engine
             let mut ee = std::ptr::null_mut();
             let mut error = std::ptr::null_mut();
-
-            LLVMLinkInMCJIT();
 
             if LLVMCreateMCJITCompilerForModule(
                 &mut ee,

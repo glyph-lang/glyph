@@ -4,7 +4,7 @@ use glyph_core::span::Span;
 use glyph_core::types::Type;
 
 use super::super::context::{LocalState, LowerCtx};
-use super::super::expr::lower_value;
+use super::super::expr::{lower_value, lower_value_with_expected};
 use super::super::value::infer_value_type;
 
 fn string_receiver_local<'a>(
@@ -12,7 +12,8 @@ fn string_receiver_local<'a>(
     base: &'a Expr,
     span: Span,
 ) -> Option<LocalId> {
-    let receiver_val = lower_value(ctx, base)?;
+    let expected = Type::Str;
+    let receiver_val = lower_value_with_expected(ctx, base, Some(&expected))?;
     let receiver_local = match receiver_val {
         MirValue::Local(id) => id,
         _ => {
@@ -245,7 +246,8 @@ pub(crate) fn lower_string_clone<'a>(
                 Expr::Ref { expr, .. } => matches!(expr.as_ref(), Expr::Ident(_, _)),
                 _ => false,
             };
-            let field_val = lower_value(ctx, base)?;
+            let expected = Type::Str;
+            let field_val = lower_value_with_expected(ctx, base, Some(&expected))?;
             let field_local = match field_val {
                 MirValue::Local(id) => id,
                 _ => {

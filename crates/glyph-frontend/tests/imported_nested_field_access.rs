@@ -45,9 +45,9 @@ fn main() -> i32 {
   obj.inner.value = 3
   let v = obj.inner.value
   let mut obj2 = make_outer()
-  let mut inner = obj2.inner
-  inner.value = v
-  ret inner.value
+  let inner_ref = &mut obj2.inner
+  inner_ref.value = v
+  ret inner_ref.value
 }
 "#;
 

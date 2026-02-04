@@ -169,11 +169,11 @@ impl CodegenContext {
             value_map.insert(name.as_str(), value);
         }
 
-        for (idx, (field_name, _)) in fields.iter().enumerate() {
+        for (idx, (field_name, field_ty)) in fields.iter().enumerate() {
             let value = value_map.get(field_name.as_str()).ok_or_else(|| {
                 anyhow!("missing field {} for struct {}", field_name, struct_name)
             })?;
-            let llvm_field_val = self.codegen_value(value, func, local_map)?;
+            let mut llvm_field_val = self.codegen_value(value, func, local_map)?;
             let gep_name = CString::new(format!("{}.{}", struct_name, field_name))?;
             let field_ptr = unsafe {
                 LLVMBuildStructGEP2(
@@ -184,6 +184,9 @@ impl CodegenContext {
                     gep_name.as_ptr(),
                 )
             };
+            let llvm_field_ty = self.get_llvm_type(&field_ty)?;
+            let signed = matches!(field_ty, Type::I8 | Type::I32 | Type::I64);
+            llvm_field_val = self.coerce_int_value(llvm_field_val, llvm_field_ty, signed);
             unsafe {
                 LLVMBuildStore(self.builder, llvm_field_val, field_ptr);
             }

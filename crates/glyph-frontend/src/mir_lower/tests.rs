@@ -1094,6 +1094,61 @@ fn compile_ok(src: &str) {
 }
 
 #[test]
+fn borrow_string_field_is_ok() {
+    let src = r#"
+        struct Session {
+          phase: String
+        }
+
+        fn takes_str(s: str) -> i32 { ret s.len() }
+
+        fn main() -> i32 {
+          let session = Session { phase: String::from_str("hi") }
+          let phase: str = session.phase
+          let _n = takes_str(session.phase)
+          let _m = phase.len()
+          ret 0
+        }
+    "#;
+
+    compile_ok(src);
+}
+
+#[test]
+fn move_string_field_errors() {
+    let src = r#"
+        struct Session {
+          phase: String
+        }
+
+        fn takes_string(_s: String) -> i32 { ret 0 }
+
+        fn main() -> i32 {
+          let session = Session { phase: String::from_str("hi") }
+          let _phase = session.phase
+          let _ = takes_string(session.phase)
+          ret 0
+        }
+    "#;
+
+    let out = compile_source(
+        src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: true,
+        },
+    );
+
+    assert!(
+        out.diagnostics
+            .iter()
+            .any(|d| d.message.contains("cannot move field")),
+        "expected field-move diagnostic, got: {:?}",
+        out.diagnostics
+    );
+}
+
+#[test]
 fn if_return_then_allows_use_after() {
     let src = r#"
         fn main() -> i32 {

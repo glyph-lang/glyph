@@ -99,6 +99,16 @@ fn main() -> i32 {
 }
 ```
 
+Struct field ownership:
+
+- You cannot move individual fields out of a struct.
+- Borrow or clone the field, or move the whole struct.
+
+```glyph
+let name: str = user.name
+let owned = user.name.clone()
+```
+
 ## Enums
 
 Enums can be simple tags or carry payload values:
