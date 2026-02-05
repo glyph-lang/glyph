@@ -102,6 +102,7 @@ impl CodegenContext {
             Rvalue::VecWithCapacity { .. } => "VecWithCapacity",
             Rvalue::VecLen { .. } => "VecLen",
             Rvalue::VecIndex { .. } => "VecIndex",
+            Rvalue::VecIndexRef { .. } => "VecIndexRef",
             Rvalue::VecPush { .. } => "VecPush",
             Rvalue::VecPop { .. } => "VecPop",
             Rvalue::MapNew { .. } => "MapNew",
@@ -681,6 +682,20 @@ impl CodegenContext {
                     index,
                     bounds_check,
                 } => self.codegen_vec_index(*vec, elem_type, index, *bounds_check, func, local_map),
+                Rvalue::VecIndexRef {
+                    vec,
+                    elem_type,
+                    index,
+                    bounds_check,
+                    ..
+                } => self.codegen_vec_index_ref(
+                    *vec,
+                    elem_type,
+                    index,
+                    *bounds_check,
+                    func,
+                    local_map,
+                ),
                 Rvalue::VecPush {
                     vec,
                     elem_type,

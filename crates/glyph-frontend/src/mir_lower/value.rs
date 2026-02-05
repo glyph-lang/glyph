@@ -219,6 +219,11 @@ pub(crate) fn infer_rvalue_type(rv: &Rvalue, ctx: &LowerCtx) -> Option<Type> {
             args: vec![elem_type.clone()],
         }),
         Rvalue::VecIndex { elem_type, .. } => Some(elem_type.clone()),
+        Rvalue::VecIndexRef {
+            elem_type,
+            mutability,
+            ..
+        } => Some(Type::Ref(Box::new(elem_type.clone()), *mutability)),
         Rvalue::VecLen { .. } => Some(Type::Usize),
         _ => None,
     }

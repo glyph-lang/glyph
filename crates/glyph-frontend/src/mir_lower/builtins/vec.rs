@@ -1,7 +1,7 @@
 use glyph_core::ast::Expr;
 use glyph_core::mir::{MirInst, MirValue, Rvalue};
 use glyph_core::span::Span;
-use glyph_core::types::Type;
+use glyph_core::types::{Mutability, Type};
 
 use super::super::context::LowerCtx;
 use super::super::expr::lower_value;
@@ -100,10 +100,11 @@ pub(crate) fn lower_vec_get<'a>(
         },
     });
 
+    let elem_ref_type = Type::Ref(Box::new(elem_type.clone()), Mutability::Immutable);
     let result_local = ctx.fresh_local(None);
     ctx.locals[result_local.0 as usize].ty = Some(Type::App {
         base: "Option".into(),
-        args: vec![elem_type.clone()],
+        args: vec![elem_ref_type.clone()],
     });
 
     let header = ctx.current;
@@ -128,14 +129,15 @@ pub(crate) fn lower_vec_get<'a>(
 
     ctx.switch_to(some_bb);
     let elem_local = ctx.fresh_local(None);
-    ctx.locals[elem_local.0 as usize].ty = Some(elem_type.clone());
+    ctx.locals[elem_local.0 as usize].ty = Some(elem_ref_type);
     ctx.push_inst(MirInst::Assign {
         local: elem_local,
-        value: Rvalue::VecIndex {
+        value: Rvalue::VecIndexRef {
             vec: receiver_local,
             elem_type,
             index,
             bounds_check: false,
+            mutability: Mutability::Immutable,
         },
     });
     ctx.push_inst(MirInst::Assign {

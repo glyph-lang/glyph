@@ -455,6 +455,80 @@ impl CodegenContext {
         })
     }
 
+    pub(super) fn codegen_vec_index_ref(
+        &mut self,
+        vec: LocalId,
+        elem_type: &Type,
+        index: &MirValue,
+        bounds_check: bool,
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+    ) -> Result<LLVMValueRef> {
+        let (struct_name, vec_ptr) = self.struct_pointer_for_local(vec, func, local_map)?;
+        let (llvm_vec_ty, usize_ty) = self
+            .get_vec_layout(&struct_name)
+            .ok_or_else(|| anyhow!("missing vec layout for {}", struct_name))?;
+
+        let index_val = self.codegen_value(index, func, local_map)?;
+
+        let len_ptr = unsafe {
+            LLVMBuildStructGEP2(
+                self.builder,
+                llvm_vec_ty,
+                vec_ptr,
+                1,
+                CString::new("vec.len").unwrap().as_ptr(),
+            )
+        };
+        let len_val = unsafe {
+            LLVMBuildLoad2(
+                self.builder,
+                usize_ty,
+                len_ptr,
+                CString::new("vec.len.load")?.as_ptr(),
+            )
+        };
+
+        let idx_usize = self.ensure_usize(index_val, usize_ty)?;
+
+        if bounds_check {
+            self.emit_vec_bounds_check(idx_usize, len_val, usize_ty)?;
+        }
+
+        let data_ptr = unsafe {
+            LLVMBuildStructGEP2(
+                self.builder,
+                llvm_vec_ty,
+                vec_ptr,
+                0,
+                CString::new("vec.data").unwrap().as_ptr(),
+            )
+        };
+        let raw_ptr_ty = self.get_llvm_type(&Type::RawPtr(Box::new(elem_type.clone())))?;
+        let data_val = unsafe {
+            LLVMBuildLoad2(
+                self.builder,
+                raw_ptr_ty,
+                data_ptr,
+                CString::new("vec.data.load")?.as_ptr(),
+            )
+        };
+
+        let elem_llvm_ty = self.get_llvm_type(elem_type)?;
+        let elem_ptr = unsafe {
+            LLVMBuildGEP2(
+                self.builder,
+                elem_llvm_ty,
+                data_val,
+                vec![idx_usize].as_mut_ptr(),
+                1,
+                CString::new("vec.elem.ptr")?.as_ptr(),
+            )
+        };
+
+        Ok(elem_ptr)
+    }
+
     pub(super) fn codegen_vec_push(
         &mut self,
         vec: LocalId,

@@ -426,7 +426,9 @@ fn rewrite_rvalue(
         Rvalue::VecNew { elem_type }
         | Rvalue::VecWithCapacity { elem_type, .. }
         | Rvalue::VecPush { elem_type, .. }
-        | Rvalue::VecPop { elem_type, .. } => {
+        | Rvalue::VecPop { elem_type, .. }
+        | Rvalue::VecIndex { elem_type, .. }
+        | Rvalue::VecIndexRef { elem_type, .. } => {
             *elem_type = rewrite_type(elem_type, templates, instantiations, worklist, diagnostics);
         }
         Rvalue::MapNew {

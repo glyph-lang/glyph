@@ -219,6 +219,19 @@ fn mir_struct_return() {
 }
 
 #[test]
+fn mir_tuple_return() {
+    let src = run_fixture("tuple_return.glyph");
+    let out = compile_source(
+        &src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: false,
+        },
+    );
+    assert_debug_snapshot!(out.mir);
+}
+
+#[test]
 fn mir_ref_field_access() {
     let src = run_fixture("ref_field_access.glyph");
     let out = compile_source(

@@ -1377,6 +1377,9 @@ pub(crate) fn lower_value_with_expected<'a>(
         Expr::Index { base, index, span } => {
             lower_array_index(ctx, base, index, *span).and_then(rvalue_to_value)
         }
+        Expr::Tuple { elements, span } => {
+            lower_tuple_expr(ctx, elements, *span).and_then(rvalue_to_value)
+        }
         _ => None,
     }
 }

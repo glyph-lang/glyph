@@ -827,6 +827,13 @@ pub mod mir {
             index: MirValue,
             bounds_check: bool,
         },
+        VecIndexRef {
+            vec: LocalId,
+            elem_type: Type,
+            index: MirValue,
+            bounds_check: bool,
+            mutability: Mutability,
+        },
         MapNew {
             key_type: Type,
             value_type: Type,
