@@ -214,7 +214,8 @@ glyph-cli build examples/std_hello/hello.glyph --emit exe
 
 ## 📚 Documentation
 
-The mdBook documentation lives in `docs/book/`. Build it with:
+The mdBook documentation lives in `docs/book/`. Read the generated book at
+https://glyph-lang.github.io/glyph/book/book/. Build it with:
 
 ```bash
 mdbook build docs/book
