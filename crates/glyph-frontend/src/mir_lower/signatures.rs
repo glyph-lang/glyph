@@ -255,6 +255,34 @@ pub(crate) fn collect_function_signatures(
                         _ => {}
                     }
                 }
+
+                if let Some(symbols) = all_modules.module_symbols.get(source_module) {
+                    if symbols.structs.contains(original_name) {
+                        let prefix = format!("{}::", original_name);
+                        for item in &module.items {
+                            if let Item::Function(func) = item {
+                                if !func.name.0.starts_with(&prefix) {
+                                    continue;
+                                }
+                                if signatures.contains_key(&func.name.0) {
+                                    continue;
+                                }
+                                let sig = resolve_fn_sig(
+                                    resolver,
+                                    &mut diagnostics,
+                                    &func.name.0,
+                                    &func.name.0,
+                                    &func.params,
+                                    &func.ret_type,
+                                    None,
+                                    false,
+                                    func.span,
+                                );
+                                signatures.insert(func.name.0.clone(), sig);
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -285,6 +313,21 @@ pub(crate) fn collect_function_signatures(
                                 func.span,
                             );
                             signatures.insert(key, sig);
+
+                            if func.name.0.contains("::") && !signatures.contains_key(&func.name.0) {
+                                let sig = resolve_fn_sig(
+                                    resolver,
+                                    &mut diagnostics,
+                                    &func.name.0,
+                                    &func.name.0,
+                                    &func.params,
+                                    &func.ret_type,
+                                    None,
+                                    false,
+                                    func.span,
+                                );
+                                signatures.insert(func.name.0.clone(), sig);
+                            }
                         }
                         Item::ExternFunction(func) => {
                             let key = format!("{}::{}", module_prefix, func.name.0);

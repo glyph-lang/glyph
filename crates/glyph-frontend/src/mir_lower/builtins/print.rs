@@ -3,7 +3,7 @@ use glyph_core::mir::{MirInst, MirValue, Rvalue};
 use glyph_core::span::Span;
 use glyph_core::types::{Mutability, Type};
 
-use super::super::context::LowerCtx;
+use super::super::context::{LocalState, LowerCtx};
 use super::super::expr::lower_value;
 use super::super::value::infer_value_type;
 
@@ -19,6 +19,35 @@ fn resolve_builtin_target(ctx: &mut LowerCtx<'_>, key: &str, span: Span) -> Opti
     } else {
         ctx.error(format!("unknown function '{}'", key), Some(span));
         None
+    }
+}
+
+fn lower_print_value<'a>(
+    ctx: &mut LowerCtx<'a>,
+    expr: &'a Expr,
+) -> Option<MirValue> {
+    match expr {
+        Expr::Ident(name, ident_span) => {
+            let Some(local) = ctx.bindings.get(name.0.as_str()).copied() else {
+                ctx.error(format!("unknown identifier '{}'", name.0), Some(*ident_span));
+                return None;
+            };
+            if ctx.local_needs_drop(local) {
+                match ctx.local_states.get(local.0 as usize) {
+                    Some(LocalState::Moved) => {
+                        ctx.error("use of moved value", Some(*ident_span));
+                        return None;
+                    }
+                    Some(LocalState::Uninitialized) => {
+                        ctx.error("use of uninitialized ownership pointer", Some(*ident_span));
+                        return None;
+                    }
+                    _ => {}
+                }
+            }
+            Some(MirValue::Local(local))
+        }
+        _ => lower_value(ctx, expr),
     }
 }
 
@@ -38,6 +67,7 @@ pub(crate) fn lower_print_builtin<'a>(
     let arg = &args[0];
 
     let mut segments: Vec<PrintSegment<'a>> = Vec::new();
+    let mut only_strings = false;
     match arg {
         Expr::Lit(glyph_core::ast::Literal::Str(s), _) => {
             segments.push(PrintSegment::Literal(s.clone()));
@@ -58,11 +88,8 @@ pub(crate) fn lower_print_builtin<'a>(
             }
         }
         _ => {
-            ctx.error(
-                "print/println currently require a string or interpolated string",
-                Some(span),
-            );
-            return None;
+            segments.push(PrintSegment::Expr(arg, span));
+            only_strings = true;
         }
     }
 
@@ -117,7 +144,7 @@ pub(crate) fn lower_print_builtin<'a>(
                 last = Some(out);
             }
             PrintSegment::Expr(expr, seg_span) => {
-                let val = lower_value(ctx, expr)?;
+                let val = lower_print_value(ctx, expr)?;
                 let val_ty = infer_value_type(&val, ctx);
 
                 // Prepare &mut writer for all formatting calls
@@ -133,6 +160,24 @@ pub(crate) fn lower_print_builtin<'a>(
                         mutability: Mutability::Mutable,
                     },
                 });
+
+                if let Some(Type::Ref(inner, _)) = val_ty.as_ref() {
+                    if matches!(inner.as_ref(), Type::Str | Type::String) {
+                        ctx.error(
+                            "print/println do not accept references; pass a str/String value (or clone the String)",
+                            Some(seg_span),
+                        );
+                        return None;
+                    }
+                }
+
+                if only_strings && !matches!(val_ty, Some(Type::Str | Type::String)) {
+                    ctx.error(
+                        "print/println require a string literal, interpolated string, or str/String value",
+                        Some(seg_span),
+                    );
+                    return None;
+                }
 
                 match val_ty {
                     Some(Type::I32) => {
@@ -213,7 +258,7 @@ pub(crate) fn lower_print_builtin<'a>(
                         });
                         last = Some(out);
                     }
-                    Some(Type::Str) => {
+                    Some(Type::Str) | Some(Type::String) => {
                         let fmt = resolve_builtin_target(ctx, "std::fmt::fmt_str", seg_span)?;
                         let out = ctx.fresh_local(None);
                         ctx.locals[out.0 as usize].ty = Some(Type::Void);
@@ -245,7 +290,7 @@ pub(crate) fn lower_print_builtin<'a>(
                     }
                     _ => {
                         ctx.error(
-                            "Format not implemented for this type; supported: i32, u32, i64, u64, bool, char, str, and types with fmt_<type> in std::fmt",
+                            "Format not implemented for this type; supported: i32, u32, i64, u64, bool, char, str/String, and types with fmt_<type> in std::fmt",
                             Some(seg_span),
                         );
                         return None;

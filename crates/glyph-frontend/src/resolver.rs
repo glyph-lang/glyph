@@ -1588,6 +1588,31 @@ fn import_struct_with_deps(
             let st = struct_type_from_def(def, ctx);
             ctx.struct_types.insert(def.name.0.clone(), st);
         }
+
+        if !def.methods.is_empty() {
+            let entry = ctx
+                .inherent_methods
+                .entry(def.name.0.clone())
+                .or_insert_with(HashMap::new);
+            for method in &def.methods {
+                if entry.contains_key(&method.name.0) {
+                    continue;
+                }
+                let mangled_name = inherent_method_symbol(&def.name.0, &method.name.0);
+                let self_kind = if let Some(first_param) = method.params.first() {
+                    detect_self_kind(&first_param.ty)
+                } else {
+                    SelfKind::ByValue
+                };
+                entry.insert(
+                    method.name.0.clone(),
+                    MethodInfo {
+                        function_name: mangled_name,
+                        self_kind,
+                    },
+                );
+            }
+        }
     }
 
     if let Some(local) = local_name {

@@ -88,6 +88,69 @@ pub(crate) fn lower_string_len<'a>(
     Some(Rvalue::Move(tmp))
 }
 
+pub(crate) fn lower_string_as_str<'a>(
+    ctx: &mut LowerCtx<'a>,
+    base: &'a Expr,
+    args: &'a [Expr],
+    span: Span,
+) -> Option<Rvalue> {
+    if !args.is_empty() {
+        ctx.error("as_str() does not take arguments", Some(span));
+        return None;
+    }
+
+    let Expr::Ident(name, ident_span) = base else {
+        ctx.error("as_str() receiver must be a local", Some(span));
+        return None;
+    };
+
+    let Some(local) = ctx.bindings.get(name.0.as_str()).copied() else {
+        ctx.error(format!("unknown identifier '{}'", name.0), Some(*ident_span));
+        return None;
+    };
+
+    let receiver_ty = ctx
+        .locals
+        .get(local.0 as usize)
+        .and_then(|l| l.ty.clone());
+    let is_string = matches!(receiver_ty.as_ref(), Some(Type::String | Type::Str))
+        || matches!(receiver_ty.as_ref(), Some(Type::Ref(inner, _)) if matches!(inner.as_ref(), Type::String | Type::Str));
+    if !is_string {
+        ctx.error("as_str() requires a String receiver", Some(span));
+        return None;
+    }
+
+    let prev_state = ctx.local_states.get(local.0 as usize).copied();
+    if ctx.local_needs_drop(local) {
+        match prev_state {
+            Some(LocalState::Moved) => {
+                ctx.error("use of moved value", Some(*ident_span));
+                return None;
+            }
+            Some(LocalState::Uninitialized) => {
+                ctx.error("use of uninitialized ownership pointer", Some(*ident_span));
+                return None;
+            }
+            _ => {}
+        }
+    }
+
+    let tmp = ctx.fresh_local(None);
+    ctx.locals[tmp.0 as usize].ty = Some(Type::Str);
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::Move(local),
+    });
+
+    if ctx.local_needs_drop(local) {
+        if let Some(state) = prev_state {
+            ctx.local_states[local.0 as usize] = state;
+        }
+    }
+
+    Some(Rvalue::Move(tmp))
+}
+
 pub(crate) fn lower_string_concat<'a>(
     ctx: &mut LowerCtx<'a>,
     base: &'a Expr,

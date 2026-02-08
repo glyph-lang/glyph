@@ -10,11 +10,13 @@ fn main() {
     let glyph_fmt_src = PathBuf::from("../../runtime/glyph_fmt.c");
     let glyph_json_src = PathBuf::from("../../runtime/glyph_json.c");
     let glyph_process_src = PathBuf::from("../../runtime/glyph_process.c");
+    let glyph_time_src = PathBuf::from("../../runtime/glyph_time.c");
 
     // Output paths for compiled objects and static library
     let glyph_fmt_obj = out_dir.join("glyph_fmt.o");
     let glyph_json_obj = out_dir.join("glyph_json.o");
     let glyph_process_obj = out_dir.join("glyph_process.o");
+    let glyph_time_obj = out_dir.join("glyph_time.o");
     let runtime_lib = out_dir.join("libglyph_runtime.a");
 
     // Check if runtime sources exist
@@ -29,6 +31,9 @@ fn main() {
             "Runtime library source not found at: {:?}",
             glyph_process_src
         );
+    }
+    if !glyph_time_src.exists() {
+        panic!("Runtime library source not found at: {:?}", glyph_time_src);
     }
 
     // Compile glyph_fmt.c to object file
@@ -97,6 +102,28 @@ fn main() {
         panic!("Failed to compile glyph_process.c. Make sure cc (clang/gcc) is installed.");
     }
 
+    // Compile glyph_time.c to object file
+    println!(
+        "cargo:warning=Compiling runtime library from {:?}",
+        glyph_time_src
+    );
+    let status = Command::new("cc")
+        .args(&[
+            "-c",    // Compile only, don't link
+            "-O2",   // Optimize
+            "-fPIC", // Position-independent code for shared libraries
+            "-Wall", // Enable warnings
+        ])
+        .arg(&glyph_time_src)
+        .arg("-o")
+        .arg(&glyph_time_obj)
+        .status()
+        .expect("Failed to execute cc compiler");
+
+    if !status.success() {
+        panic!("Failed to compile glyph_time.c. Make sure cc (clang/gcc) is installed.");
+    }
+
     // Create static library archive from both object files using ar
     println!("cargo:warning=Creating static library at {:?}", runtime_lib);
     let status = Command::new("ar")
@@ -105,6 +132,7 @@ fn main() {
         .arg(&glyph_fmt_obj)
         .arg(&glyph_json_obj)
         .arg(&glyph_process_obj)
+        .arg(&glyph_time_obj)
         .status()
         .expect("Failed to execute ar archiver");
 
@@ -120,6 +148,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../../runtime/glyph_fmt.c");
     println!("cargo:rerun-if-changed=../../runtime/glyph_json.c");
     println!("cargo:rerun-if-changed=../../runtime/glyph_process.c");
+    println!("cargo:rerun-if-changed=../../runtime/glyph_time.c");
 
     println!(
         "cargo:warning=Runtime library built successfully at {}",

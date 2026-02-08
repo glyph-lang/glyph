@@ -1,4 +1,7 @@
 use super::*;
+use std::sync::Once;
+
+static LLVM_TARGET_INIT: Once = Once::new();
 
 impl CodegenContext {
     pub fn new(module_name: &str) -> Result<Self> {
@@ -36,10 +39,12 @@ impl CodegenContext {
                 return Ok(());
             }
 
-            LLVM_InitializeAllTargetInfos();
-            LLVM_InitializeAllTargets();
-            LLVM_InitializeAllTargetMCs();
-            LLVM_InitializeAllAsmPrinters();
+            LLVM_TARGET_INIT.call_once(|| {
+                LLVM_InitializeAllTargetInfos();
+                LLVM_InitializeAllTargets();
+                LLVM_InitializeAllTargetMCs();
+                LLVM_InitializeAllAsmPrinters();
+            });
 
             let target_triple = LLVMGetDefaultTargetTriple();
             LLVMSetTarget(self.module, target_triple);

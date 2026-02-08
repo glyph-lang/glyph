@@ -319,6 +319,11 @@ fn run(path: &PathBuf) -> Result<()> {
         // When running via JIT, we need to make them available in-process.
         let mut symbols = HashMap::new();
         symbols.insert("glyph_byte_at".to_string(), glyph_byte_at as usize as u64);
+        symbols.insert("glyph_time_now".to_string(), glyph_time_now as usize as u64);
+        symbols.insert(
+            "glyph_time_to_human_readable".to_string(),
+            glyph_time_to_human_readable as usize as u64,
+        );
         symbols.insert(
             "glyph_process_run".to_string(),
             glyph_process_run as usize as u64,
@@ -361,6 +366,82 @@ pub extern "C" fn glyph_byte_at(s: *const std::ffi::c_char, index: usize) -> u8 
             p = p.add(1);
         }
     }
+}
+
+#[cfg(feature = "codegen")]
+static mut GLYPH_TIME_BUFFER: [u8; 20] = [0; 20];
+
+#[cfg(feature = "codegen")]
+fn glyph_time_buffer_ptr() -> *const std::ffi::c_char {
+    std::ptr::addr_of!(GLYPH_TIME_BUFFER) as *const u8 as *const std::ffi::c_char
+}
+
+#[cfg(feature = "codegen")]
+unsafe fn glyph_time_buffer_mut_ptr() -> *mut u8 {
+    std::ptr::addr_of_mut!(GLYPH_TIME_BUFFER) as *mut u8
+}
+
+#[cfg(feature = "codegen")]
+#[unsafe(no_mangle)]
+pub extern "C" fn glyph_time_now() -> u64 {
+    let t = unsafe { libc::time(std::ptr::null_mut()) };
+    if t == -1 {
+        0
+    } else {
+        t as u64
+    }
+}
+
+#[cfg(all(feature = "codegen", unix))]
+#[unsafe(no_mangle)]
+pub extern "C" fn glyph_time_to_human_readable(ts: u64) -> *const std::ffi::c_char {
+    let t = ts as libc::time_t;
+    unsafe {
+        *glyph_time_buffer_mut_ptr() = 0;
+    }
+    if t as u64 != ts {
+        return glyph_time_buffer_ptr();
+    }
+
+    let mut tm_out: libc::tm = unsafe { std::mem::zeroed() };
+    let t_copy = t;
+    let res = unsafe { libc::gmtime_r(&t_copy as *const libc::time_t, &mut tm_out as *mut libc::tm) };
+    if res.is_null() {
+        return glyph_time_buffer_ptr();
+    }
+
+    let formatted = format!(
+        "{:02}/{:02}/{:04} {:02}:{:02}:{:02}",
+        tm_out.tm_mday,
+        tm_out.tm_mon + 1,
+        tm_out.tm_year + 1900,
+        tm_out.tm_hour,
+        tm_out.tm_min,
+        tm_out.tm_sec
+    );
+    let bytes = formatted.as_bytes();
+    if bytes.len() != 19 {
+        unsafe {
+            *glyph_time_buffer_mut_ptr() = 0;
+        }
+        return glyph_time_buffer_ptr();
+    }
+    unsafe {
+        let ptr = glyph_time_buffer_mut_ptr();
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, 19);
+        *ptr.add(19) = 0;
+    }
+
+    glyph_time_buffer_ptr()
+}
+
+#[cfg(all(feature = "codegen", not(unix)))]
+#[unsafe(no_mangle)]
+pub extern "C" fn glyph_time_to_human_readable(_ts: u64) -> *const std::ffi::c_char {
+    unsafe {
+        *glyph_time_buffer_mut_ptr() = 0;
+    }
+    glyph_time_buffer_ptr()
 }
 
 #[cfg(feature = "codegen")]

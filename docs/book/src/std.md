@@ -8,6 +8,7 @@ The standard library keeps a tight surface area:
 - `std/string` for strings
 - `std/json` for JSON types (and `std/json/parser`)
 - `std/process` for launching external processes
+- `std/time` for timestamps and UTC formatting
 - `std/sys` for low-level system access
 
 String utilities live on `String` and include `clone`, `len`, `concat`, `slice`, `trim`,

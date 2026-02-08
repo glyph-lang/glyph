@@ -209,17 +209,21 @@ fn main() -> i32 {
 
 ## Printing and Interpolation
 
-`print`/`println` only accept string or interpolated string values:
+`print`/`println` accept string literals, interpolated strings, or runtime `str`/`String` values:
 
 ```glyph
 from std import println
 
 fn main() -> i32 {
   let x = 3
+  let msg = String::from_str("hello")
   println($"x = {x}")
+  println(msg)
   ret 0
 }
 ```
+
+Use `s.as_str()` when you need an explicit borrowed view of a `String`.
 
 ## Idiosyncrasies and Pitfalls (LLM Checklist)
 

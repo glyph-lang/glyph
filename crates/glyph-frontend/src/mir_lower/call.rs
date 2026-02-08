@@ -10,9 +10,10 @@ use super::builtins::{
     lower_map_add, lower_map_del, lower_map_get, lower_map_has, lower_map_keys,
     lower_map_static_new, lower_map_static_with_capacity, lower_map_update, lower_map_vals,
     lower_own_from_raw, lower_own_into_raw, lower_own_new, lower_print_builtin, lower_shared_clone,
-    lower_shared_new, lower_string_clone, lower_string_concat, lower_string_ends_with,
-    lower_string_from, lower_string_len, lower_string_slice, lower_string_split,
-    lower_string_starts_with, lower_string_trim, lower_vec_get, lower_vec_len, lower_vec_pop,
+    lower_shared_new, lower_string_as_str, lower_string_clone, lower_string_concat,
+    lower_string_ends_with, lower_string_from, lower_string_len, lower_string_slice,
+    lower_string_split, lower_string_starts_with, lower_string_trim, lower_vec_get,
+    lower_vec_len, lower_vec_pop,
     lower_vec_push, lower_vec_static_new, lower_vec_static_with_capacity,
 };
 use super::context::{LocalState, LowerCtx};
@@ -234,6 +235,11 @@ pub(crate) fn lower_method_call<'a>(
                 return Some(rv);
             }
             return lower_array_len(ctx, receiver, span);
+        }
+        "as_str" => {
+            if let Some(rv) = lower_string_as_str(ctx, receiver, args, span) {
+                return Some(rv);
+            }
         }
         "push" => {
             if let Some(rv) = lower_vec_push(ctx, receiver, args, span) {
@@ -459,6 +465,11 @@ pub(crate) fn lower_method_call<'a>(
 
     // 7. Create call with mangled name (reusing call infrastructure)
     let tmp = ctx.fresh_local(None);
+    if let Some(sig) = sig {
+        if let Some(ret) = &sig.ret {
+            ctx.locals[tmp.0 as usize].ty = Some(ret.clone());
+        }
+    }
     ctx.push_inst(MirInst::Assign {
         local: tmp,
         value: Rvalue::Call {

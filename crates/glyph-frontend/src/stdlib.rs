@@ -861,6 +861,9 @@ pub fn std_modules() -> HashMap<String, Module> {
     };
     modules.insert("std/sys".into(), std_sys_module);
 
+    let std_time_module = parse_std_source("std/time", include_str!("stdlib/time.glyph"));
+    modules.insert("std/time".into(), std_time_module);
+
     // std/process
     let run_extern = ExternFunctionDecl {
         abi: Some("C".into()),

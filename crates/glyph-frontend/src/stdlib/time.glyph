@@ -1,0 +1,29 @@
+from std/enums import Result
+
+extern "C" fn glyph_time_now() -> u64;
+extern "C" fn glyph_time_to_human_readable(ts: u64) -> str;
+
+struct Error {
+  message: String
+}
+
+struct Timestamp {
+  value: u64
+
+  fn as_u64(self: &Timestamp) -> u64 {
+    ret self.value
+  }
+
+  fn to_human_readable(self: &Timestamp) -> Result<String, Error> {
+    let raw = glyph_time_to_human_readable(self.value)
+    if raw.len() == 0 {
+      ret Err(Error { message: String::from_str("timestamp conversion failed") })
+    }
+    let s = String::from_str(raw)
+    ret Ok(s)
+  }
+}
+
+fn get_timestamp() -> Timestamp {
+  ret Timestamp { value: glyph_time_now() }
+}
