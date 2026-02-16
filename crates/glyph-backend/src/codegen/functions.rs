@@ -381,7 +381,12 @@ impl CodegenContext {
                         }
                         LLVMBuildRetVoid(self.builder);
                     } else if let Some(v) = val {
-                        let ret_val = self.codegen_value(v, func, local_map)?;
+                        let mut ret_val = self.codegen_value(v, func, local_map)?;
+                        if let Some(ret_ty) = func.ret_type.as_ref() {
+                            let llvm_ret_ty = self.get_llvm_type(ret_ty)?;
+                            let signed = matches!(ret_ty, Type::I8 | Type::I32 | Type::I64);
+                            ret_val = self.coerce_int_value(ret_val, llvm_ret_ty, signed);
+                        }
                         LLVMBuildRet(self.builder, ret_val);
                     } else {
                         match func.ret_type.as_ref() {
