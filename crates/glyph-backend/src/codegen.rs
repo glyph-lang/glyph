@@ -44,9 +44,13 @@ mod externs;
 mod file;
 mod functions;
 mod map;
+mod map_debug;
+mod map_hash;
+mod map_layout;
 mod ownership;
 mod rvalue;
 mod string;
+mod string_ops;
 mod types;
 mod vec;
 
