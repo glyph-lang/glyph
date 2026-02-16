@@ -912,6 +912,8 @@ fn expr_span(expr: &Expr) -> Span {
         Expr::MethodCall { span, .. } => *span,
         Expr::Match { span, .. } => *span,
         Expr::Tuple { span, .. } => *span,
+        Expr::Try { span, .. } => *span,
+        Expr::ForIn { span, .. } => *span,
     }
 }
 

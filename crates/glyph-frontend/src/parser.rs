@@ -1257,6 +1257,15 @@ impl<'a> Parser<'a> {
                     span,
                 };
                 continue;
+            } else if self.at(TokenKind::Question) {
+                // Try operator: expr?
+                let q_tok = self.advance().unwrap();
+                let span = Span::new(self.expr_start(&expr), q_tok.span.end);
+                expr = Expr::Try {
+                    expr: Box::new(expr),
+                    span,
+                };
+                continue;
             }
             break;
         }
@@ -1566,22 +1575,38 @@ impl<'a> Parser<'a> {
 
         self.consume(TokenKind::In, "expected `in` after loop variable")?;
 
-        let range_start = self.parse_expr()?;
+        // Parse the first expression - could be a range start or an iterable.
+        // Suppress struct literals so `for x in names { ... }` doesn't try to
+        // parse `names { ... }` as a struct literal.
+        let prev = self.suppress_struct_literals;
+        self.suppress_struct_literals = true;
+        let first_expr = self.parse_expr()?;
+        self.suppress_struct_literals = prev;
 
-        self.consume(TokenKind::DotDot, "expected `..` for range")?;
-
-        let range_end = self.parse_expr()?;
-
-        let body = self.parse_block()?;
-        let end = body.span.end;
-
-        Some(Expr::For {
-            var,
-            start: Box::new(range_start),
-            end: Box::new(range_end),
-            body,
-            span: Span::new(start, end),
-        })
+        if self.at(TokenKind::DotDot) {
+            // Range loop: for x in start..end { ... }
+            self.advance(); // consume ..
+            let range_end = self.parse_expr()?;
+            let body = self.parse_block()?;
+            let end = body.span.end;
+            Some(Expr::For {
+                var,
+                start: Box::new(first_expr),
+                end: Box::new(range_end),
+                body,
+                span: Span::new(start, end),
+            })
+        } else {
+            // Collection loop: for x in collection { ... }
+            let body = self.parse_block()?;
+            let end = body.span.end;
+            Some(Expr::ForIn {
+                var,
+                iter: Box::new(first_expr),
+                body,
+                span: Span::new(start, end),
+            })
+        }
     }
 
     fn parse_struct_lit(&mut self, name: Ident, start: u32) -> Option<Expr> {
@@ -1643,6 +1668,8 @@ impl<'a> Parser<'a> {
             Expr::MethodCall { span, .. } => span.start,
             Expr::Match { span, .. } => span.start,
             Expr::Tuple { span, .. } => span.start,
+            Expr::Try { span, .. } => span.start,
+            Expr::ForIn { span, .. } => span.start,
         }
     }
 
@@ -1666,6 +1693,8 @@ impl<'a> Parser<'a> {
             Expr::MethodCall { span, .. } => span.end,
             Expr::Match { span, .. } => span.end,
             Expr::Tuple { span, .. } => span.end,
+            Expr::Try { span, .. } => span.end,
+            Expr::ForIn { span, .. } => span.end,
         }
     }
 

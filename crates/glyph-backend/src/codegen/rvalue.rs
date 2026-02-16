@@ -157,6 +157,34 @@ impl CodegenContext {
         (Vec::new(), false)
     }
 
+    pub(super) fn codegen_rvalue_for_local(
+        &mut self,
+        rvalue: &Rvalue,
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
+        functions: &HashMap<String, LLVMValueRef>,
+        mir_module: &MirModule,
+        target_local: Option<LocalId>,
+    ) -> Result<LLVMValueRef> {
+        // For ConstInt assigned to a typed local, use that local's type
+        if let Rvalue::ConstInt(i) = rvalue {
+            if let Some(lid) = target_local {
+                if let Some(local) = func.locals.get(lid.0 as usize) {
+                    if let Some(ty) = local.ty.as_ref() {
+                        if ty.is_int() {
+                            unsafe {
+                                let llvm_ty = self.get_llvm_type(ty)?;
+                                let signed = matches!(ty, Type::I8 | Type::I32 | Type::I64);
+                                return Ok(LLVMConstInt(llvm_ty, *i as u64, if signed { 1 } else { 0 }));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        self.codegen_rvalue(rvalue, func, local_map, functions, mir_module)
+    }
+
     pub(super) fn codegen_rvalue(
         &mut self,
         rvalue: &Rvalue,

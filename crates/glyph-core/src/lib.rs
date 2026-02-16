@@ -202,6 +202,16 @@ pub mod ast {
             elements: Vec<Expr>,
             span: Span,
         },
+        Try {
+            expr: Box<Expr>,
+            span: Span,
+        },
+        ForIn {
+            var: Ident,
+            iter: Box<Expr>,
+            body: Block,
+            span: Span,
+        },
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

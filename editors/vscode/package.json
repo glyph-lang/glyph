@@ -1,0 +1,61 @@
+{
+  "name": "glyph-lang",
+  "displayName": "Glyph Language",
+  "description": "Language support for Glyph (.glyph) via glyphlsp",
+  "version": "0.1.0",
+  "publisher": "glyph-authors",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:glyph"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "glyph",
+        "aliases": [
+          "Glyph",
+          "glyph"
+        ],
+        "extensions": [
+          ".glyph"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "glyph",
+        "scopeName": "source.glyph",
+        "path": "./syntaxes/glyph.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "Glyph",
+      "properties": {
+        "glyph.serverPath": {
+          "type": "string",
+          "default": "glyphlsp",
+          "description": "Path to the glyphlsp binary"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.75.0",
+    "typescript": "^5.0.0"
+  }
+}

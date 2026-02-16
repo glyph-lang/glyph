@@ -220,6 +220,20 @@ pub(crate) fn lower_block_with_expected<'a>(
                                 last_value = Some(MirValue::Unit);
                             }
                         }
+                        Expr::ForIn {
+                            var,
+                            iter,
+                            body,
+                            span,
+                        } => {
+                            lower_for_in(ctx, var, iter, body);
+                            if control_value_context {
+                                if !matches!(expected, Some(Type::Void)) {
+                                    ctx.error("for-in expression produces unit", Some(*span));
+                                }
+                                last_value = Some(MirValue::Unit);
+                            }
+                        }
                         _ => {
                             last_value = lower_value_with_expected(ctx, expr, expected);
                         }
@@ -240,6 +254,9 @@ pub(crate) fn lower_block_with_expected<'a>(
                             body,
                             ..
                         } => lower_for(ctx, var, start, end, body),
+                        Expr::ForIn {
+                            var, iter, body, ..
+                        } => lower_for_in(ctx, var, iter, body),
                         Expr::Block(block) => {
                             let _ = lower_block_with_expected(ctx, block, None, false, false);
                             ctx.push_inst(MirInst::Nop);
@@ -616,7 +633,8 @@ pub(crate) fn lower_for<'a>(
     // Header: check condition (var < end)
     ctx.switch_to(header_block);
     let var_val = MirValue::Local(var_local);
-    let end_val = lower_value(ctx, end).unwrap_or(MirValue::Int(0));
+    let var_type = ctx.locals[var_local.0 as usize].ty.clone();
+    let end_val = lower_value_with_expected(ctx, end, var_type.as_ref()).unwrap_or(MirValue::Int(0));
     let cond_temp = ctx.fresh_local(None);
     ctx.locals[cond_temp.0 as usize].ty = Some(Type::Bool);
     ctx.push_inst(MirInst::Assign {
@@ -647,13 +665,30 @@ pub(crate) fn lower_for<'a>(
     let body_terminated = ctx.terminated();
     if !body_terminated {
         let inc_temp = ctx.fresh_local(None);
-        ctx.locals[inc_temp.0 as usize].ty = ctx.locals[var_local.0 as usize].ty.clone();
+        let var_ty = ctx.locals[var_local.0 as usize].ty.clone();
+        ctx.locals[inc_temp.0 as usize].ty = var_ty.clone();
+        // Create a typed increment value matching the loop variable type
+        let inc_val = if let Some(ty) = &var_ty {
+            if ty.is_int() && *ty != Type::I32 {
+                let one_tmp = ctx.fresh_local(None);
+                ctx.locals[one_tmp.0 as usize].ty = Some(ty.clone());
+                ctx.push_inst(MirInst::Assign {
+                    local: one_tmp,
+                    value: Rvalue::ConstInt(1),
+                });
+                MirValue::Local(one_tmp)
+            } else {
+                MirValue::Int(1)
+            }
+        } else {
+            MirValue::Int(1)
+        };
         ctx.push_inst(MirInst::Assign {
             local: inc_temp,
             value: Rvalue::Binary {
                 op: glyph_core::ast::BinaryOp::Add,
                 lhs: var_val.clone(),
-                rhs: MirValue::Int(1),
+                rhs: inc_val,
             },
         });
         ctx.push_inst(MirInst::Assign {
@@ -679,6 +714,190 @@ pub(crate) fn lower_for<'a>(
     restore_local_states(ctx, &merged_states, base_len);
 
     // Exit: continue after loop
+    ctx.switch_to(exit_bb);
+}
+
+// Lower `for x in collection { body }` by desugaring to an index-based while loop:
+//   let mut _i: usize = 0
+//   while _i < collection.len() { let x = collection[_i]; body; _i = _i + 1; }
+pub(crate) fn lower_for_in<'a>(
+    ctx: &mut LowerCtx<'a>,
+    var: &'a Ident,
+    iter_expr: &'a Expr,
+    body_block: &'a Block,
+) {
+    use super::types::vec_elem_type_from_type;
+
+    // 1. Lower the collection expression into a local
+    let iter_val = lower_value(ctx, iter_expr);
+    let iter_local = match iter_val {
+        Some(MirValue::Local(id)) => id,
+        Some(val) => {
+            let tmp = ctx.fresh_local(None);
+            if let Some(rv) = rvalue_from_value(val) {
+                ctx.push_inst(MirInst::Assign {
+                    local: tmp,
+                    value: rv,
+                });
+            }
+            tmp
+        }
+        None => {
+            ctx.error("could not lower collection expression in for-in loop", expr_span(iter_expr));
+            return;
+        }
+    };
+
+    // 2. Determine element type from the collection type
+    let iter_type = ctx.locals[iter_local.0 as usize].ty.clone();
+    let (elem_type, is_vec, _is_array) = match &iter_type {
+        Some(ty) if vec_elem_type_from_type(ty).is_some() => {
+            (vec_elem_type_from_type(ty).unwrap(), true, false)
+        }
+        Some(Type::Array(elem_ty, _)) => (elem_ty.as_ref().clone(), false, true),
+        _ => {
+            ctx.error(
+                "for-in loop requires a Vec or array collection",
+                expr_span(iter_expr),
+            );
+            return;
+        }
+    };
+
+    // 3. Create index variable: let mut _i: usize = 0
+    let idx_local = ctx.fresh_local(None);
+    ctx.locals[idx_local.0 as usize].ty = Some(Type::Usize);
+    ctx.locals[idx_local.0 as usize].mutable = true;
+    // Create a typed zero for usize
+    let zero_tmp = ctx.fresh_local(None);
+    ctx.locals[zero_tmp.0 as usize].ty = Some(Type::Usize);
+    ctx.push_inst(MirInst::Assign {
+        local: zero_tmp,
+        value: Rvalue::ConstInt(0),
+    });
+    ctx.push_inst(MirInst::Assign {
+        local: idx_local,
+        value: Rvalue::Move(zero_tmp),
+    });
+
+    // 4. Get collection length
+    let len_local = ctx.fresh_local(None);
+    ctx.locals[len_local.0 as usize].ty = Some(Type::Usize);
+    let len_rvalue = if is_vec {
+        Rvalue::VecLen { vec: iter_local }
+    } else {
+        Rvalue::ArrayLen { base: iter_local }
+    };
+    ctx.push_inst(MirInst::Assign {
+        local: len_local,
+        value: len_rvalue,
+    });
+
+    // 5. Create loop blocks
+    let header_block = ctx.new_block();
+    let body_bb = ctx.new_block();
+    let exit_bb = ctx.new_block();
+
+    if !ctx.terminated() {
+        ctx.push_inst(MirInst::Goto(header_block));
+    }
+
+    // 6. Header: _i < len
+    ctx.switch_to(header_block);
+    let cond_temp = ctx.fresh_local(None);
+    ctx.locals[cond_temp.0 as usize].ty = Some(Type::Bool);
+    ctx.push_inst(MirInst::Assign {
+        local: cond_temp,
+        value: Rvalue::Binary {
+            op: glyph_core::ast::BinaryOp::Lt,
+            lhs: MirValue::Local(idx_local),
+            rhs: MirValue::Local(len_local),
+        },
+    });
+    ctx.push_inst(MirInst::If {
+        cond: MirValue::Local(cond_temp),
+        then_bb: body_bb,
+        else_bb: exit_bb,
+    });
+
+    let base_len = ctx.local_states.len();
+    let base_states = ctx.local_states.clone();
+    let mut merged_states = base_states.clone();
+
+    // 7. Body: let x = collection[_i]; body; _i = _i + 1
+    ctx.switch_to(body_bb);
+    ctx.enter_loop(header_block, exit_bb);
+
+    // Bind loop variable
+    let var_local = ctx.fresh_local(Some(&var.0));
+    ctx.locals[var_local.0 as usize].ty = Some(elem_type.clone());
+    ctx.bindings.insert(&var.0, var_local);
+
+    let index_rvalue = if is_vec {
+        Rvalue::VecIndex {
+            vec: iter_local,
+            elem_type,
+            index: MirValue::Local(idx_local),
+            bounds_check: false, // bounds already ensured by _i < len
+        }
+    } else {
+        Rvalue::ArrayIndex {
+            base: iter_local,
+            index: MirValue::Local(idx_local),
+            bounds_check: false,
+        }
+    };
+    ctx.push_inst(MirInst::Assign {
+        local: var_local,
+        value: index_rvalue,
+    });
+
+    // Lower body
+    let _ = lower_block(ctx, body_block);
+    ctx.exit_loop();
+
+    // Increment: _i = _i + 1
+    let body_terminated = ctx.terminated();
+    if !body_terminated {
+        let one_tmp = ctx.fresh_local(None);
+        ctx.locals[one_tmp.0 as usize].ty = Some(Type::Usize);
+        ctx.push_inst(MirInst::Assign {
+            local: one_tmp,
+            value: Rvalue::ConstInt(1),
+        });
+        let inc_temp = ctx.fresh_local(None);
+        ctx.locals[inc_temp.0 as usize].ty = Some(Type::Usize);
+        ctx.push_inst(MirInst::Assign {
+            local: inc_temp,
+            value: Rvalue::Binary {
+                op: glyph_core::ast::BinaryOp::Add,
+                lhs: MirValue::Local(idx_local),
+                rhs: MirValue::Local(one_tmp),
+            },
+        });
+        ctx.push_inst(MirInst::Assign {
+            local: idx_local,
+            value: Rvalue::Move(inc_temp),
+        });
+        ctx.push_inst(MirInst::Goto(header_block));
+    }
+
+    let body_returns = ctx
+        .blocks
+        .get(ctx.current.0 as usize)
+        .and_then(|block| block.insts.last())
+        .map(|inst| matches!(inst, MirInst::Return(_)))
+        .unwrap_or(false);
+
+    if !body_returns {
+        merge_local_states(
+            &mut merged_states[..base_len],
+            &ctx.local_states[..base_len],
+        );
+    }
+    restore_local_states(ctx, &merged_states, base_len);
+
+    // 8. Exit block
     ctx.switch_to(exit_bb);
 }
 

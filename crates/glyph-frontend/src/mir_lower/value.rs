@@ -58,11 +58,11 @@ pub(crate) fn infer_numeric_result_type(
     rhs: &MirValue,
     ctx: &LowerCtx,
 ) -> Option<Type> {
-    fn type_for_value(v: &MirValue, ctx: &LowerCtx) -> Option<Type> {
+    fn type_for_value(v: &MirValue, ctx: &LowerCtx) -> (Option<Type>, bool) {
         match v {
-            MirValue::Local(id) => ctx.locals.get(id.0 as usize).and_then(|l| l.ty.clone()),
-            MirValue::Int(_) => Some(Type::I32),
-            MirValue::Bool(_) | MirValue::Unit => None,
+            MirValue::Local(id) => (ctx.locals.get(id.0 as usize).and_then(|l| l.ty.clone()), false),
+            MirValue::Int(_) => (None, true), // untyped literal: defer to the other operand
+            MirValue::Bool(_) | MirValue::Unit => (None, false),
         }
     }
 
@@ -75,8 +75,8 @@ pub(crate) fn infer_numeric_result_type(
         }
     }
 
-    let lt = type_for_value(lhs, ctx);
-    let rt = type_for_value(rhs, ctx);
+    let (lt, lhs_is_int_lit) = type_for_value(lhs, ctx);
+    let (rt, rhs_is_int_lit) = type_for_value(rhs, ctx);
 
     match (lt.as_ref(), rt.as_ref()) {
         (Some(l), Some(r)) => {
@@ -90,7 +90,14 @@ pub(crate) fn infer_numeric_result_type(
         }
         (Some(l), None) => Some(l.clone()),
         (None, Some(r)) => Some(r.clone()),
-        _ => None,
+        _ => {
+            // Both are untyped int literals - default to i32
+            if lhs_is_int_lit || rhs_is_int_lit {
+                Some(Type::I32)
+            } else {
+                None
+            }
+        }
     }
 }
 
@@ -256,5 +263,7 @@ pub(crate) fn expr_span(expr: &Expr) -> Option<Span> {
         Expr::Match { span, .. } => Some(*span),
         Expr::InterpString { span, .. } => Some(*span),
         Expr::Tuple { span, .. } => Some(*span),
+        Expr::Try { span, .. } => Some(*span),
+        Expr::ForIn { span, .. } => Some(*span),
     }
 }
