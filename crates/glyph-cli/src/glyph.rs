@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command as ProcessCommand;
@@ -14,12 +14,16 @@ use glyph_backend::{
     linker::{Linker, LinkerOptions},
 };
 use glyph_frontend::{compile_modules, FrontendOptions};
+use glyph_core::ast::Module;
 
 mod module_loader;
 use module_loader::{discover_and_parse_modules, module_id_from_path};
 
 mod diagnostics;
-use diagnostics::format_diagnostic;
+use diagnostics::{format_diagnostic, SourceInfo};
+
+mod dependency;
+use dependency::{load_dependency_modules, resolve_dependencies};
 
 const EXIT_SUCCESS: i32 = 0;
 const EXIT_USAGE: i32 = 1;
@@ -90,13 +94,30 @@ struct BinTarget {
 }
 
 #[derive(Debug, Deserialize)]
+struct LibTarget {
+    #[serde(default = "default_lib_path")]
+    path: String,
+}
+
+fn default_lib_path() -> String {
+    "src/lib.glyph".to_string()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum DependencySpec {
+    Path { path: String },
+}
+
+#[derive(Debug, Deserialize)]
 struct Manifest {
     package: PackageSection,
     #[serde(default)]
+    lib: Option<LibTarget>,
+    #[serde(default)]
     bin: Vec<BinTarget>,
     #[serde(default)]
-    #[allow(dead_code)]
-    dependencies: toml::value::Table,
+    dependencies: HashMap<String, DependencySpec>,
 }
 
 fn main() {
@@ -196,7 +217,7 @@ fn main() -> i32 {
     Ok(())
 }
 
-fn build_cmd(release: bool, bin: Option<String>, verbose: bool) -> GlyphResult<PathBuf> {
+fn build_cmd(release: bool, bin: Option<String>, verbose: bool) -> GlyphResult<Option<PathBuf>> {
     let cwd = std::env::current_dir().map_err(internal_err("failed to read current dir"))?;
     let manifest_path = locate_manifest(&cwd)?;
     let root = manifest_path
@@ -204,17 +225,31 @@ fn build_cmd(release: bool, bin: Option<String>, verbose: bool) -> GlyphResult<P
         .ok_or_else(|| usage_err("glyph.toml has no parent directory"))?;
 
     let manifest = load_manifest(&manifest_path, root)?;
-    let target = select_bin(&manifest, bin.as_deref())?;
     let profile = if release { "release" } else { "debug" };
 
-    let built_path = build_bin(root, &target, profile, verbose)?;
+    if manifest.bin.is_empty() {
+        if bin.is_some() {
+            return Err(usage_err(
+                "no [[bin]] targets defined (this is a library-only case)",
+            ));
+        }
+        check_lib_case(root, &manifest, verbose)?;
+        println!(
+            "Checked library case '{}' successfully",
+            manifest.package.name
+        );
+        return Ok(None);
+    }
+
+    let target = select_bin(&manifest, bin.as_deref())?;
+    let built_path = build_bin(root, &manifest, &target, profile, verbose)?;
     println!(
         "Built {} ({}) -> {}",
         target.name,
         profile,
         built_path.display()
     );
-    Ok(built_path)
+    Ok(Some(built_path))
 }
 
 fn run_cmd(
@@ -223,7 +258,15 @@ fn run_cmd(
     args: Vec<String>,
     verbose: bool,
 ) -> GlyphResult<()> {
-    let exe = build_cmd(release, bin, verbose)?;
+    let cwd = std::env::current_dir().map_err(internal_err("failed to read current dir"))?;
+    let manifest_path = locate_manifest(&cwd)?;
+    let root = manifest_path
+        .parent()
+        .ok_or_else(|| usage_err("glyph.toml has no parent directory"))?;
+    let manifest = load_manifest(&manifest_path, root)?;
+    let target = select_bin(&manifest, bin.as_deref())?;
+    let profile = if release { "release" } else { "debug" };
+    let exe = build_bin(root, &manifest, &target, profile, verbose)?;
     let status = ProcessCommand::new(&exe)
         .args(args)
         .status()
@@ -250,11 +293,16 @@ fn locate_manifest(start: &Path) -> GlyphResult<PathBuf> {
     })
 }
 
-fn load_manifest(path: &Path, root: &Path) -> GlyphResult<Manifest> {
+fn parse_manifest(path: &Path) -> GlyphResult<Manifest> {
     let contents = fs::read_to_string(path)
         .map_err(|e| usage_err(format!("failed to read {}: {}", path.display(), e)))?;
     let manifest: Manifest =
         toml::from_str(&contents).map_err(|e| usage_err(format!("invalid glyph.toml: {}", e)))?;
+    Ok(manifest)
+}
+
+fn load_manifest(path: &Path, root: &Path) -> GlyphResult<Manifest> {
+    let manifest = parse_manifest(path)?;
     validate_manifest(&manifest, root)?;
     Ok(manifest)
 }
@@ -266,8 +314,17 @@ fn validate_manifest(manifest: &Manifest, root: &Path) -> GlyphResult<()> {
     if manifest.package.version.trim().is_empty() {
         return Err(usage_err("[package].version is required"));
     }
-    if manifest.bin.is_empty() {
-        return Err(usage_err("at least one [[bin]] entry is required"));
+    if manifest.bin.is_empty() && manifest.lib.is_none() {
+        return Err(usage_err(
+            "at least one [[bin]] entry or a [lib] target is required",
+        ));
+    }
+
+    if let Some(lib) = &manifest.lib {
+        if lib.path.trim().is_empty() {
+            return Err(usage_err("[lib].path is required"));
+        }
+        let _ = validate_relative_glyph_path("[lib].path", "lib path", &lib.path, root)?;
     }
 
     let mut seen = HashSet::new();
@@ -284,39 +341,75 @@ fn validate_manifest(manifest: &Manifest, root: &Path) -> GlyphResult<()> {
                 bin.name
             )));
         }
-        let path = Path::new(&bin.path);
-        if path.is_absolute() {
+        let _ = validate_relative_glyph_path("[[bin]].path", "bin path", &bin.path, root)?;
+    }
+
+    for (name, spec) in &manifest.dependencies {
+        if !is_valid_identifier(name) {
             return Err(usage_err(format!(
-                "[[bin]].path must be relative: '{}'",
-                bin.path
+                "dependency name '{}' is not a valid identifier",
+                name
             )));
         }
-        if path.components().any(|c| matches!(c, Component::ParentDir)) {
-            return Err(usage_err(format!(
-                "[[bin]].path must not traverse parents ('{}')",
-                bin.path
-            )));
-        }
-        if path.extension().and_then(|s| s.to_str()) != Some("glyph") {
-            return Err(usage_err(format!(
-                "[[bin]].path must end with .glyph ('{}')",
-                bin.path
-            )));
+        if name == "std" {
+            return Err(usage_err("dependency name 'std' is reserved"));
         }
 
-        let full = root.join(path);
-        if !full.is_file() {
+        let path = match spec {
+            DependencySpec::Path { path } => path,
+        };
+        if path.trim().is_empty() {
             return Err(usage_err(format!(
-                "bin path does not exist: {}",
-                full.display()
+                "dependency '{}' must specify a path",
+                name
             )));
         }
+        let dep_root = resolve_dependency_root(root, path);
+        if !dep_root.is_dir() {
+            return Err(usage_err(format!(
+                "dependency '{}' path does not exist: {}",
+                name,
+                dep_root.display()
+            )));
+        }
+        let dep_manifest_path = dep_root.join("glyph.toml");
+        if !dep_manifest_path.is_file() {
+            return Err(usage_err(format!(
+                "dependency '{}' missing glyph.toml at {}",
+                name,
+                dep_manifest_path.display()
+            )));
+        }
+        let dep_manifest = parse_manifest(&dep_manifest_path)?;
+        let Some(lib) = &dep_manifest.lib else {
+            return Err(usage_err(format!(
+                "dependency '{}' does not define a [lib] target",
+                name
+            )));
+        };
+        if lib.path.trim().is_empty() {
+            return Err(usage_err(format!(
+                "dependency '{}' has empty [lib].path",
+                name
+            )));
+        }
+        let _ = validate_relative_glyph_path(
+            "[lib].path",
+            "dependency lib path",
+            &lib.path,
+            &dep_root,
+        )?;
     }
 
     Ok(())
 }
 
 fn select_bin<'a>(manifest: &'a Manifest, requested: Option<&str>) -> GlyphResult<&'a BinTarget> {
+    if manifest.bin.is_empty() {
+        return Err(usage_err(
+            "no [[bin]] targets defined (this is a library-only case)",
+        ));
+    }
     if let Some(name) = requested {
         manifest.bin.iter().find(|b| b.name == name).ok_or_else(|| {
             let names: Vec<_> = manifest.bin.iter().map(|b| b.name.as_str()).collect();
@@ -337,20 +430,11 @@ fn select_bin<'a>(manifest: &'a Manifest, requested: Option<&str>) -> GlyphResul
     }
 }
 
-fn build_bin(root: &Path, bin: &BinTarget, profile: &str, verbose: bool) -> GlyphResult<PathBuf> {
-    let source_path = root.join(&bin.path);
-    let module_root = source_path.parent().unwrap_or(root);
-    let output_dir = root.join("target").join(profile);
-    fs::create_dir_all(&output_dir).map_err(internal_err(format!(
-        "failed to create {}",
-        output_dir.display()
-    )))?;
-
-    let entry_module = module_id_from_path(module_root, &source_path).map_err(|e| GlyphError {
-        code: EXIT_COMPILER,
-        message: format!("failed to determine entry module: {}", e),
-    })?;
-
+fn load_case_modules(
+    root: &Path,
+    module_root: &Path,
+    manifest: &Manifest,
+) -> GlyphResult<(HashMap<String, Module>, HashMap<String, SourceInfo>)> {
     let load = discover_and_parse_modules(module_root).map_err(|e| GlyphError {
         code: EXIT_COMPILER,
         message: format!("failed to load modules: {}", e),
@@ -364,8 +448,105 @@ fn build_bin(root: &Path, bin: &BinTarget, profile: &str, verbose: bool) -> Glyp
             message: "build failed due to compiler diagnostics".to_string(),
         });
     }
-    let modules = load.modules;
-    let sources = load.sources;
+    let mut modules = load.modules;
+    let mut sources = load.sources;
+
+    let mut visited = HashSet::new();
+    let dependencies = resolve_dependencies(root, manifest, &mut visited)?;
+    for dep in dependencies {
+        let (dep_modules, dep_sources) = load_dependency_modules(&dep)?;
+        merge_dependency_maps(&mut modules, &mut sources, dep_modules, dep_sources)?;
+    }
+
+    Ok((modules, sources))
+}
+
+fn merge_dependency_maps(
+    modules: &mut HashMap<String, Module>,
+    sources: &mut HashMap<String, SourceInfo>,
+    dep_modules: HashMap<String, Module>,
+    dep_sources: HashMap<String, SourceInfo>,
+) -> GlyphResult<()> {
+    for (module_id, module) in dep_modules {
+        if modules.contains_key(&module_id) {
+            return Err(GlyphError {
+                code: EXIT_COMPILER,
+                message: format!("module id collision for '{}'", module_id),
+            });
+        }
+        modules.insert(module_id, module);
+    }
+    for (module_id, source) in dep_sources {
+        if sources.contains_key(&module_id) {
+            return Err(GlyphError {
+                code: EXIT_COMPILER,
+                message: format!("module source collision for '{}'", module_id),
+            });
+        }
+        sources.insert(module_id, source);
+    }
+    Ok(())
+}
+
+fn check_lib_case(root: &Path, manifest: &Manifest, verbose: bool) -> GlyphResult<()> {
+    let lib = manifest
+        .lib
+        .as_ref()
+        .ok_or_else(|| usage_err("[lib] target is required for library-only builds"))?;
+    let source_path = root.join(&lib.path);
+    let module_root = source_path.parent().unwrap_or(root);
+
+    let entry_module = module_id_from_path(module_root, &source_path).map_err(|e| GlyphError {
+        code: EXIT_COMPILER,
+        message: format!("failed to determine entry module: {}", e),
+    })?;
+
+    let (modules, sources) = load_case_modules(root, module_root, manifest)?;
+
+    let frontend_output = compile_modules(
+        modules,
+        &entry_module,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: true,
+        },
+    );
+
+    if !frontend_output.diagnostics.is_empty() {
+        for diag in &frontend_output.diagnostics {
+            eprintln!("{}", format_diagnostic(diag, &sources));
+        }
+        return Err(GlyphError {
+            code: EXIT_COMPILER,
+            message: "build failed due to compiler diagnostics".to_string(),
+        });
+    }
+
+    let _ = verbose;
+    Ok(())
+}
+
+fn build_bin(
+    root: &Path,
+    manifest: &Manifest,
+    bin: &BinTarget,
+    profile: &str,
+    verbose: bool,
+) -> GlyphResult<PathBuf> {
+    let source_path = root.join(&bin.path);
+    let module_root = source_path.parent().unwrap_or(root);
+    let output_dir = root.join("target").join(profile);
+    fs::create_dir_all(&output_dir).map_err(internal_err(format!(
+        "failed to create {}",
+        output_dir.display()
+    )))?;
+
+    let entry_module = module_id_from_path(module_root, &source_path).map_err(|e| GlyphError {
+        code: EXIT_COMPILER,
+        message: format!("failed to determine entry module: {}", e),
+    })?;
+
+    let (modules, sources) = load_case_modules(root, module_root, manifest)?;
 
     let frontend_output = compile_modules(
         modules,
@@ -431,6 +612,72 @@ fn build_bin(root: &Path, bin: &BinTarget, profile: &str, verbose: bool) -> Glyp
     }
 }
 
+fn validate_relative_glyph_path(
+    field_label: &str,
+    path_label: &str,
+    path_str: &str,
+    root: &Path,
+) -> GlyphResult<PathBuf> {
+    let path = Path::new(path_str);
+    if path.is_absolute() {
+        return Err(usage_err(format!(
+            "{} must be relative: '{}'",
+            field_label, path_str
+        )));
+    }
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err(usage_err(format!(
+            "{} must not traverse parents ('{}')",
+            field_label, path_str
+        )));
+    }
+    if path.extension().and_then(|s| s.to_str()) != Some("glyph") {
+        return Err(usage_err(format!(
+            "{} must end with .glyph ('{}')",
+            field_label, path_str
+        )));
+    }
+
+    let full = root.join(path);
+    if !full.is_file() {
+        return Err(usage_err(format!(
+            "{} does not exist: {}",
+            path_label,
+            full.display()
+        )));
+    }
+
+    Ok(full)
+}
+
+fn resolve_dependency_root(root: &Path, path: &str) -> PathBuf {
+    let dep_path = Path::new(path);
+    if dep_path.is_absolute() {
+        dep_path.to_path_buf()
+    } else {
+        root.join(dep_path)
+    }
+}
+
+fn is_valid_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !is_ident_start(first) {
+        return false;
+    }
+    chars.all(is_ident_continue)
+}
+
+fn is_ident_start(ch: char) -> bool {
+    ch.is_ascii_alphabetic() || ch == '_'
+}
+
+fn is_ident_continue(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_'
+}
+
 fn usage_err<T: Into<String>>(msg: T) -> GlyphError {
     GlyphError {
         code: EXIT_USAGE,
@@ -458,6 +705,7 @@ mod tests {
                 name: "foo".into(),
                 version: "0.1.0".into(),
             },
+            lib: None,
             bin: vec![
                 BinTarget {
                     name: "a".into(),
@@ -468,7 +716,7 @@ mod tests {
                     path: "b.glyph".into(),
                 },
             ],
-            dependencies: toml::value::Table::new(),
+            dependencies: HashMap::new(),
         };
         let err = select_bin(&manifest, None).unwrap_err();
         assert_eq!(err.code, EXIT_USAGE);
@@ -483,11 +731,12 @@ mod tests {
                 name: "foo".into(),
                 version: "0.1.0".into(),
             },
+            lib: None,
             bin: vec![BinTarget {
                 name: "a".into(),
                 path: "../a.glyph".into(),
             }],
-            dependencies: toml::value::Table::new(),
+            dependencies: HashMap::new(),
         };
         // Need the file to exist to reach traversal check; create placeholder in root/.. not possible
         // Instead, expect traversal rejection before file existence is checked.

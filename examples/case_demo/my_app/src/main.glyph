@@ -1,0 +1,7 @@
+from std import println
+from my_lib import greet
+
+fn main() -> i32 {
+  println("case demo")
+  ret greet()
+}

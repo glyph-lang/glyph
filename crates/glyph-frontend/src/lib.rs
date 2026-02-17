@@ -59,6 +59,35 @@ fn tag_new_diagnostics(module_id: &str, diagnostics: &mut Vec<Diagnostic>, start
     }
 }
 
+fn check_name_collision(
+    kind: &str,
+    name: &str,
+    module_id: &str,
+    seen: &mut std::collections::HashMap<String, String>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if let Some(existing) = seen.get(name) {
+        if existing != module_id {
+            if is_std_module(existing) && is_std_module(module_id) {
+                return;
+            }
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "{} '{}' defined in both '{}' and '{}'. Cross-case {} name collisions are not yet supported.",
+                    kind, name, existing, module_id, kind
+                ),
+                None,
+            ));
+        }
+    } else {
+        seen.insert(name.to_string(), module_id.to_string());
+    }
+}
+
+fn is_std_module(module_id: &str) -> bool {
+    module_id == "std" || module_id.starts_with("std/")
+}
+
 fn compile_multi_module_graph(
     modules: std::collections::HashMap<String, Module>,
     entry_module: &str,
@@ -67,10 +96,45 @@ fn compile_multi_module_graph(
         Ok((multi_ctx, compile_order)) => {
             let mut merged = MirModule::default();
             let mut seen_externs = std::collections::HashSet::new();
+            let mut seen_functions = std::collections::HashMap::new();
+            let mut seen_structs = std::collections::HashMap::new();
+            let mut seen_enums = std::collections::HashMap::new();
             let mut diagnostics = Vec::new();
 
             for module_id in compile_order {
                 let module = multi_ctx.modules.get(&module_id).unwrap();
+                if let Some(symbols) = multi_ctx.module_symbols.get(&module_id) {
+                    for name in &symbols.structs {
+                        check_name_collision(
+                            "struct",
+                            name,
+                            &module_id,
+                            &mut seen_structs,
+                            &mut diagnostics,
+                        );
+                    }
+                    for name in &symbols.enums {
+                        check_name_collision(
+                            "enum",
+                            name,
+                            &module_id,
+                            &mut seen_enums,
+                            &mut diagnostics,
+                        );
+                    }
+                    for name in &symbols.functions {
+                        check_name_collision(
+                            "function",
+                            name,
+                            &module_id,
+                            &mut seen_functions,
+                            &mut diagnostics,
+                        );
+                    }
+                }
+                if !diagnostics.is_empty() {
+                    return Err(diagnostics);
+                }
 
                 let (mut ctx, resolve_diags) = resolver::resolve_types(module);
                 diagnostics.extend(tag_diagnostics(&module_id, resolve_diags));
@@ -287,6 +351,23 @@ pub fn demo_function() -> Function {
 mod tests {
     use super::*;
     use glyph_core::diag::Severity;
+    use std::collections::HashMap;
+
+    fn parse_module(source: &str) -> Module {
+        let lex_out = lex(source);
+        assert!(
+            lex_out.diagnostics.is_empty(),
+            "lex diags: {:?}",
+            lex_out.diagnostics
+        );
+        let parse_out = parse(&lex_out.tokens, source);
+        assert!(
+            parse_out.diagnostics.is_empty(),
+            "parse diags: {:?}",
+            parse_out.diagnostics
+        );
+        parse_out.module
+    }
 
     #[test]
     fn compile_source_returns_empty_diagnostics_on_valid_input() {
@@ -418,5 +499,36 @@ mod tests {
             "diags: {:?}",
             output.diagnostics
         );
+    }
+
+    #[test]
+    fn multi_module_rejects_function_name_collisions() {
+        let modules = HashMap::from([
+            (
+                "main".to_string(),
+                parse_module("import a\nimport b\nfn main() -> i32 { ret 0 }"),
+            ),
+            ("a".to_string(), parse_module("fn helper() -> i32 { ret 1 }")),
+            ("b".to_string(), parse_module("fn helper() -> i32 { ret 2 }")),
+        ]);
+
+        let output = compile_modules(
+            modules,
+            "main",
+            FrontendOptions {
+                emit_mir: true,
+                include_std: true,
+            },
+        );
+
+        let message = output
+            .diagnostics
+            .iter()
+            .find(|d| d.message.contains("function 'helper' defined in both"))
+            .map(|d| d.message.as_str());
+        let Some(message) = message else {
+            panic!("diags: {:?}", output.diagnostics);
+        };
+        assert!(message.contains("'a'") && message.contains("'b'"));
     }
 }

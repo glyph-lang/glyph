@@ -147,7 +147,7 @@ Good agents think before they type.
 Great agents verify before they ship. 🚀
 
 -- Other stuff:
-Git commit command: GIT_SSH_COMMAND="ssh -i ~/.ssh/id_glyph -o IdentitiesOnly=yes" git push origin master
+Git push command: GIT_SSH_COMMAND="ssh -i ~/.ssh/id_glyph -o IdentitiesOnly=yes" git push origin master
 
 Utilities
 ----------

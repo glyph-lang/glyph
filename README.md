@@ -23,7 +23,7 @@ Traditional languages were designed for human programmers typing at keyboards. G
 
 **The Design Principles:**
 
-- **Small keyword set** — Just 18 keywords total (`fn`, `let`, `mut`, `ret`, `if`, `else`, `for`, `while`, `match`, `struct`, `enum`, `impl`, `use`, `pub`, `type`, `break`, `cont`). Fewer concepts for LLMs to get wrong.
+- **Small keyword set** — Just 24 keywords total (`fn`, `let`, `mut`, `ret`, `if`, `else`, `for`, `in`, `while`, `match`, `struct`, `enum`, `impl`, `interface`, `use`, `import`, `from`, `as`, `pub`, `type`, `const`, `break`, `cont`, `extern`). Fewer concepts for LLMs to get wrong.
 
 - **Regular, deterministic grammar** — No macros, no context-dependent parsing, no special cases. One obvious way to do things.
 
@@ -124,9 +124,10 @@ This is not the final language spec, but these features are working now (see `ex
 
 **Core Language**
 - Function declarations with `fn`, local variables with `let`/`let mut`
-- Control flow: `if`/`else`, `while`, `for`, `match` (expression-oriented)
+- Control flow: `if`/`else`, `while`, `for`/`for-in`, `match` (expression-oriented)
 - Return statements with `ret`
 - Primitive types: `i32`, `u32`, `i64`, `u8`, `bool`, `f64`, `char`
+- String interpolation: `$"x = {x}"`
 
 **Type System**
 - Generics with monomorphization: `Vec<T>`, `Map<K,V>`, `Option<T>`, `Result<T,E>`
@@ -139,14 +140,22 @@ This is not the final language spec, but these features are working now (see `ex
 - Generic collections: `Vec<T>`, `Map<K,V>`
 - String support: string literals, `&str` slices, owned `String`
 - File I/O via `std::io::File`
+- JSON parsing via `std/json/parser`
 - Command-line arguments via `std::sys::argv`
 - Standard output: `std::print`, `std::println` with formatting
+
+**Cases and Dependencies**
+- Project manifest via `glyph.toml` with `[lib]`, `[[bin]]`, and `[dependencies]`
+- Local path-based dependencies between cases
+- Transitive dependency resolution with cycle detection
+- Library and binary targets
 
 **Advanced Features**
 - Multi-file projects with module discovery
 - C FFI via `extern "C"` declarations
 - Error propagation with `?` operator
 - Arrays with bounds checking
+- LSP server with real-time diagnostics
 
 ---
 
@@ -267,6 +276,45 @@ glyph build --release
 glyph run --bin hello -- arg1 arg2
 ```
 
+### Cases and Dependencies
+
+Glyph projects are organized into **cases** — the unit of compilation. A case can be a binary, a library, or both.
+
+**Library case** (`my_lib/glyph.toml`):
+
+```toml
+[package]
+name = "my_lib"
+version = "0.1.0"
+
+[lib]
+path = "src/lib.glyph"
+```
+
+**Binary case depending on a library** (`my_app/glyph.toml`):
+
+```toml
+[package]
+name = "my_app"
+version = "0.1.0"
+
+[dependencies]
+my_lib = { path = "../my_lib" }
+
+[[bin]]
+name = "my_app"
+path = "src/main.glyph"
+```
+
+Import from a dependency using its case name:
+
+```glyph
+from my_lib import greet
+from my_lib/helpers import format_name
+```
+
+See the [Cases and Dependencies](https://glyph-lang.github.io/glyph/book/book/cases.html) chapter in the book for the full guide.
+
 ---
 
 ## 🔧 Compiler Architecture
@@ -286,7 +334,7 @@ The repo contains a complete working compiler pipeline:
 - Integration with system libraries
 
 **Core** (`crates/glyph-core`)
-- Shared AST, MIR, and type system definitions
+- Shared AST, MIR, and type system definitions (`ast`, `mir`, `types`, `token`, `span`)
 - Diagnostic and error reporting infrastructure
 
 **Runtime** (`runtime/`)
@@ -297,9 +345,9 @@ The repo contains a complete working compiler pipeline:
 - `glyph-cli` — Direct compiler driver (check/build/run)
 - `glyph` — Project workflow tool (build via `glyph.toml`)
 
-**Future Tooling** (placeholders)
-- `glyphfmt` — Code formatter
-- `glyphlsp` — Language server for IDE integration
+**Tooling**
+- `glyphlsp` — Language server providing real-time diagnostics
+- `glyphfmt` — Code formatter (placeholder)
 
 ---
 
@@ -327,8 +375,8 @@ crates/
   glyph-backend/    # LLVM codegen and linking
   glyph-core/       # Shared AST/MIR/types and diagnostics
   glyph-cli/        # CLI binaries (glyph, glyph-cli)
+  glyphlsp/         # Language server (real-time diagnostics)
   glyphfmt/         # Formatter (placeholder)
-  glyphlsp/         # LSP server (placeholder)
 
 runtime/            # Minimal C runtime for I/O
 examples/           # Working end-to-end programs
@@ -374,7 +422,7 @@ We ran a **490-experiment study** comparing LLM reasoning costs (total tokens to
 7. Java: 385.1 ± 238.2
 
 **Key Findings:**
-- ✅ **Glyph matches Rust's efficiency** despite being **much simpler** (18 keywords vs Rust's 50+)
+- ✅ **Glyph matches Rust's efficiency** despite being **much simpler** (24 keywords vs Rust's 50+)
 - ✅ **Glyph dominates error handling** — tied with Rust, but 259 tokens better than Java (p<0.001, Cohen's d = -3.09)
 - ✅ **Simplicity works** — Glyph beats all compiled languages on algorithmic tasks (fibonacci)
 - ✅ **Statistical rigor** — 7 repetitions per condition, paired t-tests, 95% CIs
