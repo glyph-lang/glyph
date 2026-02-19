@@ -151,6 +151,12 @@ int glyph_fmt_write_str(int fd, const char* str) {
     return write(fd, str, len);
 }
 
+// Write a null-terminated string to stdout without a trailing newline
+// Returns number of bytes written, or -1 on error
+int glyph_print(const char* str) {
+    return glyph_fmt_write_str(1, str);
+}
+
 // Write a single Unicode scalar value encoded as UTF-8
 // Returns number of bytes written, or -1 on error
 int glyph_fmt_write_char(int fd, uint32_t value) {

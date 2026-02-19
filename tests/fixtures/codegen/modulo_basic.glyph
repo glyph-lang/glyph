@@ -1,0 +1,7 @@
+fn mod_op(a: i32, b: i32) -> i32 {
+  ret a % b
+}
+
+fn main() -> i32 {
+  ret mod_op(10, 3)
+}

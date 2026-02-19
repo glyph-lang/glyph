@@ -291,6 +291,9 @@ impl CodegenContext {
                         BinaryOp::Div => {
                             LLVMBuildSDiv(self.builder, lhs_val, rhs_val, name.as_ptr())
                         }
+                        BinaryOp::Mod => {
+                            LLVMBuildSRem(self.builder, lhs_val, rhs_val, name.as_ptr())
+                        }
                         BinaryOp::Eq => LLVMBuildICmp(
                             self.builder,
                             llvm_sys::LLVMIntPredicate::LLVMIntEQ,

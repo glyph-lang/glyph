@@ -124,3 +124,101 @@ fn codegen_call_struct_return() {
     // Verify call returns struct
     assert!(ir.contains("call %Point @make_point(i32 10, i32 20)"));
 }
+
+#[test]
+fn codegen_modulo_basic() {
+    let src = load_fixture("modulo_basic.glyph");
+    let out = compile_source(
+        &src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: false,
+        },
+    );
+    assert!(
+        out.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        out.diagnostics
+    );
+
+    let backend = LlvmBackend::default();
+    let artifact = backend
+        .emit(
+            &out.mir,
+            &CodegenOptions {
+                emit: EmitKind::LlvmIr,
+                ..Default::default()
+            },
+        )
+        .expect("backend emit");
+    let ir = artifact.llvm_ir.expect("llvm ir");
+
+    // Verify srem instruction is emitted for modulo
+    assert!(ir.contains("srem"), "expected srem in IR:\n{}", ir);
+}
+
+#[test]
+fn codegen_call_void_last_stmt() {
+    let src = load_fixture("void_call_basic.glyph");
+    let out = compile_source(
+        &src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: false,
+        },
+    );
+    assert!(
+        out.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        out.diagnostics
+    );
+
+    let backend = LlvmBackend::default();
+    let artifact = backend
+        .emit(
+            &out.mir,
+            &CodegenOptions {
+                emit: EmitKind::LlvmIr,
+                ..Default::default()
+            },
+        )
+        .expect("backend emit");
+    let ir = artifact.llvm_ir.expect("llvm ir");
+
+    assert!(ir.contains("define void @noop"));
+    assert!(ir.contains("define void @main"));
+    assert!(ir.contains("call void @noop"));
+}
+
+#[test]
+fn codegen_call_void_non_last() {
+    let src = load_fixture("void_call_non_last.glyph");
+    let out = compile_source(
+        &src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: false,
+        },
+    );
+    assert!(
+        out.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        out.diagnostics
+    );
+
+    let backend = LlvmBackend::default();
+    let artifact = backend
+        .emit(
+            &out.mir,
+            &CodegenOptions {
+                emit: EmitKind::LlvmIr,
+                ..Default::default()
+            },
+        )
+        .expect("backend emit");
+    let ir = artifact.llvm_ir.expect("llvm ir");
+
+    assert!(ir.contains("define void @noop"));
+    assert!(ir.contains("define i32 @main"));
+    assert!(ir.contains("call void @noop"));
+}

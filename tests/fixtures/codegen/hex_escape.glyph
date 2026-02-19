@@ -1,0 +1,5 @@
+fn main() -> i32 {
+  let red = "\x1b[31mRed\x1b[0m"
+  let interp = $"\x1b[32mGreen\x1b[0m"
+  ret 0
+}

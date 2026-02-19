@@ -33,6 +33,13 @@ Common built-in types include:
 
 String literals like `"hello"` have type `str`. Use `String::from_str("...")` when you need an owned `String`.
 
+Strings support hex escape sequences for embedding arbitrary byte values:
+
+```glyph
+let esc = "\x1B[31m"   // ESC character followed by ANSI color code
+let tab = "\x09"        // tab character
+```
+
 ## Expressions and Return Values
 
 Blocks produce a value: the last expression is the block result.
@@ -44,6 +51,15 @@ fn abs_i32(x: i32) -> i32 {
 ```
 
 Use `ret expr` for an explicit return (useful for early exits).
+
+## Operators
+
+Glyph supports the standard arithmetic, comparison, and logical operators:
+
+- Arithmetic: `+`, `-`, `*`, `/`, `%` (modulo — integer remainder)
+- Comparison: `==`, `!=`, `<`, `<=`, `>`, `>=`
+- Logical: `&&`, `||`, `!`
+- Error propagation: `?` (works on `Result` types)
 
 ## Control Flow
 
@@ -67,7 +83,7 @@ fn main() -> i32 {
 }
 ```
 
-`break` and `continue` work inside `while` and `for`.
+`break` and `cont` work inside `while` and `for`.
 
 ## Imports
 
@@ -151,6 +167,25 @@ fn main() -> i32 {
   ret status
 }
 ```
+
+## Void Functions
+
+Functions that don't return a value omit the `-> Type` annotation:
+
+```glyph
+from std import println
+
+fn greet(name: str) {
+  println($"hello {name}")
+}
+
+fn main() -> i32 {
+  greet("world")
+  ret 0
+}
+```
+
+Void function calls can appear anywhere in a block, not just at the end.
 
 ## Vectors (Vec)
 

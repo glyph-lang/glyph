@@ -411,7 +411,8 @@ fn lower_binary<'a>(
         glyph_core::ast::BinaryOp::Add
         | glyph_core::ast::BinaryOp::Sub
         | glyph_core::ast::BinaryOp::Mul
-        | glyph_core::ast::BinaryOp::Div => {
+        | glyph_core::ast::BinaryOp::Div
+        | glyph_core::ast::BinaryOp::Mod => {
             if let Some(numeric) = infer_numeric_result_type(&lhs_val, &rhs_val, ctx) {
                 ctx.locals[tmp.0 as usize].ty = Some(numeric);
             }

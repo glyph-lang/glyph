@@ -13,6 +13,23 @@ use super::value::{
     update_local_type_from_rvalue,
 };
 
+fn is_void_type(ty: &Type) -> bool {
+    matches!(ty, Type::Void) || matches!(ty, Type::Tuple(elem_types) if elem_types.is_empty())
+}
+
+fn is_void_value(ctx: &LowerCtx<'_>, value: &MirValue) -> bool {
+    match value {
+        MirValue::Unit => true,
+        MirValue::Local(local) => ctx
+            .locals
+            .get(local.0 as usize)
+            .and_then(|l| l.ty.as_ref())
+            .map(is_void_type)
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
 fn imports_sys_argv(resolver: &ResolverContext) -> bool {
     resolver
         .import_scope
@@ -75,8 +92,16 @@ pub(crate) fn lower_function(
         });
     }
 
-    let implicit_return =
+    let mut implicit_return =
         lower_block_with_expected(&mut ctx, &func.body, ret_type.as_ref(), false, true);
+    let returns_void = ret_type.as_ref().map_or(true, |ty| is_void_type(ty));
+    if returns_void {
+        if let Some(value) = implicit_return.as_ref() {
+            if is_void_value(&ctx, value) {
+                implicit_return = None;
+            }
+        }
+    }
     if !ctx.terminated() {
         // If block returned a value, use it; otherwise return void
         ctx.drop_all_active_locals();
@@ -540,7 +565,13 @@ pub(crate) fn lower_cond_branch<'a>(
             lower_cond_branch(ctx, rhs, then_bb, else_bb);
         }
         _ => {
-            let cond_val = lower_value(ctx, cond).unwrap_or(MirValue::Bool(false));
+            let mut cond_val = lower_value(ctx, cond).unwrap_or(MirValue::Bool(false));
+            if let Some(cond_ty) = infer_value_type(&cond_val, ctx) {
+                if is_void_type(&cond_ty) {
+                    ctx.error("condition expression has void type", expr_span(cond));
+                    cond_val = MirValue::Bool(false);
+                }
+            }
             let cond_bool = coerce_to_bool(cond_val);
             ctx.push_inst(MirInst::If {
                 cond: cond_bool,

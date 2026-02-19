@@ -38,7 +38,7 @@ pub(crate) fn lower_call<'a>(
     callee: &'a Expr,
     args: &'a [Expr],
     span: Span,
-    require_value: bool,
+    _require_value: bool,
     expected_ret: Option<&Type>,
 ) -> Option<Rvalue> {
     if let Some(builtin) = lower_method_builtin(ctx, callee, args, span) {
@@ -82,15 +82,6 @@ pub(crate) fn lower_call<'a>(
         return None;
     }
 
-    // Arity/type check for externs is already covered by sig.params length; here we ensure imports exist.
-    if require_value && sig.ret.is_none() {
-        ctx.error(
-            format!("function '{}' has no return type", name.0),
-            Some(span),
-        );
-        return None;
-    }
-
     let mut lowered_args = Vec::new();
     for (idx, arg) in args.iter().enumerate() {
         let expected_arg = sig.params.get(idx).and_then(|ty| ty.as_ref());
@@ -126,6 +117,8 @@ pub(crate) fn lower_call<'a>(
 
         if let Some(ret) = ret_ty.as_ref() {
             ctx.locals[tmp.0 as usize].ty = Some(ret.clone());
+        } else {
+            ctx.locals[tmp.0 as usize].ty = Some(Type::Void);
         }
 
         let payload = lowered_args.get(0).cloned();
@@ -140,6 +133,8 @@ pub(crate) fn lower_call<'a>(
     } else {
         if let Some(ret) = ret_ty.as_ref() {
             ctx.locals[tmp.0 as usize].ty = Some(ret.clone());
+        } else {
+            ctx.locals[tmp.0 as usize].ty = Some(Type::Void);
         }
 
         let call_target = sig.target_name.clone();
@@ -468,6 +463,8 @@ pub(crate) fn lower_method_call<'a>(
     if let Some(sig) = sig {
         if let Some(ret) = &sig.ret {
             ctx.locals[tmp.0 as usize].ty = Some(ret.clone());
+        } else {
+            ctx.locals[tmp.0 as usize].ty = Some(Type::Void);
         }
     }
     ctx.push_inst(MirInst::Assign {

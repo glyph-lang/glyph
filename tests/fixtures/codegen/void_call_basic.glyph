@@ -1,0 +1,6 @@
+fn noop() {
+}
+
+fn main() {
+  noop()
+}

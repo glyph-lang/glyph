@@ -122,7 +122,7 @@ impl<'a> Parser<'a> {
             BinaryOp::Eq | BinaryOp::Ne => 3,
             BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => 4,
             BinaryOp::Add | BinaryOp::Sub => 5,
-            BinaryOp::Mul | BinaryOp::Div => 6,
+            BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => 6,
         }
     }
 
@@ -403,19 +403,21 @@ impl<'a> Parser<'a> {
         let content = &raw[2..raw.len().saturating_sub(1)]; // strip $" and closing "
         let bytes = content.as_bytes();
         let mut i = 0usize;
-        let mut literal = String::new();
+        let mut literal: Vec<u8> = Vec::new();
 
         while i < bytes.len() {
             if bytes[i] == b'{' {
                 if i + 1 < bytes.len() && bytes[i + 1] == b'{' {
-                    literal.push('{');
+                    literal.push(b'{');
                     i += 2;
                     continue;
                 }
 
                 // Flush current literal segment
                 if !literal.is_empty() {
-                    segments.push(InterpSegment::Literal(std::mem::take(&mut literal)));
+                    let s = String::from_utf8_lossy(&literal).into_owned();
+                    literal.clear();
+                    segments.push(InterpSegment::Literal(s));
                 }
 
                 let hole_start = i;
@@ -454,31 +456,41 @@ impl<'a> Parser<'a> {
             }
 
             if bytes[i] == b'}' && i + 1 < bytes.len() && bytes[i + 1] == b'}' {
-                literal.push('}');
+                literal.push(b'}');
                 i += 2;
                 continue;
             }
 
             if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                if bytes[i + 1] == b'x' && i + 3 < bytes.len() {
+                    let d1 = bytes[i + 2] as char;
+                    let d2 = bytes[i + 3] as char;
+                    let hex_str: String = [d1, d2].iter().collect();
+                    if let Ok(byte) = u8::from_str_radix(&hex_str, 16) {
+                        literal.push(byte);
+                        i += 4;
+                        continue;
+                    }
+                }
                 let escaped = match bytes[i + 1] {
-                    b'n' => '\n',
-                    b't' => '\t',
-                    b'r' => '\r',
-                    b'\\' => '\\',
-                    b'"' => '"',
-                    other => other as char,
+                    b'n' => b'\n',
+                    b't' => b'\t',
+                    b'r' => b'\r',
+                    b'\\' => b'\\',
+                    b'"' => b'"',
+                    other => other,
                 };
                 literal.push(escaped);
                 i += 2;
                 continue;
             }
 
-            literal.push(bytes[i] as char);
+            literal.push(bytes[i]);
             i += 1;
         }
 
         if !literal.is_empty() {
-            segments.push(InterpSegment::Literal(literal));
+            segments.push(InterpSegment::Literal(String::from_utf8_lossy(&literal).into_owned()));
         }
 
         Some(Expr::InterpString {

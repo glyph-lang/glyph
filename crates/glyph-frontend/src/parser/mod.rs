@@ -355,6 +355,7 @@ impl<'a> Parser<'a> {
             Some(TokenKind::Minus) => Some(BinaryOp::Sub),
             Some(TokenKind::Star) => Some(BinaryOp::Mul),
             Some(TokenKind::Slash) => Some(BinaryOp::Div),
+            Some(TokenKind::Percent) => Some(BinaryOp::Mod),
             Some(TokenKind::EqEq) => Some(BinaryOp::Eq),
             Some(TokenKind::BangEq) => Some(BinaryOp::Ne),
             Some(TokenKind::Lt) => Some(BinaryOp::Lt),
@@ -420,27 +421,48 @@ pub(super) fn parse_string_literal(raw: &str) -> String {
         .strip_prefix('"')
         .and_then(|s| s.strip_suffix('"'))
         .unwrap_or(raw);
-    let mut result = String::new();
+    let mut bytes: Vec<u8> = Vec::new();
     let mut chars = trimmed.chars().peekable();
 
     while let Some(ch) = chars.next() {
         if ch == '\\' {
             if let Some(next) = chars.next() {
                 match next {
-                    'n' => result.push('\n'),
-                    't' => result.push('\t'),
-                    'r' => result.push('\r'),
-                    '\\' => result.push('\\'),
-                    '"' => result.push('"'),
-                    other => result.push(other),
+                    'n' => bytes.push(b'\n'),
+                    't' => bytes.push(b'\t'),
+                    'r' => bytes.push(b'\r'),
+                    '\\' => bytes.push(b'\\'),
+                    '"' => bytes.push(b'"'),
+                    'x' => {
+                        let h1 = chars.next();
+                        let h2 = chars.next();
+                        if let (Some(d1), Some(d2)) = (h1, h2) {
+                            let hex_str: String = [d1, d2].iter().collect();
+                            if let Ok(byte) = u8::from_str_radix(&hex_str, 16) {
+                                bytes.push(byte);
+                            } else {
+                                bytes.push(b'x');
+                                bytes.extend_from_slice(d1.encode_utf8(&mut [0; 4]).as_bytes());
+                                bytes.extend_from_slice(d2.encode_utf8(&mut [0; 4]).as_bytes());
+                            }
+                        } else {
+                            bytes.push(b'x');
+                            if let Some(d1) = h1 {
+                                bytes.extend_from_slice(d1.encode_utf8(&mut [0; 4]).as_bytes());
+                            }
+                        }
+                    }
+                    other => {
+                        bytes.extend_from_slice(other.encode_utf8(&mut [0; 4]).as_bytes());
+                    }
                 }
             }
         } else {
-            result.push(ch);
+            bytes.extend_from_slice(ch.encode_utf8(&mut [0; 4]).as_bytes());
         }
     }
 
-    result
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 #[cfg(test)]
@@ -797,6 +819,155 @@ fn main() { p("hi") }"#;
                 }
             }
             other => panic!("expected const item, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_hex_escape_in_string_literal() {
+        assert_eq!(
+            parse_string_literal(r#""\x1b[31m""#),
+            "\x1b[31m"
+        );
+    }
+
+    #[test]
+    fn parses_multiple_hex_escapes() {
+        assert_eq!(
+            parse_string_literal(r#""\x1b[31mRed\x1b[0m""#),
+            "\x1b[31mRed\x1b[0m"
+        );
+    }
+
+    #[test]
+    fn parses_hex_escape_boundary_values() {
+        assert_eq!(
+            parse_string_literal(r#""\x00""#),
+            "\x00"
+        );
+        assert_eq!(
+            parse_string_literal(r#""\x7f""#),
+            "\x7f"
+        );
+        // Standalone \xff is invalid UTF-8; treated as raw byte via lossy conversion
+        assert_eq!(
+            parse_string_literal(r#""\xff""#),
+            "\u{fffd}"
+        );
+    }
+
+    #[test]
+    fn parses_multibyte_utf8_hex_escapes() {
+        // Braille character ⠋ (U+280B) = UTF-8 bytes 0xe2, 0xa0, 0x8b
+        let result = parse_string_literal(r#""\xe2\xa0\x8b""#);
+        assert_eq!(result, "\u{280b}");
+        assert_eq!(result.as_bytes(), &[0xe2, 0xa0, 0x8b]);
+    }
+
+    #[test]
+    fn hex_escape_invalid_digits_fallback() {
+        // Invalid hex digits fall back to literal characters
+        assert_eq!(
+            parse_string_literal(r#""\xZZ""#),
+            "xZZ"
+        );
+    }
+
+    #[test]
+    fn parses_hex_escape_in_interpolated_string() {
+        let source = r#"
+fn main() {
+  let s = $"\x1b[31mhello\x1b[0m"
+}
+"#;
+        let lexed = lex(source);
+        let out = parse(&lexed.tokens, source);
+        assert!(
+            out.diagnostics.is_empty(),
+            "unexpected diagnostics: {:?}",
+            out.diagnostics
+        );
+
+        match &out.module.items[0] {
+            Item::Function(f) => match &f.body.stmts[0] {
+                Stmt::Let {
+                    value: Some(Expr::InterpString { segments, .. }),
+                    ..
+                } => {
+                    assert_eq!(segments.len(), 1);
+                    match &segments[0] {
+                        InterpSegment::Literal(s) => {
+                            assert_eq!(s, "\x1b[31mhello\x1b[0m");
+                        }
+                        other => panic!("expected literal segment, got {:?}", other),
+                    }
+                }
+                other => panic!("expected interpolated string let, got {:?}", other),
+            },
+            other => panic!("expected function, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn hex_escape_mixed_with_regular_escapes() {
+        assert_eq!(
+            parse_string_literal(r#""hello\n\x1b[31mred\x1b[0m\tworld""#),
+            "hello\n\x1b[31mred\x1b[0m\tworld"
+        );
+    }
+
+    #[test]
+    fn parses_modulo_expression() {
+        let source = "fn main() { let x = 10 % 3 }";
+        let lexed = lex(source);
+        let out = parse(&lexed.tokens, source);
+        assert!(out.diagnostics.is_empty(), "diags: {:?}", out.diagnostics);
+
+        let Item::Function(f) = &out.module.items[0] else {
+            panic!("expected function");
+        };
+        let Stmt::Let {
+            value: Some(expr), ..
+        } = &f.body.stmts[0]
+        else {
+            panic!("expected let binding");
+        };
+        assert!(
+            matches!(expr, Expr::Binary { op: BinaryOp::Mod, .. }),
+            "expected BinaryOp::Mod, got {:?}",
+            expr
+        );
+    }
+
+    #[test]
+    fn modulo_precedence_vs_add() {
+        let source = "fn main() { let x = a + b % c }";
+        let lexed = lex(source);
+        let out = parse(&lexed.tokens, source);
+        assert!(out.diagnostics.is_empty(), "diags: {:?}", out.diagnostics);
+
+        let Item::Function(f) = &out.module.items[0] else {
+            panic!("expected function");
+        };
+        let Stmt::Let {
+            value: Some(expr), ..
+        } = &f.body.stmts[0]
+        else {
+            panic!("expected let binding");
+        };
+        // % binds tighter than +, so top-level op should be Add
+        match expr {
+            Expr::Binary {
+                op: BinaryOp::Add,
+                rhs,
+                ..
+            } => {
+                assert!(
+                    matches!(rhs.as_ref(), Expr::Binary { op: BinaryOp::Mod, .. }),
+                    "expected rhs to be Mod, got {:?}",
+                    rhs
+                );
+            }
+            other => panic!("expected top-level Add, got {:?}", other),
         }
     }
 

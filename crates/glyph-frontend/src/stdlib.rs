@@ -71,6 +71,19 @@ pub fn std_modules() -> HashMap<String, Module> {
         span,
     };
 
+    let print_str_extern = ExternFunctionDecl {
+        abi: Some("C".into()),
+        name: Ident("print_str".into()),
+        params: vec![Param {
+            name: Ident("msg".into()),
+            ty: Some(tp("str", span)),
+            span,
+        }],
+        ret_type: Some(tp("i32", span)),
+        link_name: Some("glyph_print".into()),
+        span,
+    };
+
     let raw_write_extern = ExternFunctionDecl {
         abi: Some("C".into()),
         name: Ident("raw_write".into()),
@@ -342,6 +355,7 @@ pub fn std_modules() -> HashMap<String, Module> {
             glyph_core::ast::Item::Struct(stdout_struct),
             glyph_core::ast::Item::Struct(file_struct),
             glyph_core::ast::Item::ExternFunction(puts_extern),
+            glyph_core::ast::Item::ExternFunction(print_str_extern),
             glyph_core::ast::Item::ExternFunction(raw_write_extern),
             glyph_core::ast::Item::ExternFunction(fopen_extern),
             glyph_core::ast::Item::ExternFunction(write_extern),

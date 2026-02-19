@@ -127,7 +127,8 @@ This is not the final language spec, but these features are working now (see `ex
 - Control flow: `if`/`else`, `while`, `for`/`for-in`, `match` (expression-oriented)
 - Return statements with `ret`
 - Primitive types: `i32`, `u32`, `i64`, `u8`, `bool`, `f64`, `char`
-- String interpolation: `$"x = {x}"`
+- Operators: `+`, `-`, `*`, `/`, `%` (modulo), comparisons, logical, `?` (error propagation)
+- String interpolation: `$"x = {x}"`, hex escape sequences (`"\x1B[31m"`)
 
 **Type System**
 - Generics with monomorphization: `Vec<T>`, `Map<K,V>`, `Option<T>`, `Result<T,E>`

@@ -3,7 +3,7 @@ AGENTS.txt
 Purpose
 -------
 
-This document defines how AI agents (including Codex, GPT-5.2, and other OpenAI models)
+This document defines how AI code generation agents (including Claude Code, Codex, and others)
 should operate when working in this repository.
 
 The goal is high-quality, verifiable, and intentional work — not rushed or implicit output.

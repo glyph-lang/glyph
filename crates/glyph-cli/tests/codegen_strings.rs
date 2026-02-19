@@ -48,3 +48,10 @@ fn codegen_string_utils() {
     assert!(ir.contains("strstr"), "IR missing strstr: {}", ir);
     assert!(ir.contains("isspace"), "IR missing isspace: {}", ir);
 }
+
+#[test]
+fn codegen_hex_escape() {
+    let ir = compile_ir("hex_escape.glyph");
+    // The ESC byte (0x1b = 27) should appear in the IR string constants
+    assert!(ir.contains("\\1B"), "IR missing ESC byte: {}", ir);
+}

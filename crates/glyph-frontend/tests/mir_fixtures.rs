@@ -383,6 +383,23 @@ fn mir_continue_outside_loop() {
 }
 
 #[test]
+fn mir_if_void_condition_reports_error() {
+    let src = run_fixture("if_void_condition.glyph");
+    let out = compile_source(
+        &src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: false,
+        },
+    );
+    assert!(!out.diagnostics.is_empty());
+    assert!(out
+        .diagnostics
+        .iter()
+        .any(|d| d.message.contains("condition expression has void type")));
+}
+
+#[test]
 fn mir_while_infinite() {
     let src = run_fixture("while_infinite.glyph");
     let out = compile_source(
@@ -546,6 +563,19 @@ fn mir_map_basic() {
         FrontendOptions {
             emit_mir: true,
             include_std: true,
+        },
+    );
+    assert_debug_snapshot!(out.mir);
+}
+
+#[test]
+fn mir_modulo_ret() {
+    let src = run_fixture("modulo_ret.glyph");
+    let out = compile_source(
+        &src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: false,
         },
     );
     assert_debug_snapshot!(out.mir);

@@ -1,0 +1,7 @@
+fn noop() {
+}
+
+fn main() -> i32 {
+  noop()
+  1
+}

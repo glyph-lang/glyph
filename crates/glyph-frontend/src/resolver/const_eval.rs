@@ -196,7 +196,7 @@ fn eval_const_binary(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<ConstValue> {
     match op {
-        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
+        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
             let (l, r) = match (left, right) {
                 (ConstValue::Int(l), ConstValue::Int(r)) => (l, r),
                 _ => {
@@ -207,7 +207,7 @@ fn eval_const_binary(
                     return None;
                 }
             };
-            if matches!(op, BinaryOp::Div) && r == 0 {
+            if matches!(op, BinaryOp::Div | BinaryOp::Mod) && r == 0 {
                 diagnostics.push(Diagnostic::error("const division by zero", Some(span)));
                 return None;
             }
@@ -216,6 +216,7 @@ fn eval_const_binary(
                 BinaryOp::Sub => l - r,
                 BinaryOp::Mul => l * r,
                 BinaryOp::Div => l / r,
+                BinaryOp::Mod => l % r,
                 _ => l,
             };
             Some(ConstValue::Int(value))

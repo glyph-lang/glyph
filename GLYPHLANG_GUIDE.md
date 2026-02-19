@@ -35,6 +35,20 @@ fn main() -> i32 {
 - `ret expr` returns early; otherwise the last expression in a block is the value.
 - Semicolons are optional. The parser consumes them if present.
 
+### Operators
+
+| Precedence | Operators | Description |
+|-----------|-----------|-------------|
+| 1 (lowest) | `\|\|` | Logical OR |
+| 2 | `&&` | Logical AND |
+| 3 | `==`, `!=` | Equality |
+| 4 | `<`, `<=`, `>`, `>=` | Comparison |
+| 5 | `+`, `-` | Addition, subtraction |
+| 6 | `*`, `/`, `%` | Multiplication, division, modulo (integer remainder via LLVM `srem`) |
+| 7 (highest) | `!`, `-` (unary) | Logical NOT, negation |
+
+The `?` operator works on `Result` types for error propagation: `let val = expr?`.
+
 Comments:
 
 - Line comments: `// ...`
@@ -71,7 +85,23 @@ fn sum_to(n: i32) -> i32 {
 ```
 
 - `for i in start..end` is end-exclusive (`i < end`).
+- `for x in collection { ... }` iterates over a collection (e.g. `Vec<T>`).
 - Use `break` and `cont` (not `continue`).
+
+Void functions (no `-> Type` annotation):
+
+```glyph
+fn greet(name: str) {
+  println($"hello {name}")
+}
+
+fn main() -> i32 {
+  greet("world")
+  ret 0
+}
+```
+
+Void calls can appear anywhere in a block, not just at the end.
 
 ## Types and Literals
 
@@ -86,6 +116,7 @@ Strings:
 - String literals like `"hi"` are `str`.
 - Use `String::from_str("...")` to allocate an owned `String`.
 - Use `s.clone()` to duplicate a `String` without moving it.
+- Hex escape sequences are supported: `"\x1B[31m"` embeds byte value `0x1B` (ESC). Format: `\xHH` where HH is two hex digits.
 
 Generics:
 
@@ -209,7 +240,19 @@ fn main() -> i32 {
 
 ## Printing and Interpolation
 
-`print`/`println` accept string literals, interpolated strings, or runtime `str`/`String` values:
+`print`/`println` accept string literals, interpolated strings, or runtime `str`/`String` values.
+`print_str` prints without a trailing newline:
+
+```glyph
+from std/io import print_str
+
+fn main() -> i32 {
+  print_str("no newline")
+  ret 0
+}
+```
+
+Examples with `println`:
 
 ```glyph
 from std import println
@@ -225,6 +268,31 @@ fn main() -> i32 {
 
 Use `s.as_str()` when you need an explicit borrowed view of a `String`.
 
+## Cases and Dependencies
+
+Glyph projects are organized into **cases** (the unit of compilation). A case has a `glyph.toml` manifest:
+
+```toml
+[package]
+name = "my_app"
+version = "0.1.0"
+
+[dependencies]
+my_lib = { path = "../my_lib" }
+
+[[bin]]
+name = "my_app"
+path = "src/main.glyph"
+```
+
+Import from a dependency using its case name:
+
+```glyph
+from my_lib import greet
+```
+
+Dependencies are resolved transitively with cycle detection.
+
 ## Idiosyncrasies and Pitfalls (LLM Checklist)
 
 - Keywords are short: `ret` (not `return`), `cont` (not `continue`).
@@ -239,7 +307,7 @@ Use `s.as_str()` when you need an explicit borrowed view of a `String`.
 - Assignment targets can be identifiers or struct/tuple fields. Index assignment is not supported.
 - References can only be taken to locals (`&local`), not to temporaries.
 - Array `.len()` only works on local array variables.
-- The `?` operator token exists but is not parsed yet; use `match` on `Result`.
+- The `?` operator works on `Result` types for error propagation (e.g. `let val = expr?`). The enclosing function must return `Result`.
 - Floating-point literals parse, but arithmetic is mostly integer-focused; avoid floats unless you have verified support.
 - `extern` functions must end with `;` and only `extern "C"` is accepted.
 - `const` declarations require an explicit type annotation.
