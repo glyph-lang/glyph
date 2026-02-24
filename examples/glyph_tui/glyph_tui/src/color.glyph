@@ -1,0 +1,31 @@
+fn red(text: str) -> String {
+  ret String::from_str("\x1b[31m") + String::from_str(text) + String::from_str("\x1b[0m")
+}
+
+fn green(text: str) -> String {
+  ret String::from_str("\x1b[32m") + String::from_str(text) + String::from_str("\x1b[0m")
+}
+
+fn yellow(text: str) -> String {
+  ret String::from_str("\x1b[33m") + String::from_str(text) + String::from_str("\x1b[0m")
+}
+
+fn blue(text: str) -> String {
+  ret String::from_str("\x1b[34m") + String::from_str(text) + String::from_str("\x1b[0m")
+}
+
+fn magenta(text: str) -> String {
+  ret String::from_str("\x1b[35m") + String::from_str(text) + String::from_str("\x1b[0m")
+}
+
+fn cyan(text: str) -> String {
+  ret String::from_str("\x1b[36m") + String::from_str(text) + String::from_str("\x1b[0m")
+}
+
+fn white(text: str) -> String {
+  ret String::from_str("\x1b[37m") + String::from_str(text) + String::from_str("\x1b[0m")
+}
+
+fn black(text: str) -> String {
+  ret String::from_str("\x1b[30m") + String::from_str(text) + String::from_str("\x1b[0m")
+}

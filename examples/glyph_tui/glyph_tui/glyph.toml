@@ -1,0 +1,6 @@
+[package]
+name = "glyph_tui"
+version = "0.1.0"
+
+[lib]
+path = "src/lib.glyph"

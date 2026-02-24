@@ -220,6 +220,7 @@ pub(crate) fn lower_expr_with_expected<'a>(
         }
         Expr::Unary { op, expr, span } => match op {
             UnaryOp::Not => lower_unary_not(ctx, expr, *span),
+            UnaryOp::Neg => lower_unary_neg(ctx, expr, *span),
         },
         Expr::Binary { op, lhs, rhs, .. } => match *op {
             glyph_core::ast::BinaryOp::And | glyph_core::ast::BinaryOp::Or => {
@@ -343,6 +344,22 @@ fn lower_unary_not<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr, _span: Span) -> O
             op: BinaryOp::Eq,
             lhs: coerced,
             rhs: MirValue::Bool(false),
+        },
+    });
+    Some(Rvalue::Move(tmp))
+}
+
+fn lower_unary_neg<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr, _span: Span) -> Option<Rvalue> {
+    let value = lower_value(ctx, expr)?;
+    let tmp = ctx.fresh_local(None);
+    let ty = infer_value_type(&value, ctx).unwrap_or(Type::I32);
+    ctx.locals[tmp.0 as usize].ty = Some(ty);
+    ctx.push_inst(MirInst::Assign {
+        local: tmp,
+        value: Rvalue::Binary {
+            op: BinaryOp::Sub,
+            lhs: MirValue::Int(0),
+            rhs: value,
         },
     });
     Some(Rvalue::Move(tmp))
@@ -1586,6 +1603,7 @@ pub(crate) fn lower_value_with_expected<'a>(
         }
         Expr::Unary { op, expr, span } => match op {
             UnaryOp::Not => lower_unary_not(ctx, expr, *span).and_then(rvalue_to_value),
+            UnaryOp::Neg => lower_unary_neg(ctx, expr, *span).and_then(rvalue_to_value),
         },
         Expr::Binary { op, lhs, rhs, .. } => match *op {
             glyph_core::ast::BinaryOp::And | glyph_core::ast::BinaryOp::Or => {

@@ -112,6 +112,11 @@ MirModule {
                         },
                         Drop(
                             LocalId(
+                                1,
+                            ),
+                        ),
+                        Drop(
+                            LocalId(
                                 0,
                             ),
                         ),

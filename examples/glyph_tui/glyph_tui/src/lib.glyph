@@ -1,0 +1,11 @@
+// glyph_tui: Terminal UI library
+//
+// Submodules (use path-based imports):
+//   from glyph_tui/color import red, green, yellow, blue, magenta, cyan, white, black
+//   from glyph_tui/style import bold, dim, underline
+//   from glyph_tui/spinner import dots_spinner, line_spinner, spin_frame, spin_tick, spin_done
+//   from glyph_tui/ansi import esc, csi, reset
+
+fn _lib_anchor() -> i32 {
+  ret 0
+}

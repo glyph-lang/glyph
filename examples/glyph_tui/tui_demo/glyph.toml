@@ -1,0 +1,10 @@
+[package]
+name = "tui_demo"
+version = "0.1.0"
+
+[dependencies]
+glyph_tui = { path = "../glyph_tui" }
+
+[[bin]]
+name = "tui_demo"
+path = "src/main.glyph"

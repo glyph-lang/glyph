@@ -172,6 +172,19 @@ fn eval_const_expr(
                     }
                 }
             }
+            glyph_core::ast::UnaryOp::Neg => {
+                let value = eval_const_expr(expr, module_id, module, ctx, stack, diagnostics)?;
+                match value {
+                    ConstValue::Int(n) => Some(ConstValue::Int(-n)),
+                    _ => {
+                        diagnostics.push(Diagnostic::error(
+                            "const unary '-' expects an integer",
+                            Some(*span),
+                        ));
+                        None
+                    }
+                }
+            }
         },
         Expr::Binary { op, lhs, rhs, span } => {
             let left = eval_const_expr(lhs, module_id, module, ctx, stack, diagnostics)?;

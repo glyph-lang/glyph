@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use glyph_core::ast::Module;
 use glyph_core::diag::Diagnostic;
-use glyph_core::mir::{BlockId, Local, LocalId, MirBlock, MirInst, Rvalue};
+use glyph_core::mir::{BlockId, Local, LocalId, MirBlock, MirInst, MirValue, Rvalue};
 use glyph_core::span::Span;
 use glyph_core::types::Type;
 
@@ -85,10 +85,32 @@ impl<'a> LowerCtx<'a> {
                     *state = LocalState::Initialized;
                 }
                 if let Rvalue::Move(src) = value {
+                    // If source was already Moved (e.g., VecIndex snapshot
+                    // marked non-owning), propagate to dest so the shallow
+                    // copy doesn't get independently dropped.
+                    //
+                    // Only propagate for types where consume_local doesn't
+                    // track moves (Named/App types). For String/Own/Shared,
+                    // the Moved state came from consume_local (normal
+                    // ownership transfer) — not a non-owning marker.
+                    let src_was_moved = matches!(
+                        self.local_states.get(src.0 as usize),
+                        Some(LocalState::Moved)
+                    );
                     if let Some(state) = self.local_states.get_mut(src.0 as usize) {
                         *state = LocalState::Moved;
                     }
+                    if src_was_moved && !self.local_needs_drop(*src) {
+                        if let Some(state) = self.local_states.get_mut(local.0 as usize)
+                        {
+                            *state = LocalState::Moved;
+                        }
+                    }
                 }
+                // Track ownership transfers for types with drop glue.
+                // Operations that consume values must mark the source as
+                // Moved to prevent double-free at scope exit.
+                self.track_rvalue_ownership(value, *local);
             }
             MirInst::AssignField { value, .. } => {
                 if let Rvalue::Move(src) = value {
@@ -160,7 +182,11 @@ impl<'a> LowerCtx<'a> {
     }
 
     pub(crate) fn handle_reassign(&mut self, local: LocalId) {
-        if !self.local_needs_drop(local) {
+        let dominated = self
+            .local_ty(local)
+            .map(|ty| Self::type_has_drop_glue(ty))
+            .unwrap_or(false);
+        if !dominated {
             return;
         }
         if let Some(LocalState::Initialized) = self.local_states.get(local.0 as usize) {
@@ -184,7 +210,11 @@ impl<'a> LowerCtx<'a> {
     }
 
     pub(crate) fn drop_local_if_needed(&mut self, local: LocalId) {
-        if !self.local_needs_drop(local) {
+        let dominated = self
+            .local_ty(local)
+            .map(|ty| Self::type_has_drop_glue(ty))
+            .unwrap_or(false);
+        if !dominated {
             return;
         }
         let idx = local.0 as usize;
@@ -237,6 +267,82 @@ impl<'a> LowerCtx<'a> {
         self.local_ty(local)
             .map(|ty| matches!(ty, Type::Own(_) | Type::Shared(_) | Type::String))
             .unwrap_or(false)
+    }
+
+    fn type_has_drop_glue(ty: &Type) -> bool {
+        match ty {
+            Type::Own(_) | Type::Shared(_) | Type::String => true,
+            Type::App { base, .. } => base == "Vec" || base == "Map",
+            Type::Named(_) => true,
+            _ => false,
+        }
+    }
+
+    /// Mark a MirValue's source local as Moved if it has drop glue.
+    fn mark_moved_if_droppable(&mut self, val: &MirValue) {
+        if let MirValue::Local(src) = val {
+            if Self::type_has_drop_glue(self.local_ty(*src).unwrap_or(&Type::Void)) {
+                if let Some(state) = self.local_states.get_mut(src.0 as usize) {
+                    *state = LocalState::Moved;
+                }
+            }
+        }
+    }
+
+    /// Track ownership transfers for rvalues that consume their arguments.
+    fn track_rvalue_ownership(&mut self, value: &Rvalue, dest: LocalId) {
+        match value {
+            // VecPush modifies the vec alloca in place and returns a
+            // snapshot. The snapshot must not be independently dropped,
+            // and the pushed value is now owned by the Vec.
+            Rvalue::VecPush { value: val, .. } => {
+                if let Some(state) = self.local_states.get_mut(dest.0 as usize) {
+                    *state = LocalState::Moved;
+                }
+                self.mark_moved_if_droppable(val);
+            }
+            // StructLit takes ownership of field values.
+            Rvalue::StructLit { field_values, .. } => {
+                for (_name, val) in field_values {
+                    self.mark_moved_if_droppable(val);
+                }
+            }
+            // NOTE: Function calls are NOT tracked here because without
+            // a borrow checker, we can't distinguish consuming calls from
+            // borrowing calls. Structs passed by value to functions create
+            // shallow copies; both caller and callee may hold aliased
+            // pointers. This is a known limitation (B5) that needs either
+            // deep-copy at call sites or parameter drop suppression.
+            // Map mutations take ownership of keys/values.
+            Rvalue::MapAdd {
+                key, value: val, ..
+            }
+            | Rvalue::MapUpdate {
+                key, value: val, ..
+            } => {
+                self.mark_moved_if_droppable(key);
+                self.mark_moved_if_droppable(val);
+            }
+            // VecIndex returns a shallow copy of the element. For types
+            // with drop glue, the copy aliases the Vec's element data.
+            // Mark as Moved so the copy is not independently dropped.
+            Rvalue::VecIndex { elem_type, .. } if Self::type_has_drop_glue(elem_type) => {
+                if let Some(state) = self.local_states.get_mut(dest.0 as usize) {
+                    *state = LocalState::Moved;
+                }
+            }
+            // FieldAccess returns a shallow copy of the field value.
+            // For droppable types, the copy aliases the struct's field.
+            Rvalue::FieldAccess { .. } => {
+                let dest_ty = self.local_ty(dest);
+                if dest_ty.map(|ty| Self::type_has_drop_glue(ty)).unwrap_or(false) {
+                    if let Some(state) = self.local_states.get_mut(dest.0 as usize) {
+                        *state = LocalState::Moved;
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     pub(crate) fn consume_local(&mut self, local: LocalId, span: Option<Span>) -> bool {

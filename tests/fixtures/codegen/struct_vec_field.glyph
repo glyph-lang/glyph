@@ -1,0 +1,7 @@
+struct Container { items: Vec<String> }
+fn main() -> i32 {
+  let mut v: Vec<String> = Vec::new()
+  v.push(String::from_str("one"))
+  let c = Container { items: v }
+  ret 0
+}

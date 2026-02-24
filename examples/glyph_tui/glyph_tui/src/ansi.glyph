@@ -1,0 +1,11 @@
+fn esc() -> String {
+  ret String::from_str("\x1b")
+}
+
+fn csi(code: str) -> String {
+  ret String::from_str("\x1b[") + String::from_str(code)
+}
+
+fn reset() -> String {
+  ret String::from_str("\x1b[0m")
+}

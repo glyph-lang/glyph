@@ -1,0 +1,54 @@
+from std/io import puts
+from glyph_tui/color import red, green, yellow, blue, magenta, cyan, white
+from glyph_tui/style import bold, dim, underline
+from glyph_tui/spinner import dots_spinner, spin_tick, spin_done
+
+fn main() -> i32 {
+  puts("=== glyph_tui demo ===")
+  puts("")
+
+  // Color samples
+  puts("Colors:")
+  let r: str = red("  Red text")
+  puts(r)
+  let g: str = green("  Green text")
+  puts(g)
+  let y: str = yellow("  Yellow text")
+  puts(y)
+  let bl: str = blue("  Blue text")
+  puts(bl)
+  let m: str = magenta("  Magenta text")
+  puts(m)
+  let c: str = cyan("  Cyan text")
+  puts(c)
+  let w: str = white("  White text")
+  puts(w)
+  puts("")
+
+  // Style samples
+  puts("Styles:")
+  let b: str = bold("  Bold text")
+  puts(b)
+  let d: str = dim("  Dim text")
+  puts(d)
+  let u: str = underline("  Underlined text")
+  puts(u)
+  puts("")
+
+  // Combined: bold + red
+  puts("Combined:")
+  let br: str = bold(red("  Bold red text"))
+  puts(br)
+  puts("")
+
+  // Spinner demo
+  let mut s = dots_spinner()
+  let mut i: i32 = 0
+  while i < 25 {
+    let _t = spin_tick(&mut s, "Loading...")
+    i = i + 1
+  }
+  let _d = spin_done("Done!")
+
+  ret 0
+}

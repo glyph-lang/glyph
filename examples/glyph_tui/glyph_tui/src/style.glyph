@@ -1,0 +1,11 @@
+fn bold(text: str) -> String {
+  ret String::from_str("\x1b[1m") + String::from_str(text) + String::from_str("\x1b[0m")
+}
+
+fn dim(text: str) -> String {
+  ret String::from_str("\x1b[2m") + String::from_str(text) + String::from_str("\x1b[0m")
+}
+
+fn underline(text: str) -> String {
+  ret String::from_str("\x1b[4m") + String::from_str(text) + String::from_str("\x1b[0m")
+}

@@ -170,6 +170,11 @@ MirModule {
                                 ),
                             },
                         },
+                        Drop(
+                            LocalId(
+                                0,
+                            ),
+                        ),
                         Return(
                             Some(
                                 Local(

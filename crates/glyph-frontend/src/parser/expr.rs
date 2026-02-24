@@ -143,6 +143,19 @@ impl<'a> Parser<'a> {
                 span,
             });
         }
+        // Unary negation prefix (-expr)
+        if self.at(TokenKind::Minus) {
+            let start_tok = self.peek().unwrap();
+            let start = start_tok.span.start;
+            self.advance();
+            let expr = self.parse_call_or_primary()?;
+            let span = Span::new(start, self.expr_end(&expr));
+            return Some(Expr::Unary {
+                op: UnaryOp::Neg,
+                expr: Box::new(expr),
+                span,
+            });
+        }
         // Check for reference prefix (&expr or &mut expr)
         if self.at(TokenKind::Amp) {
             let start_tok = self.peek().unwrap();

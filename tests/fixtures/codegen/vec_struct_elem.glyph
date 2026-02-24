@@ -1,0 +1,6 @@
+struct Entry { key: String, value: i32 }
+fn main() -> i32 {
+  let mut v: Vec<Entry> = Vec::new()
+  v.push(Entry { key: String::from_str("k"), value: 1 })
+  ret 0
+}

@@ -1,0 +1,6 @@
+fn main() -> i32 {
+  let a: i32 = -1
+  let b: i32 = -42
+  let c: i64 = -100
+  a + b
+}

@@ -44,6 +44,7 @@ pub enum Literal {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UnaryOp {
     Not,
+    Neg,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

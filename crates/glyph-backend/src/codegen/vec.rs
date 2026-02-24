@@ -1042,8 +1042,17 @@ impl CodegenContext {
         local_map: &HashMap<LocalId, LLVMValueRef>,
     ) -> Result<()> {
         let (struct_name, vec_ptr) = self.struct_pointer_for_local(vec, func, local_map)?;
+        self.codegen_drop_vec_from_ptr(vec_ptr, &struct_name, elem_type)
+    }
+
+    pub(super) fn codegen_drop_vec_from_ptr(
+        &mut self,
+        vec_ptr: LLVMValueRef,
+        struct_name: &str,
+        elem_type: &Type,
+    ) -> Result<()> {
         let (llvm_vec_ty, usize_ty) = self
-            .get_vec_layout(&struct_name)
+            .get_vec_layout(struct_name)
             .ok_or_else(|| anyhow!("missing vec layout for {}", struct_name))?;
 
         // Field pointers

@@ -1,0 +1,79 @@
+from std/io import print_str
+extern "C" fn usleep(usecs: u32) -> i32;
+
+struct Spinner {
+  interval_us: u32
+  current: i32
+  count: i32
+  kind: i32
+}
+
+fn dots_frame(idx: i32) -> String {
+  if idx == 0 { ret String::from_str("\xe2\xa0\x8b") }
+  if idx == 1 { ret String::from_str("\xe2\xa0\x99") }
+  if idx == 2 { ret String::from_str("\xe2\xa0\xb9") }
+  if idx == 3 { ret String::from_str("\xe2\xa0\xb8") }
+  if idx == 4 { ret String::from_str("\xe2\xa0\xbc") }
+  if idx == 5 { ret String::from_str("\xe2\xa0\xb4") }
+  if idx == 6 { ret String::from_str("\xe2\xa0\xa6") }
+  if idx == 7 { ret String::from_str("\xe2\xa0\xa7") }
+  if idx == 8 { ret String::from_str("\xe2\xa0\x87") }
+  ret String::from_str("\xe2\xa0\x8f")
+}
+
+fn line_frame(idx: i32) -> String {
+  if idx == 0 { ret String::from_str("|") }
+  if idx == 1 { ret String::from_str("/") }
+  if idx == 2 { ret String::from_str("-") }
+  ret String::from_str("\\")
+}
+
+fn dots_spinner() -> Spinner {
+  ret Spinner {
+    interval_us: 80000,
+    current: 0,
+    count: 10,
+    kind: 0,
+  }
+}
+
+fn line_spinner() -> Spinner {
+  ret Spinner {
+    interval_us: 100000,
+    current: 0,
+    count: 4,
+    kind: 1,
+  }
+}
+
+fn spin_frame(s: &mut Spinner) -> String {
+  let idx = s.current
+  let frame = if s.kind == 0 {
+    dots_frame(idx)
+  } else {
+    line_frame(idx)
+  }
+  let next = idx + 1
+  if next >= s.count {
+    s.current = 0
+  } else {
+    s.current = next
+  }
+  ret frame
+}
+
+fn spin_tick(s: &mut Spinner, msg: str) -> i32 {
+  let frame = spin_frame(s)
+  let line = String::from_str("\r\x1b[2K\x1b[?25l") + frame + String::from_str(" ") + String::from_str(msg)
+  let out: str = line
+  let _p = print_str(out)
+  let _u = usleep(s.interval_us)
+  ret 0
+}
+
+fn spin_done(msg: str) -> i32 {
+  let line = String::from_str("\r\x1b[2K\x1b[?25h") + String::from_str(msg) + String::from_str("\n")
+  let out: str = line
+  let _p = print_str(out)
+  ret 0
+}

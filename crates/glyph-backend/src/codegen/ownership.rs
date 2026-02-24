@@ -43,6 +43,12 @@ impl CodegenContext {
                 let val_ty = args.get(1).cloned().unwrap_or(Type::I32);
                 self.codegen_drop_map(local, &key_ty, &val_ty, func, local_map)
             }
+            Type::Named(name) => {
+                let slot = local_map
+                    .get(&local)
+                    .ok_or_else(|| anyhow!("undefined local {:?}", local))?;
+                self.codegen_drop_named_slot(*slot, name)
+            }
             _ => Ok(()),
         }
     }
@@ -306,6 +312,84 @@ impl CodegenContext {
         Ok(())
     }
 
+    pub(super) fn codegen_drop_named_slot(
+        &mut self,
+        slot: LLVMValueRef,
+        name: &str,
+    ) -> Result<()> {
+        // Enum types are in enum_layouts, not struct_layouts.
+        // They need tag-based dispatch which is not yet implemented.
+        if self.enum_layouts.contains_key(name) {
+            return Ok(());
+        }
+
+        let layout = match self.struct_layouts.get(name) {
+            Some(l) => l.clone(),
+            None => return Ok(()),
+        };
+
+        // Detect Vec by name prefix (Vec$ and Map$ both have 3 fields
+        // with RawPtr first, so we can't distinguish by layout alone).
+        if name.starts_with("Vec$") {
+            if layout.fields.len() == 3 {
+                if let Type::RawPtr(ref elem_type) = layout.fields[0].1 {
+                    return self.codegen_drop_vec_from_ptr(slot, name, elem_type);
+                }
+            }
+        }
+
+        // Map types: drop is not yet implemented (codegen_drop_map is a
+        // no-op). Skip to avoid misidentifying as Vec.
+        if name.starts_with("Map$") {
+            return Ok(());
+        }
+
+        // Generic struct: iterate fields and recursively drop each
+        let llvm_struct = self.get_struct_type(name)?;
+        for (field_index, (_field_name, field_type)) in layout.fields.iter().enumerate() {
+            if !Self::field_type_has_drop_glue(field_type) {
+                continue;
+            }
+            let gep_name = CString::new(format!("{}.drop.field{}", name, field_index))?;
+            let field_ptr = unsafe {
+                LLVMBuildStructGEP2(
+                    self.builder,
+                    llvm_struct,
+                    slot,
+                    field_index as u32,
+                    gep_name.as_ptr(),
+                )
+            };
+            self.codegen_drop_elem_slot(field_ptr, field_type)?;
+        }
+        Ok(())
+    }
+
+    fn field_type_has_drop_glue(ty: &Type) -> bool {
+        matches!(
+            ty,
+            Type::Own(_) | Type::Shared(_) | Type::String | Type::Named(_) | Type::App { .. }
+        )
+    }
+
+    fn type_display_for_mono(ty: &Type) -> String {
+        match ty {
+            Type::String => "String".to_string(),
+            Type::I8 => "i8".to_string(),
+            Type::I32 => "i32".to_string(),
+            Type::I64 => "i64".to_string(),
+            Type::U8 => "u8".to_string(),
+            Type::U32 => "u32".to_string(),
+            Type::U64 => "u64".to_string(),
+            Type::Usize => "usize".to_string(),
+            Type::F32 => "f32".to_string(),
+            Type::F64 => "f64".to_string(),
+            Type::Bool => "bool".to_string(),
+            Type::Named(n) => n.clone(),
+            _ => format!("{:?}", ty),
+        }
+    }
+
     pub(super) fn codegen_drop_elem_slot(
         &mut self,
         slot: LLVMValueRef,
@@ -315,7 +399,12 @@ impl CodegenContext {
             Type::Own(inner) => self.codegen_drop_own_slot(slot, inner),
             Type::Shared(inner) => self.codegen_drop_shared_slot(slot, inner),
             Type::String => self.codegen_drop_string_slot(slot),
-            Type::Named(name) if name == "File" => self.codegen_drop_file_slot(slot),
+            Type::Named(name) => self.codegen_drop_named_slot(slot, name),
+            Type::App { base, args } if base == "Vec" => {
+                let elem = args.first().cloned().unwrap_or(Type::I32);
+                let vec_name = format!("Vec${}", Self::type_display_for_mono(&elem));
+                self.codegen_drop_vec_from_ptr(slot, &vec_name, &elem)
+            }
             _ => Ok(()),
         }
     }
