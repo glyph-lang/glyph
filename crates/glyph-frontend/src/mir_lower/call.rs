@@ -31,6 +31,19 @@ fn consume_call_local(ctx: &mut LowerCtx<'_>, value: &MirValue, span: Span) {
         return;
     }
     let _ = ctx.consume_local(*local, Some(span));
+    // consume_local tracks String/Own/Shared but not Named structs or
+    // App types (Vec/Map). At call sites these are passed by value
+    // (shallow copy), so the callee will drop its copy. Mark as Moved
+    // to prevent the caller from also dropping → double-free.
+    if matches!(ctx.local_states.get(local.0 as usize), Some(LocalState::Initialized)) {
+        if let Some(ty) = ctx.local_ty(*local) {
+            if matches!(ty, Type::Named(_) | Type::App { .. }) {
+                if let Some(state) = ctx.local_states.get_mut(local.0 as usize) {
+                    *state = LocalState::Moved;
+                }
+            }
+        }
+    }
 }
 
 pub(crate) fn lower_call<'a>(

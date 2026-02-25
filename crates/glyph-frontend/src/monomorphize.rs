@@ -942,6 +942,7 @@ mod tests {
                     args: vec![Type::I32],
                 }),
                 mutable: false,
+                skip_drop: false,
             }],
             blocks: vec![glyph_core::mir::MirBlock { insts: vec![] }],
         });
@@ -1006,6 +1007,7 @@ mod tests {
                     args: vec![Type::I32],
                 }),
                 mutable: false,
+                skip_drop: false,
             }],
             blocks: vec![glyph_core::mir::MirBlock { insts: vec![] }],
         });
@@ -1076,6 +1078,7 @@ mod tests {
                     args: vec![Type::I32, Type::String],
                 }),
                 mutable: false,
+                skip_drop: false,
             }],
             blocks: vec![glyph_core::mir::MirBlock { insts: vec![] }],
         });
@@ -1105,6 +1108,7 @@ mod tests {
                 name: Some("x".into()),
                 ty: Some(Type::Param("T".into())),
                 mutable: false,
+                skip_drop: false,
             }],
             blocks: vec![glyph_core::mir::MirBlock { insts: vec![] }],
         });

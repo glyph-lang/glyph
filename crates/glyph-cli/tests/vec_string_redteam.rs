@@ -301,7 +301,6 @@ fn struct_vec_field_returned_from_fn() {
 // Needs deep-copy at call sites or parameter drop suppression.
 #[cfg(all(feature = "codegen", unix))]
 #[test]
-#[ignore = "B5: struct passed by value double-frees droppable fields — needs deep-copy or param drop suppression"]
 fn struct_vec_field_passed_to_fn() {
     let source = r#"
         from std import String

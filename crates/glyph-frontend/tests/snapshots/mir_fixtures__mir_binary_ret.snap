@@ -16,6 +16,7 @@ MirModule {
                         I32,
                     ),
                     mutable: false,
+                    skip_drop: false,
                 },
             ],
             blocks: [

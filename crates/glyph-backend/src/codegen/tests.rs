@@ -81,11 +81,13 @@ fn codegens_struct_literal() {
                     name: Some("p".into()),
                     ty: Some(Type::Named("Point".into())),
                     mutable: false,
+                    skip_drop: false,
                 },
                 Local {
                     name: None,
                     ty: Some(Type::Named("Point".into())),
                     mutable: false,
+                    skip_drop: false,
                 },
             ],
             blocks: vec![MirBlock {
@@ -138,6 +140,7 @@ fn codegens_extern_declare_and_call() {
                 name: None,
                 ty: Some(Type::I32),
                 mutable: false,
+                skip_drop: false,
             }],
             blocks: vec![MirBlock {
                 insts: vec![
@@ -184,16 +187,19 @@ fn codegens_field_access() {
                     name: Some("p".into()),
                     ty: Some(Type::Named("Point".into())),
                     mutable: false,
+                    skip_drop: false,
                 },
                 Local {
                     name: None,
                     ty: Some(Type::Named("Point".into())),
                     mutable: false,
+                    skip_drop: false,
                 },
                 Local {
                     name: None,
                     ty: Some(Type::I32),
                     mutable: false,
+                    skip_drop: false,
                 },
             ],
             blocks: vec![MirBlock {
@@ -280,6 +286,7 @@ fn jit_resolves_extern_symbol_from_host() {
                 name: None,
                 ty: Some(Type::I32),
                 mutable: false,
+                skip_drop: false,
             }],
             blocks: vec![MirBlock {
                 insts: vec![
@@ -330,6 +337,7 @@ fn jit_extern_symbol_codegen_without_execution() {
                 name: None,
                 ty: Some(Type::I32),
                 mutable: false,
+                skip_drop: false,
             }],
             blocks: vec![MirBlock {
                 insts: vec![
@@ -385,6 +393,7 @@ fn jit_hello_world_with_putchar() {
                 name: None,
                 ty: Some(Type::I32),
                 mutable: false,
+                skip_drop: false,
             }],
             blocks: vec![MirBlock {
                 insts: vec![
@@ -439,11 +448,13 @@ fn jit_hello_world_with_puts_literal() {
                     name: None,
                     ty: Some(Type::Str),
                     mutable: false,
+                    skip_drop: false,
                 },
                 Local {
                     name: None,
                     ty: Some(Type::I32),
                     mutable: false,
+                    skip_drop: false,
                 },
             ],
             blocks: vec![MirBlock {

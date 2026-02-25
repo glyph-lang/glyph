@@ -24,6 +24,7 @@ MirModule {
                         I32,
                     ),
                     mutable: false,
+                    skip_drop: false,
                 },
                 Local {
                     name: None,
@@ -31,6 +32,7 @@ MirModule {
                         Bool,
                     ),
                     mutable: false,
+                    skip_drop: false,
                 },
                 Local {
                     name: None,
@@ -38,6 +40,7 @@ MirModule {
                         I32,
                     ),
                     mutable: false,
+                    skip_drop: false,
                 },
                 Local {
                     name: None,
@@ -45,6 +48,7 @@ MirModule {
                         I32,
                     ),
                     mutable: false,
+                    skip_drop: false,
                 },
                 Local {
                     name: None,
@@ -52,6 +56,7 @@ MirModule {
                         I32,
                     ),
                     mutable: false,
+                    skip_drop: false,
                 },
             ],
             blocks: [
@@ -183,6 +188,7 @@ MirModule {
                         I32,
                     ),
                     mutable: false,
+                    skip_drop: false,
                 },
             ],
             blocks: [

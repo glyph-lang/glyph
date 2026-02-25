@@ -82,6 +82,7 @@ pub(crate) fn lower_function(
         if let Some(state) = ctx.local_states.get_mut(argv_local.0 as usize) {
             *state = LocalState::Initialized;
         }
+        ctx.locals[argv_local.0 as usize].skip_drop = true;
         ctx.bindings.insert("argv", argv_local);
         ctx.push_inst(MirInst::Assign {
             local: argv_local,
@@ -882,6 +883,13 @@ pub(crate) fn lower_for_in<'a>(
         local: var_local,
         value: index_rvalue,
     });
+
+    // VecIndex marks the destination as Moved (to prevent double-free of
+    // shallow copies). But for-in semantically moves each element out of
+    // the collection, so the loop variable must be usable in the body.
+    if let Some(state) = ctx.local_states.get_mut(var_local.0 as usize) {
+        *state = LocalState::Initialized;
+    }
 
     // Lower body
     let _ = lower_block(ctx, body_block);

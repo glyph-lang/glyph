@@ -106,6 +106,15 @@ impl<'a> LowerCtx<'a> {
                             *state = LocalState::Moved;
                         }
                     }
+                    // Propagate skip_drop: if the source is a non-owning
+                    // alias (e.g. the injected argv local that is a shallow
+                    // copy of the global), any move destination must also
+                    // skip its drop to avoid freeing the global's memory.
+                    if self.locals.get(src.0 as usize).map_or(false, |l| l.skip_drop) {
+                        if let Some(dest) = self.locals.get_mut(local.0 as usize) {
+                            dest.skip_drop = true;
+                        }
+                    }
                 }
                 // Track ownership transfers for types with drop glue.
                 // Operations that consume values must mark the source as
@@ -144,6 +153,7 @@ impl<'a> LowerCtx<'a> {
             name: name.map(|s| s.to_string()),
             ty: None,
             mutable: false,
+            skip_drop: false,
         });
         self.local_states.push(LocalState::Uninitialized);
         if let Some(scope) = self.scope_stack.last_mut() {
@@ -182,6 +192,9 @@ impl<'a> LowerCtx<'a> {
     }
 
     pub(crate) fn handle_reassign(&mut self, local: LocalId) {
+        if self.locals.get(local.0 as usize).map_or(false, |l| l.skip_drop) {
+            return;
+        }
         let dominated = self
             .local_ty(local)
             .map(|ty| Self::type_has_drop_glue(ty))
@@ -210,6 +223,9 @@ impl<'a> LowerCtx<'a> {
     }
 
     pub(crate) fn drop_local_if_needed(&mut self, local: LocalId) {
+        if self.locals.get(local.0 as usize).map_or(false, |l| l.skip_drop) {
+            return;
+        }
         let dominated = self
             .local_ty(local)
             .map(|ty| Self::type_has_drop_glue(ty))

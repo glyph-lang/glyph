@@ -17,6 +17,8 @@ pub struct Local {
     pub name: Option<String>,
     pub ty: Option<Type>,
     pub mutable: bool,
+    #[serde(default)]
+    pub skip_drop: bool,
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Default)]

@@ -38,6 +38,7 @@ MirModule {
                         ),
                     ),
                     mutable: false,
+                    skip_drop: false,
                 },
                 Local {
                     name: None,
@@ -47,6 +48,7 @@ MirModule {
                         ),
                     ),
                     mutable: false,
+                    skip_drop: false,
                 },
                 Local {
                     name: None,
@@ -58,6 +60,7 @@ MirModule {
                         ),
                     ),
                     mutable: false,
+                    skip_drop: false,
                 },
             ],
             blocks: [
