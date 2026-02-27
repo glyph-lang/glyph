@@ -2941,14 +2941,347 @@ impl CodegenContext {
         Ok(vec_val)
     }
 
+    pub(super) fn map_key_value_types_from_map(
+        &self,
+        map_struct_name: &str,
+    ) -> Result<(Type, Type)> {
+        let bucket_name = self.map_bucket_name_from_map(map_struct_name)?;
+        let bucket_layout = self
+            .struct_layouts
+            .get(&bucket_name)
+            .ok_or_else(|| anyhow!("missing bucket layout for {}", bucket_name))?;
+        let key_type = bucket_layout
+            .fields
+            .first()
+            .map(|(_, ty)| ty.clone())
+            .ok_or_else(|| anyhow!("bucket layout missing key field: {}", bucket_name))?;
+        let value_type = bucket_layout
+            .fields
+            .get(1)
+            .map(|(_, ty)| ty.clone())
+            .ok_or_else(|| anyhow!("bucket layout missing value field: {}", bucket_name))?;
+        Ok((key_type, value_type))
+    }
+
+    pub(super) fn codegen_drop_map_from_ptr(
+        &mut self,
+        map_ptr: LLVMValueRef,
+        struct_name: &str,
+        key_type: &Type,
+        value_type: &Type,
+    ) -> Result<()> {
+        let guard_key = format!("map:{}", struct_name);
+        if !self.drop_in_progress.insert(guard_key.clone()) {
+            return Ok(());
+        }
+
+        let result = (|| {
+            self.ensure_map_bucket_type(key_type, value_type)?;
+
+            let (llvm_map_ty, usize_ty) = self
+                .get_map_layout(struct_name)
+                .ok_or_else(|| anyhow!("missing map layout for {}", struct_name))?;
+            let buckets_ptr = unsafe {
+                LLVMBuildStructGEP2(
+                    self.builder,
+                    llvm_map_ty,
+                    map_ptr,
+                    0,
+                    CString::new("map.drop.buckets")?.as_ptr(),
+                )
+            };
+            let cap_ptr = unsafe {
+                LLVMBuildStructGEP2(
+                    self.builder,
+                    llvm_map_ty,
+                    map_ptr,
+                    1,
+                    CString::new("map.drop.cap")?.as_ptr(),
+                )
+            };
+            let len_ptr = unsafe {
+                LLVMBuildStructGEP2(
+                    self.builder,
+                    llvm_map_ty,
+                    map_ptr,
+                    2,
+                    CString::new("map.drop.len")?.as_ptr(),
+                )
+            };
+            let cap_val = unsafe {
+                LLVMBuildLoad2(
+                    self.builder,
+                    usize_ty,
+                    cap_ptr,
+                    CString::new("map.drop.cap.load")?.as_ptr(),
+                )
+            };
+            let zero = unsafe { LLVMConstInt(usize_ty, 0, 0) };
+            let has_buckets = unsafe {
+                LLVMBuildICmp(
+                    self.builder,
+                    llvm_sys::LLVMIntPredicate::LLVMIntUGT,
+                    cap_val,
+                    zero,
+                    CString::new("map.drop.has_buckets")?.as_ptr(),
+                )
+            };
+
+            let parent_bb = unsafe { LLVMGetInsertBlock(self.builder) };
+            if parent_bb.is_null() {
+                bail!("builder not positioned in block for map drop");
+            }
+            let parent_fn = unsafe { LLVMGetBasicBlockParent(parent_bb) };
+            if parent_fn.is_null() {
+                bail!("map drop parent function missing");
+            }
+            let drop_bb = unsafe {
+                LLVMAppendBasicBlockInContext(
+                    self.context,
+                    parent_fn,
+                    CString::new("map.drop.body")?.as_ptr(),
+                )
+            };
+            let done_bb = unsafe {
+                LLVMAppendBasicBlockInContext(
+                    self.context,
+                    parent_fn,
+                    CString::new("map.drop.done")?.as_ptr(),
+                )
+            };
+            unsafe { LLVMBuildCondBr(self.builder, has_buckets, drop_bb, done_bb) };
+
+            unsafe { LLVMPositionBuilderAtEnd(self.builder, drop_bb) };
+            let bucket_name = self.map_bucket_name_from_map(struct_name)?;
+            let bucket_head_ty = Type::RawPtr(Box::new(Type::Named(bucket_name.clone())));
+            let bucket_head_llvm_ty = self.get_llvm_type(&bucket_head_ty)?;
+            let bucket_array_ty = Type::RawPtr(Box::new(bucket_head_ty.clone()));
+            let bucket_array_llvm_ty = self.get_llvm_type(&bucket_array_ty)?;
+            let bucket_array = unsafe {
+                LLVMBuildLoad2(
+                    self.builder,
+                    bucket_array_llvm_ty,
+                    buckets_ptr,
+                    CString::new("map.drop.buckets.load")?.as_ptr(),
+                )
+            };
+
+            let idx_slot = unsafe {
+                LLVMBuildAlloca(
+                    self.builder,
+                    usize_ty,
+                    CString::new("map.drop.idx")?.as_ptr(),
+                )
+            };
+            unsafe { LLVMBuildStore(self.builder, zero, idx_slot) };
+
+            let current_slot = unsafe {
+                LLVMBuildAlloca(
+                    self.builder,
+                    bucket_head_llvm_ty,
+                    CString::new("map.drop.curr")?.as_ptr(),
+                )
+            };
+            unsafe {
+                LLVMBuildStore(
+                    self.builder,
+                    LLVMConstNull(bucket_head_llvm_ty),
+                    current_slot,
+                )
+            };
+
+            let outer_check_bb = unsafe {
+                LLVMAppendBasicBlockInContext(
+                    self.context,
+                    parent_fn,
+                    CString::new("map.drop.outer.check")?.as_ptr(),
+                )
+            };
+            let outer_body_bb = unsafe {
+                LLVMAppendBasicBlockInContext(
+                    self.context,
+                    parent_fn,
+                    CString::new("map.drop.outer.body")?.as_ptr(),
+                )
+            };
+            let outer_done_bb = unsafe {
+                LLVMAppendBasicBlockInContext(
+                    self.context,
+                    parent_fn,
+                    CString::new("map.drop.outer.done")?.as_ptr(),
+                )
+            };
+            let inner_check_bb = unsafe {
+                LLVMAppendBasicBlockInContext(
+                    self.context,
+                    parent_fn,
+                    CString::new("map.drop.inner.check")?.as_ptr(),
+                )
+            };
+            let inner_body_bb = unsafe {
+                LLVMAppendBasicBlockInContext(
+                    self.context,
+                    parent_fn,
+                    CString::new("map.drop.inner.body")?.as_ptr(),
+                )
+            };
+            let inner_done_bb = unsafe {
+                LLVMAppendBasicBlockInContext(
+                    self.context,
+                    parent_fn,
+                    CString::new("map.drop.inner.done")?.as_ptr(),
+                )
+            };
+
+            unsafe { LLVMBuildBr(self.builder, outer_check_bb) };
+
+            unsafe { LLVMPositionBuilderAtEnd(self.builder, outer_check_bb) };
+            let idx_val = unsafe {
+                LLVMBuildLoad2(
+                    self.builder,
+                    usize_ty,
+                    idx_slot,
+                    CString::new("map.drop.idx.load")?.as_ptr(),
+                )
+            };
+            let idx_in_bounds = unsafe {
+                LLVMBuildICmp(
+                    self.builder,
+                    llvm_sys::LLVMIntPredicate::LLVMIntULT,
+                    idx_val,
+                    cap_val,
+                    CString::new("map.drop.idx.lt")?.as_ptr(),
+                )
+            };
+            unsafe { LLVMBuildCondBr(self.builder, idx_in_bounds, outer_body_bb, outer_done_bb) };
+
+            unsafe { LLVMPositionBuilderAtEnd(self.builder, outer_body_bb) };
+            let bucket_slot_ptr = unsafe {
+                LLVMBuildGEP2(
+                    self.builder,
+                    bucket_head_llvm_ty,
+                    bucket_array,
+                    vec![idx_val].as_mut_ptr(),
+                    1,
+                    CString::new("map.drop.bucket.slot")?.as_ptr(),
+                )
+            };
+            let head_val = unsafe {
+                LLVMBuildLoad2(
+                    self.builder,
+                    bucket_head_llvm_ty,
+                    bucket_slot_ptr,
+                    CString::new("map.drop.bucket.head")?.as_ptr(),
+                )
+            };
+            unsafe { LLVMBuildStore(self.builder, head_val, current_slot) };
+            unsafe { LLVMBuildBr(self.builder, inner_check_bb) };
+
+            unsafe { LLVMPositionBuilderAtEnd(self.builder, inner_check_bb) };
+            let current_val = unsafe {
+                LLVMBuildLoad2(
+                    self.builder,
+                    bucket_head_llvm_ty,
+                    current_slot,
+                    CString::new("map.drop.curr.load")?.as_ptr(),
+                )
+            };
+            let is_null = unsafe {
+                LLVMBuildICmp(
+                    self.builder,
+                    llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                    current_val,
+                    LLVMConstNull(bucket_head_llvm_ty),
+                    CString::new("map.drop.curr.null")?.as_ptr(),
+                )
+            };
+            unsafe { LLVMBuildCondBr(self.builder, is_null, inner_done_bb, inner_body_bb) };
+
+            unsafe { LLVMPositionBuilderAtEnd(self.builder, inner_body_bb) };
+            let llvm_bucket_ty = self.get_struct_type(&bucket_name)?;
+            let key_ptr = unsafe {
+                LLVMBuildStructGEP2(
+                    self.builder,
+                    llvm_bucket_ty,
+                    current_val,
+                    0,
+                    CString::new("map.drop.key")?.as_ptr(),
+                )
+            };
+            let value_ptr = unsafe {
+                LLVMBuildStructGEP2(
+                    self.builder,
+                    llvm_bucket_ty,
+                    current_val,
+                    1,
+                    CString::new("map.drop.value")?.as_ptr(),
+                )
+            };
+            let next_ptr = unsafe {
+                LLVMBuildStructGEP2(
+                    self.builder,
+                    llvm_bucket_ty,
+                    current_val,
+                    2,
+                    CString::new("map.drop.next")?.as_ptr(),
+                )
+            };
+            let next_val = unsafe {
+                LLVMBuildLoad2(
+                    self.builder,
+                    bucket_head_llvm_ty,
+                    next_ptr,
+                    CString::new("map.drop.next.load")?.as_ptr(),
+                )
+            };
+            self.codegen_drop_elem_slot(key_ptr, key_type)?;
+            self.codegen_drop_elem_slot(value_ptr, value_type)?;
+            self.codegen_free(current_val)?;
+            unsafe { LLVMBuildStore(self.builder, next_val, current_slot) };
+            unsafe { LLVMBuildBr(self.builder, inner_check_bb) };
+
+            unsafe { LLVMPositionBuilderAtEnd(self.builder, inner_done_bb) };
+            let next_idx = unsafe {
+                LLVMBuildAdd(
+                    self.builder,
+                    idx_val,
+                    LLVMConstInt(usize_ty, 1, 0),
+                    CString::new("map.drop.idx.next")?.as_ptr(),
+                )
+            };
+            unsafe { LLVMBuildStore(self.builder, next_idx, idx_slot) };
+            unsafe { LLVMBuildBr(self.builder, outer_check_bb) };
+
+            unsafe { LLVMPositionBuilderAtEnd(self.builder, outer_done_bb) };
+            self.codegen_free(bucket_array)?;
+            unsafe {
+                LLVMBuildStore(
+                    self.builder,
+                    LLVMConstNull(bucket_array_llvm_ty),
+                    buckets_ptr,
+                )
+            };
+            unsafe { LLVMBuildStore(self.builder, zero, cap_ptr) };
+            unsafe { LLVMBuildStore(self.builder, zero, len_ptr) };
+            unsafe { LLVMBuildBr(self.builder, done_bb) };
+
+            unsafe { LLVMPositionBuilderAtEnd(self.builder, done_bb) };
+            Ok(())
+        })();
+
+        self.drop_in_progress.remove(&guard_key);
+        result
+    }
+
     pub(super) fn codegen_drop_map(
         &mut self,
-        _map: LocalId,
-        _key_type: &Type,
-        _value_type: &Type,
-        _func: &MirFunction,
-        _local_map: &HashMap<LocalId, LLVMValueRef>,
+        map: LocalId,
+        key_type: &Type,
+        value_type: &Type,
+        func: &MirFunction,
+        local_map: &HashMap<LocalId, LLVMValueRef>,
     ) -> Result<()> {
-        Ok(())
+        let (struct_name, map_ptr) = self.struct_pointer_for_local(map, func, local_map)?;
+        self.codegen_drop_map_from_ptr(map_ptr, &struct_name, key_type, value_type)
     }
 }

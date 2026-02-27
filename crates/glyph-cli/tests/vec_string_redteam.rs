@@ -113,7 +113,6 @@ fn vec_string_push_index_basic() {
 // pushes that trigger growth leave the local pointing at a stale buffer.
 #[cfg(all(feature = "codegen", unix))]
 #[test]
-#[ignore = "B4: Vec<String> growth corrupts element access — push returns stale snapshot"]
 fn vec_string_growth_stress() {
     let source = r#"
         from std import String
@@ -361,7 +360,6 @@ fn vec_of_struct_with_string() {
 // Same B4 growth corruption as T7 — after multiple pushes, Vec elements are stale.
 #[cfg(all(feature = "codegen", unix))]
 #[test]
-#[ignore = "B4: Vec<String> growth corruption — same as T7"]
 fn multiple_vec_string_independent() {
     let source = r#"
         from std import String

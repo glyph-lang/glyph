@@ -1,0 +1,7 @@
+from std/map import Map
+
+fn main() -> i32 {
+  let m: Map<String, String> = Map::new()
+  let _ = m.add(String::from_str("key"), String::from_str("value"))
+  ret 0
+}

@@ -116,3 +116,40 @@ fn ir_field_access_is_load() {
         ir
     );
 }
+
+// T6: Enum payload drop dispatch should be emitted when enum locals go out of scope.
+#[test]
+fn ir_enum_string_drop_dispatches() {
+    let ir = compile_ir("enum_string_drop.glyph");
+    assert!(
+        ir.contains("enum.drop.variant"),
+        "IR missing enum variant drop dispatch: {}",
+        ir
+    );
+    assert!(
+        ir.contains("string.drop"),
+        "IR missing string.drop in enum payload drop path: {}",
+        ir
+    );
+}
+
+// T7: Map<String, String> drop should walk buckets and drop keys/values.
+#[test]
+fn ir_map_string_drop_emits_drop_path() {
+    let ir = compile_ir("map_string_drop.glyph");
+    assert!(
+        ir.contains("map.drop.body"),
+        "IR missing map.drop.body for Map drop glue: {}",
+        ir
+    );
+    assert!(
+        ir.contains("map.drop.inner.body"),
+        "IR missing map bucket traversal drop loop: {}",
+        ir
+    );
+    assert!(
+        ir.contains("string.drop"),
+        "IR missing string.drop for map key/value elements: {}",
+        ir
+    );
+}

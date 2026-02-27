@@ -183,7 +183,8 @@ pub(crate) fn lower_block_with_expected<'a>(
                 ctx.push_inst(MirInst::Return(value));
             }
             Stmt::Break(span) => {
-                if let Some(loop_ctx) = ctx.current_loop() {
+                if let Some(loop_ctx) = ctx.current_loop().cloned() {
+                    ctx.drop_scopes_after_depth(loop_ctx.scope_depth);
                     let exit = loop_ctx.exit;
                     ctx.push_inst(MirInst::Goto(exit));
                 } else {
@@ -192,7 +193,8 @@ pub(crate) fn lower_block_with_expected<'a>(
                 }
             }
             Stmt::Continue(span) => {
-                if let Some(loop_ctx) = ctx.current_loop() {
+                if let Some(loop_ctx) = ctx.current_loop().cloned() {
+                    ctx.drop_scopes_after_depth(loop_ctx.scope_depth);
                     let header = loop_ctx.header;
                     ctx.push_inst(MirInst::Goto(header));
                 } else {
@@ -666,7 +668,8 @@ pub(crate) fn lower_for<'a>(
     ctx.switch_to(header_block);
     let var_val = MirValue::Local(var_local);
     let var_type = ctx.locals[var_local.0 as usize].ty.clone();
-    let end_val = lower_value_with_expected(ctx, end, var_type.as_ref()).unwrap_or(MirValue::Int(0));
+    let end_val =
+        lower_value_with_expected(ctx, end, var_type.as_ref()).unwrap_or(MirValue::Int(0));
     let cond_temp = ctx.fresh_local(None);
     ctx.locals[cond_temp.0 as usize].ty = Some(Type::Bool);
     ctx.push_inst(MirInst::Assign {
@@ -775,7 +778,10 @@ pub(crate) fn lower_for_in<'a>(
             tmp
         }
         None => {
-            ctx.error("could not lower collection expression in for-in loop", expr_span(iter_expr));
+            ctx.error(
+                "could not lower collection expression in for-in loop",
+                expr_span(iter_expr),
+            );
             return;
         }
     };

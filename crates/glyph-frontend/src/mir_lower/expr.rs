@@ -7,7 +7,9 @@ use crate::resolver::{ConstValue, ResolvedSymbol};
 
 use super::call::{lower_call, lower_method_call};
 use super::context::{LocalState, LowerCtx};
-use super::flow::{lower_block_with_expected, lower_for, lower_for_in, lower_if_value, lower_while};
+use super::flow::{
+    lower_block_with_expected, lower_for, lower_for_in, lower_if_value, lower_while,
+};
 use super::types::{tuple_struct_name, vec_elem_type_from_type};
 use super::value::{
     bool_rvalue, coerce_to_bool, infer_numeric_result_type, infer_value_type, local_struct_name,
@@ -376,7 +378,11 @@ fn lower_binary<'a>(
     let lhs_val = lower_value(ctx, lhs)?;
     let lhs_ty = infer_value_type(&lhs_val, ctx);
     let rhs_expected = if let Some(ty) = &lhs_ty {
-        if ty.is_int() { Some(ty.clone()) } else { None }
+        if ty.is_int() {
+            Some(ty.clone())
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -551,6 +557,10 @@ pub(crate) fn lower_match<'a>(
             tmp
         }
     };
+    // `match` consumes its scrutinee by value in this lowering model.
+    if let Some(state) = ctx.local_states.get_mut(scrut_local.0 as usize) {
+        *state = LocalState::Moved;
+    }
 
     let (enum_name, enum_args) = match ctx.locals[scrut_local.0 as usize].ty.clone() {
         Some(Type::Enum(name)) => (name, None),
@@ -833,11 +843,7 @@ pub(crate) fn lower_match<'a>(
 //   match expr { Ok(v) => v, Err(e) => ret Err(e) }
 //
 // The enclosing function must return Result<_, E> for the early return to be valid.
-fn lower_try<'a>(
-    ctx: &mut LowerCtx<'a>,
-    inner_expr: &'a Expr,
-    span: Span,
-) -> Option<Rvalue> {
+fn lower_try<'a>(ctx: &mut LowerCtx<'a>, inner_expr: &'a Expr, span: Span) -> Option<Rvalue> {
     // 1. Lower the inner expression
     let scrut_val = lower_value(ctx, inner_expr)?;
     let scrut_local = match scrut_val {
@@ -852,6 +858,10 @@ fn lower_try<'a>(
             tmp
         }
     };
+    // `?` is lowered as a by-value match and consumes the scrutinee.
+    if let Some(state) = ctx.local_states.get_mut(scrut_local.0 as usize) {
+        *state = LocalState::Moved;
+    }
 
     // 2. Check that the scrutinee is a Result or Option type
     let scrut_ty = ctx.locals[scrut_local.0 as usize].ty.clone();
@@ -913,15 +923,21 @@ fn lower_try<'a>(
         // Result<T, E>: Ok is index 0, Err is index 1
         ok_variant_index = 0;
         err_variant_index = 1;
-        ok_payload_ty = enum_args.as_ref().and_then(|a| a.get(0).cloned())
+        ok_payload_ty = enum_args
+            .as_ref()
+            .and_then(|a| a.get(0).cloned())
             .or_else(|| enum_def.variants.get(0).and_then(|v| v.payload.clone()));
-        err_payload_ty = enum_args.as_ref().and_then(|a| a.get(1).cloned())
+        err_payload_ty = enum_args
+            .as_ref()
+            .and_then(|a| a.get(1).cloned())
             .or_else(|| enum_def.variants.get(1).and_then(|v| v.payload.clone()));
     } else {
         // Option<T>: Some is index 0, None is index 1
         ok_variant_index = 0;
         err_variant_index = 1;
-        ok_payload_ty = enum_args.as_ref().and_then(|a| a.get(0).cloned())
+        ok_payload_ty = enum_args
+            .as_ref()
+            .and_then(|a| a.get(0).cloned())
             .or_else(|| enum_def.variants.get(0).and_then(|v| v.payload.clone()));
         err_payload_ty = None;
     }
@@ -1661,9 +1677,7 @@ pub(crate) fn lower_value_with_expected<'a>(
         Expr::Tuple { elements, span } => {
             lower_tuple_expr(ctx, elements, *span).and_then(rvalue_to_value)
         }
-        Expr::Try { expr, span } => {
-            lower_try(ctx, expr, *span).and_then(rvalue_to_value)
-        }
+        Expr::Try { expr, span } => lower_try(ctx, expr, *span).and_then(rvalue_to_value),
         _ => None,
     }
 }

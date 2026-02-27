@@ -474,7 +474,6 @@ fn map_string_keys_loop_stress() {
 // ---------------------------------------------------------------------------
 #[cfg(all(feature = "codegen", unix))]
 #[test]
-#[ignore = "B4: Vec push returns stale snapshot after reallocation — access after growth crashes"]
 fn vec_push_result_after_growth() {
     let source = r#"
         fn main() -> i32 {

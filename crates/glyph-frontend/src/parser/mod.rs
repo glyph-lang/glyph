@@ -557,17 +557,13 @@ fn main() {
         }
     }
 
-    // TODO: This test hangs - likely infinite loop in parser when combining
-    // if expressions with function calls. Need to debug parser state machine.
-    // Not struct-related, deferred to future work.
+    // Regression test for parsing a function call followed by an `if` expression
+    // return in the same block. This previously hung in parser state recovery.
     #[test]
-    #[ignore]
     fn parses_if_and_call() {
         let source = "fn f() { let x = foo(1, 2) ret if x { x } else { 0 } }";
         let tokens = lex_stub_tokens();
-        println!("starting parse_if_and_call");
         let out = parse(&tokens, source);
-        println!("after parse; diags: {}", out.diagnostics.len());
         assert!(out.diagnostics.is_empty());
         assert_debug_snapshot!("if_call", out.module);
     }

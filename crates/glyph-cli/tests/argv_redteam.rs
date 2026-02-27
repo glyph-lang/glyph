@@ -214,7 +214,6 @@ fn argv_get_clone_multiple() {
 // ---------------------------------------------------------------------------
 #[cfg(all(feature = "codegen", unix))]
 #[test]
-#[ignore = "argv double-free: direct index produces str ref that gets freed as owned String"]
 fn argv_direct_index_str_ref() {
     let source = r#"
         from std/sys import argv
@@ -236,7 +235,6 @@ fn argv_direct_index_str_ref() {
 // ---------------------------------------------------------------------------
 #[cfg(all(feature = "codegen", unix))]
 #[test]
-#[ignore = "argv double-free: direct index String move causes double-free on cleanup"]
 fn argv_direct_index_string_move() {
     let source = r#"
         from std/sys import argv
@@ -297,7 +295,6 @@ fn argv_loop_get() {
 // ---------------------------------------------------------------------------
 #[cfg(all(feature = "codegen", unix))]
 #[test]
-#[ignore = "argv double-free: loop with direct index causes double-free on cleanup"]
 fn argv_loop_direct_index() {
     let source = r#"
         from std/sys import argv
@@ -318,10 +315,7 @@ fn argv_loop_direct_index() {
         }
     "#;
 
-    assert_eq!(
-        build_and_run_with_args(source, &["hello", "world"]),
-        0
-    );
+    assert_eq!(build_and_run_with_args(source, &["hello", "world"]), 0);
 }
 
 // ---------------------------------------------------------------------------

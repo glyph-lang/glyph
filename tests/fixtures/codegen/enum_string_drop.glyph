@@ -1,0 +1,9 @@
+enum MaybeText {
+  Some(String)
+  None
+}
+
+fn main() -> i32 {
+  let v = Some(String::from_str("hello"))
+  ret 0
+}

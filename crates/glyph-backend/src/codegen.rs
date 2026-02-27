@@ -33,6 +33,7 @@ pub struct CodegenContext {
     argv_global: Option<LLVMValueRef>,
     argc_global: Option<LLVMValueRef>,
     argv_vec_global: Option<LLVMValueRef>,
+    drop_in_progress: std::collections::HashSet<String>,
 }
 
 mod aggregate;

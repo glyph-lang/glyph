@@ -14,6 +14,9 @@ use super::signatures::FnSig;
 pub(crate) struct LoopContext {
     pub(crate) header: BlockId, // for continue
     pub(crate) exit: BlockId,   // for break
+    // Scope stack depth when entering the loop body.
+    // Locals in deeper scopes must be dropped on break/continue.
+    pub(crate) scope_depth: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,8 +104,7 @@ impl<'a> LowerCtx<'a> {
                         *state = LocalState::Moved;
                     }
                     if src_was_moved && !self.local_needs_drop(*src) {
-                        if let Some(state) = self.local_states.get_mut(local.0 as usize)
-                        {
+                        if let Some(state) = self.local_states.get_mut(local.0 as usize) {
                             *state = LocalState::Moved;
                         }
                     }
@@ -110,7 +112,11 @@ impl<'a> LowerCtx<'a> {
                     // alias (e.g. the injected argv local that is a shallow
                     // copy of the global), any move destination must also
                     // skip its drop to avoid freeing the global's memory.
-                    if self.locals.get(src.0 as usize).map_or(false, |l| l.skip_drop) {
+                    if self
+                        .locals
+                        .get(src.0 as usize)
+                        .map_or(false, |l| l.skip_drop)
+                    {
                         if let Some(dest) = self.locals.get_mut(local.0 as usize) {
                             dest.skip_drop = true;
                         }
@@ -180,7 +186,11 @@ impl<'a> LowerCtx<'a> {
     }
 
     pub(crate) fn enter_loop(&mut self, header: BlockId, exit: BlockId) {
-        self.loop_stack.push(LoopContext { header, exit });
+        self.loop_stack.push(LoopContext {
+            header,
+            exit,
+            scope_depth: self.scope_stack.len(),
+        });
     }
 
     pub(crate) fn exit_loop(&mut self) {
@@ -191,8 +201,24 @@ impl<'a> LowerCtx<'a> {
         self.loop_stack.last()
     }
 
+    pub(crate) fn drop_scopes_after_depth(&mut self, depth: usize) {
+        if self.scope_stack.len() <= depth {
+            return;
+        }
+        let scopes = self.scope_stack.clone();
+        for scope in scopes.iter().skip(depth).rev() {
+            for &local in scope.iter().rev() {
+                self.drop_local_if_needed(local);
+            }
+        }
+    }
+
     pub(crate) fn handle_reassign(&mut self, local: LocalId) {
-        if self.locals.get(local.0 as usize).map_or(false, |l| l.skip_drop) {
+        if self
+            .locals
+            .get(local.0 as usize)
+            .map_or(false, |l| l.skip_drop)
+        {
             return;
         }
         let dominated = self
@@ -223,7 +249,11 @@ impl<'a> LowerCtx<'a> {
     }
 
     pub(crate) fn drop_local_if_needed(&mut self, local: LocalId) {
-        if self.locals.get(local.0 as usize).map_or(false, |l| l.skip_drop) {
+        if self
+            .locals
+            .get(local.0 as usize)
+            .map_or(false, |l| l.skip_drop)
+        {
             return;
         }
         let dominated = self
@@ -281,13 +311,18 @@ impl<'a> LowerCtx<'a> {
 
     pub(crate) fn local_needs_drop(&self, local: LocalId) -> bool {
         self.local_ty(local)
-            .map(|ty| matches!(ty, Type::Own(_) | Type::Shared(_) | Type::String))
+            .map(|ty| {
+                matches!(
+                    ty,
+                    Type::Own(_) | Type::Shared(_) | Type::String | Type::Enum(_)
+                )
+            })
             .unwrap_or(false)
     }
 
     fn type_has_drop_glue(ty: &Type) -> bool {
         match ty {
-            Type::Own(_) | Type::Shared(_) | Type::String => true,
+            Type::Own(_) | Type::Shared(_) | Type::String | Type::Enum(_) => true,
             Type::App { base, .. } => base == "Vec" || base == "Map",
             Type::Named(_) => true,
             _ => false,
@@ -351,7 +386,10 @@ impl<'a> LowerCtx<'a> {
             // For droppable types, the copy aliases the struct's field.
             Rvalue::FieldAccess { .. } => {
                 let dest_ty = self.local_ty(dest);
-                if dest_ty.map(|ty| Self::type_has_drop_glue(ty)).unwrap_or(false) {
+                if dest_ty
+                    .map(|ty| Self::type_has_drop_glue(ty))
+                    .unwrap_or(false)
+                {
                     if let Some(state) = self.local_states.get_mut(dest.0 as usize) {
                         *state = LocalState::Moved;
                     }

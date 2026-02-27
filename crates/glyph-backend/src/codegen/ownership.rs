@@ -49,6 +49,12 @@ impl CodegenContext {
                     .ok_or_else(|| anyhow!("undefined local {:?}", local))?;
                 self.codegen_drop_named_slot(*slot, name)
             }
+            Type::Enum(name) => {
+                let slot = local_map
+                    .get(&local)
+                    .ok_or_else(|| anyhow!("undefined local {:?}", local))?;
+                self.codegen_drop_enum_slot(*slot, name)
+            }
             _ => Ok(()),
         }
     }
@@ -312,15 +318,9 @@ impl CodegenContext {
         Ok(())
     }
 
-    pub(super) fn codegen_drop_named_slot(
-        &mut self,
-        slot: LLVMValueRef,
-        name: &str,
-    ) -> Result<()> {
-        // Enum types are in enum_layouts, not struct_layouts.
-        // They need tag-based dispatch which is not yet implemented.
+    pub(super) fn codegen_drop_named_slot(&mut self, slot: LLVMValueRef, name: &str) -> Result<()> {
         if self.enum_layouts.contains_key(name) {
-            return Ok(());
+            return self.codegen_drop_enum_slot(slot, name);
         }
 
         let layout = match self.struct_layouts.get(name) {
@@ -338,10 +338,9 @@ impl CodegenContext {
             }
         }
 
-        // Map types: drop is not yet implemented (codegen_drop_map is a
-        // no-op). Skip to avoid misidentifying as Vec.
         if name.starts_with("Map$") {
-            return Ok(());
+            let (key_type, value_type) = self.map_key_value_types_from_map(name)?;
+            return self.codegen_drop_map_from_ptr(slot, name, &key_type, &value_type);
         }
 
         // Generic struct: iterate fields and recursively drop each
@@ -368,7 +367,12 @@ impl CodegenContext {
     fn field_type_has_drop_glue(ty: &Type) -> bool {
         matches!(
             ty,
-            Type::Own(_) | Type::Shared(_) | Type::String | Type::Named(_) | Type::App { .. }
+            Type::Own(_)
+                | Type::Shared(_)
+                | Type::String
+                | Type::Named(_)
+                | Type::Enum(_)
+                | Type::App { .. }
         )
     }
 
@@ -400,13 +404,160 @@ impl CodegenContext {
             Type::Shared(inner) => self.codegen_drop_shared_slot(slot, inner),
             Type::String => self.codegen_drop_string_slot(slot),
             Type::Named(name) => self.codegen_drop_named_slot(slot, name),
+            Type::Enum(name) => self.codegen_drop_enum_slot(slot, name),
             Type::App { base, args } if base == "Vec" => {
                 let elem = args.first().cloned().unwrap_or(Type::I32);
                 let vec_name = format!("Vec${}", Self::type_display_for_mono(&elem));
                 self.codegen_drop_vec_from_ptr(slot, &vec_name, &elem)
             }
+            Type::App { base, args } if base == "Map" => {
+                let key_type = args.first().cloned().unwrap_or(Type::I32);
+                let value_type = args.get(1).cloned().unwrap_or(Type::I32);
+                let map_name = format!(
+                    "Map${}__{}",
+                    self.type_key(&key_type),
+                    self.type_key(&value_type)
+                );
+                self.codegen_drop_map_from_ptr(slot, &map_name, &key_type, &value_type)
+            }
             _ => Ok(()),
         }
+    }
+
+    pub(super) fn codegen_drop_enum_slot(
+        &mut self,
+        slot: LLVMValueRef,
+        enum_name: &str,
+    ) -> Result<()> {
+        let guard_key = format!("enum:{}", enum_name);
+        if !self.drop_in_progress.insert(guard_key.clone()) {
+            return Ok(());
+        }
+        let result = (|| {
+            let layout = match self.enum_layouts.get(enum_name) {
+                Some(layout) => layout.clone(),
+                None => return Ok(()),
+            };
+
+            let droppable_variants: Vec<(u32, Type)> = layout
+                .variants
+                .iter()
+                .enumerate()
+                .filter_map(|(index, variant)| {
+                    let payload = variant.payload.clone()?;
+                    if Self::field_type_has_drop_glue(&payload) {
+                        Some((index as u32, payload))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if droppable_variants.is_empty() {
+                return Ok(());
+            }
+
+            let llvm_enum = self.get_enum_type(enum_name)?;
+            let tag_ptr = unsafe {
+                LLVMBuildStructGEP2(
+                    self.builder,
+                    llvm_enum,
+                    slot,
+                    0,
+                    CString::new("enum.drop.tag")?.as_ptr(),
+                )
+            };
+            let tag_val = unsafe {
+                LLVMBuildLoad2(
+                    self.builder,
+                    LLVMInt32TypeInContext(self.context),
+                    tag_ptr,
+                    CString::new("enum.drop.tag.load")?.as_ptr(),
+                )
+            };
+
+            let current_bb = unsafe { LLVMGetInsertBlock(self.builder) };
+            if current_bb.is_null() {
+                bail!("builder not positioned in a block for enum drop");
+            }
+            let parent_fn = unsafe { LLVMGetBasicBlockParent(current_bb) };
+            if parent_fn.is_null() {
+                bail!("enum drop parent function missing");
+            }
+
+            let mut check_bbs = Vec::new();
+            let mut drop_bbs = Vec::new();
+            for (variant_index, _) in &droppable_variants {
+                check_bbs.push(unsafe {
+                    LLVMAppendBasicBlockInContext(
+                        self.context,
+                        parent_fn,
+                        CString::new(format!("enum.drop.check.{}", variant_index))?.as_ptr(),
+                    )
+                });
+                drop_bbs.push(unsafe {
+                    LLVMAppendBasicBlockInContext(
+                        self.context,
+                        parent_fn,
+                        CString::new(format!("enum.drop.variant.{}", variant_index))?.as_ptr(),
+                    )
+                });
+            }
+            let done_bb = unsafe {
+                LLVMAppendBasicBlockInContext(
+                    self.context,
+                    parent_fn,
+                    CString::new("enum.drop.done")?.as_ptr(),
+                )
+            };
+
+            unsafe { LLVMBuildBr(self.builder, check_bbs[0]) };
+
+            for (i, ((variant_index, payload_type), (&check_bb, &drop_bb))) in droppable_variants
+                .iter()
+                .zip(check_bbs.iter().zip(drop_bbs.iter()))
+                .enumerate()
+            {
+                unsafe { LLVMPositionBuilderAtEnd(self.builder, check_bb) };
+                let cmp = unsafe {
+                    LLVMBuildICmp(
+                        self.builder,
+                        llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                        tag_val,
+                        LLVMConstInt(
+                            LLVMInt32TypeInContext(self.context),
+                            *variant_index as u64,
+                            0,
+                        ),
+                        CString::new(format!("enum.drop.is.{}", variant_index))?.as_ptr(),
+                    )
+                };
+                let next_bb = if i + 1 < check_bbs.len() {
+                    check_bbs[i + 1]
+                } else {
+                    done_bb
+                };
+                unsafe { LLVMBuildCondBr(self.builder, cmp, drop_bb, next_bb) };
+
+                unsafe { LLVMPositionBuilderAtEnd(self.builder, drop_bb) };
+                let payload_ptr = unsafe {
+                    LLVMBuildStructGEP2(
+                        self.builder,
+                        llvm_enum,
+                        slot,
+                        1 + *variant_index,
+                        CString::new(format!("enum.drop.payload.{}", variant_index))?.as_ptr(),
+                    )
+                };
+                self.codegen_drop_elem_slot(payload_ptr, payload_type)?;
+                unsafe { LLVMBuildBr(self.builder, done_bb) };
+            }
+
+            unsafe { LLVMPositionBuilderAtEnd(self.builder, done_bb) };
+            Ok(())
+        })();
+
+        self.drop_in_progress.remove(&guard_key);
+        result
     }
 
     pub(super) fn codegen_own_new(
