@@ -1,0 +1,27 @@
+struct Pair { left: i32, right: i32 }
+
+enum Item {
+  Scalar(i32)
+  PairValue(Pair)
+  Skip
+}
+
+fn main() -> i32 {
+  let mut items: Vec<Item> = Vec::new()
+  items.push(Scalar(2))
+  items.push(PairValue(Pair { left: 3, right: 4 }))
+  items.push(Skip())
+  items.push(Scalar(5))
+
+  let mut sum: i32 = 0
+  for item in items {
+    let value = match item {
+      Scalar(v) => v,
+      PairValue(p) => p.left + p.right,
+      Skip => 0,
+    }
+    sum = sum + value
+  }
+
+  ret sum
+}

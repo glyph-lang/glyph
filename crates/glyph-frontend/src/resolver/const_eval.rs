@@ -7,7 +7,7 @@ use glyph_core::{
     types::Type,
 };
 
-use super::{expr_span, type_expr_to_string, resolve_type_expr_to_type, ResolverContext};
+use super::{ResolverContext, expr_span, resolve_type_expr_to_type, type_expr_to_string};
 
 /// Represents a constant value that can be evaluated at compile-time
 #[derive(Debug, Clone, PartialEq)]
@@ -319,7 +319,9 @@ fn resolve_const_reference(
         return eval_const_def(module_id, def, module, ctx, stack, diagnostics);
     }
 
-    if let Some(crate::resolver::ResolvedSymbol::Const(target_module, const_name)) = ctx.resolve_symbol(name) {
+    if let Some(crate::resolver::ResolvedSymbol::Const(target_module, const_name)) =
+        ctx.resolve_symbol(name)
+    {
         let Some(all_modules) = &ctx.all_modules else {
             diagnostics.push(Diagnostic::error(
                 format!("unknown const '{}'", name),

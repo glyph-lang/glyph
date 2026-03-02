@@ -5,7 +5,7 @@ use std::path::Path;
 
 use glyph_backend::llvm::LlvmBackend;
 use glyph_backend::{Backend, CodegenOptions, EmitKind};
-use glyph_frontend::{compile_source, FrontendOptions};
+use glyph_frontend::{FrontendOptions, compile_source};
 
 fn load_fixture(name: &str) -> String {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/codegen");
@@ -150,6 +150,22 @@ fn ir_map_string_drop_emits_drop_path() {
     assert!(
         ir.contains("string.drop"),
         "IR missing string.drop for map key/value elements: {}",
+        ir
+    );
+}
+
+// T8: File handles should be closed via implicit drop glue (RAII behavior).
+#[test]
+fn ir_file_implicit_drop_closes_handle() {
+    let ir = compile_ir("file_auto_drop.glyph");
+    assert!(
+        ir.contains("file.drop.close"),
+        "IR missing implicit File drop close call path: {}",
+        ir
+    );
+    assert!(
+        ir.contains("@fclose"),
+        "IR missing fclose declaration for File drop glue: {}",
         ir
     );
 }

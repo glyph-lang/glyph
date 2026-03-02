@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use glyph_core::ast::Module;
 use glyph_frontend::{lex, parse};
 use walkdir::WalkDir;

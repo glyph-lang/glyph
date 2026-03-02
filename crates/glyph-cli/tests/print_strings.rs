@@ -1,4 +1,4 @@
-use glyph_frontend::{compile_source, FrontendOptions};
+use glyph_frontend::{FrontendOptions, compile_source};
 
 #[test]
 fn print_accepts_runtime_strings() {

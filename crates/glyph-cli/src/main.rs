@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand, ValueEnum};
 use glyph_backend::{Backend, CodegenOptions, EmitKind};
 use glyph_frontend::{
-    compile_modules, resolve_multi_module, resolve_types, FrontendOptions, ResolverContext,
+    FrontendOptions, ResolverContext, compile_modules, resolve_multi_module, resolve_types,
 };
 
 mod module_loader;
@@ -16,10 +16,10 @@ use diagnostics::format_diagnostic;
 
 mod build_version;
 
-#[cfg(feature = "codegen")]
-use glyph_backend::llvm::LlvmBackend;
 #[cfg(not(feature = "codegen"))]
 use glyph_backend::NullBackend;
+#[cfg(feature = "codegen")]
+use glyph_backend::llvm::LlvmBackend;
 #[cfg(feature = "codegen")]
 use glyph_backend::{
     codegen::CodegenContext,
@@ -385,11 +385,7 @@ unsafe fn glyph_time_buffer_mut_ptr() -> *mut u8 {
 #[unsafe(no_mangle)]
 pub extern "C" fn glyph_time_now() -> u64 {
     let t = unsafe { libc::time(std::ptr::null_mut()) };
-    if t == -1 {
-        0
-    } else {
-        t as u64
-    }
+    if t == -1 { 0 } else { t as u64 }
 }
 
 #[cfg(all(feature = "codegen", unix))]
@@ -405,7 +401,8 @@ pub extern "C" fn glyph_time_to_human_readable(ts: u64) -> *const std::ffi::c_ch
 
     let mut tm_out: libc::tm = unsafe { std::mem::zeroed() };
     let t_copy = t;
-    let res = unsafe { libc::gmtime_r(&t_copy as *const libc::time_t, &mut tm_out as *mut libc::tm) };
+    let res =
+        unsafe { libc::gmtime_r(&t_copy as *const libc::time_t, &mut tm_out as *mut libc::tm) };
     if res.is_null() {
         return glyph_time_buffer_ptr();
     }

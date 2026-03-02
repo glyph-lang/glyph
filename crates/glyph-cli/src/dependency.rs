@@ -4,12 +4,12 @@ use std::path::{Path, PathBuf};
 
 use glyph_core::ast::Module;
 
-use crate::diagnostics::{format_diagnostic, SourceInfo};
+use crate::diagnostics::{SourceInfo, format_diagnostic};
 use crate::module_loader::{discover_and_parse_modules, module_id_from_path};
 
 use super::{
-    resolve_dependency_root, usage_err, DependencySpec, GlyphError, GlyphResult, Manifest,
-    EXIT_COMPILER,
+    DependencySpec, EXIT_COMPILER, GlyphError, GlyphResult, Manifest, resolve_dependency_root,
+    usage_err,
 };
 
 #[derive(Debug)]
@@ -101,7 +101,10 @@ fn resolve_dependencies_inner(
         })?;
 
         let lib_path = canonical.join(&lib.path);
-        let lib_root = lib_path.parent().unwrap_or(canonical.as_path()).to_path_buf();
+        let lib_root = lib_path
+            .parent()
+            .unwrap_or(canonical.as_path())
+            .to_path_buf();
         let lib_module_id = module_id_from_path(&lib_root, &lib_path).map_err(|e| GlyphError {
             code: EXIT_COMPILER,
             message: format!(
@@ -143,10 +146,7 @@ pub(crate) fn load_dependency_modules(
 ) -> GlyphResult<(HashMap<String, Module>, HashMap<String, SourceInfo>)> {
     let load = discover_and_parse_modules(&dep.lib_root).map_err(|e| GlyphError {
         code: EXIT_COMPILER,
-        message: format!(
-            "failed to load dependency '{}' modules: {}",
-            dep.name, e
-        ),
+        message: format!("failed to load dependency '{}' modules: {}", dep.name, e),
     })?;
     if !load.diagnostics.is_empty() {
         for diag in &load.diagnostics {
@@ -176,13 +176,16 @@ pub(crate) fn load_dependency_modules(
     }
 
     let prefixed_lib_id = format!("{}/{}", dep.name, dep.lib_module_id);
-    let lib_module = modules.get(&prefixed_lib_id).cloned().ok_or_else(|| GlyphError {
-        code: EXIT_COMPILER,
-        message: format!(
-            "dependency '{}' missing lib module '{}'",
-            dep.name, prefixed_lib_id
-        ),
-    })?;
+    let lib_module = modules
+        .get(&prefixed_lib_id)
+        .cloned()
+        .ok_or_else(|| GlyphError {
+            code: EXIT_COMPILER,
+            message: format!(
+                "dependency '{}' missing lib module '{}'",
+                dep.name, prefixed_lib_id
+            ),
+        })?;
     let lib_source = sources
         .get(&prefixed_lib_id)
         .map(|s| SourceInfo::new(s.path.clone(), s.source.clone()))
@@ -197,19 +200,13 @@ pub(crate) fn load_dependency_modules(
     if modules.contains_key(&dep.name) {
         return Err(GlyphError {
             code: EXIT_COMPILER,
-            message: format!(
-                "dependency '{}' aliases to an existing module id",
-                dep.name
-            ),
+            message: format!("dependency '{}' aliases to an existing module id", dep.name),
         });
     }
     if sources.contains_key(&dep.name) {
         return Err(GlyphError {
             code: EXIT_COMPILER,
-            message: format!(
-                "dependency '{}' aliases to an existing source id",
-                dep.name
-            ),
+            message: format!("dependency '{}' aliases to an existing source id", dep.name),
         });
     }
 
@@ -271,10 +268,7 @@ path = "src/lib.glyph"
             deps = deps_toml
         );
         write_file(&manifest_path, &toml);
-        write_file(
-            &dir.join("src/lib.glyph"),
-            "fn helper() -> i32 { ret 1 }",
-        );
+        write_file(&dir.join("src/lib.glyph"), "fn helper() -> i32 { ret 1 }");
     }
 
     fn write_bin_case(dir: &Path, name: &str, deps: &[(&str, &str)]) {
@@ -353,10 +347,7 @@ path = "src/main.glyph"
         assert_eq!(module.imports[0].path.segments, vec!["my_lib", "utils"]);
         assert_eq!(module.imports[1].path.segments, vec!["std", "io"]);
         assert_eq!(module.imports[2].path.segments, vec!["dep_other"]);
-        assert_eq!(
-            module.imports[3].path.segments,
-            vec!["my_lib", "sub"]
-        );
+        assert_eq!(module.imports[3].path.segments, vec!["my_lib", "sub"]);
     }
 
     #[test]

@@ -14,10 +14,10 @@ mod imports;
 mod methods;
 mod validation;
 
-pub use const_eval::{validate_consts, resolve_const_value, ConstValue, ConstBinding};
+pub use const_eval::{ConstBinding, ConstValue, resolve_const_value, validate_consts};
 pub use imports::populate_imported_types;
-pub use validation::{validate_named_types, validate_map_usage};
 pub use methods::detect_self_kind;
+pub use validation::{validate_map_usage, validate_named_types};
 
 /// Context containing resolved type information
 #[derive(Debug, Clone)]
@@ -583,7 +583,10 @@ pub(super) fn struct_generic_params(
     HashSet::new()
 }
 
-pub(super) fn struct_type_from_def(def: &glyph_core::ast::StructDef, ctx: &ResolverContext) -> StructType {
+pub(super) fn struct_type_from_def(
+    def: &glyph_core::ast::StructDef,
+    ctx: &ResolverContext,
+) -> StructType {
     let generics: std::collections::HashSet<String> =
         def.generic_params.iter().map(|p| p.0.clone()).collect();
     let mut fields = Vec::new();
@@ -604,7 +607,10 @@ pub(super) fn struct_type_from_def(def: &glyph_core::ast::StructDef, ctx: &Resol
     }
 }
 
-pub(super) fn enum_type_from_def(def: &glyph_core::ast::EnumDef, ctx: &ResolverContext) -> EnumType {
+pub(super) fn enum_type_from_def(
+    def: &glyph_core::ast::EnumDef,
+    ctx: &ResolverContext,
+) -> EnumType {
     let generics: std::collections::HashSet<String> =
         def.generic_params.iter().map(|p| p.0.clone()).collect();
     let mut variants = Vec::new();
@@ -1219,9 +1225,11 @@ mod tests {
 
         let (ctx, mut diags) = resolve_types(&module);
         validate_map_usage(&module, &ctx, &mut diags);
-        assert!(diags
-            .iter()
-            .any(|d| d.message.contains("Map expects 2 type arguments")));
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("Map expects 2 type arguments"))
+        );
     }
 
     #[test]

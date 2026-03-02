@@ -17,7 +17,7 @@ use glyph_backend::{
 };
 
 #[cfg(all(feature = "codegen", unix))]
-use glyph_frontend::{compile_source, FrontendOptions};
+use glyph_frontend::{FrontendOptions, compile_source};
 
 #[cfg(all(feature = "codegen", unix))]
 use std::os::unix::process::ExitStatusExt;

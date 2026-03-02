@@ -503,7 +503,9 @@ impl<'a> Parser<'a> {
         }
 
         if !literal.is_empty() {
-            segments.push(InterpSegment::Literal(String::from_utf8_lossy(&literal).into_owned()));
+            segments.push(InterpSegment::Literal(
+                String::from_utf8_lossy(&literal).into_owned(),
+            ));
         }
 
         Some(Expr::InterpString {

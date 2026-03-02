@@ -1,0 +1,577 @@
+---
+source: crates/glyph-frontend/tests/mir_fixtures.rs
+expression: out.mir
+---
+MirModule {
+    struct_types: {
+        "Pair": StructType {
+            name: "Pair",
+            fields: [
+                (
+                    "left",
+                    I32,
+                ),
+                (
+                    "right",
+                    I32,
+                ),
+            ],
+        },
+        "Vec$Pair": StructType {
+            name: "Vec$Pair",
+            fields: [
+                (
+                    "data",
+                    RawPtr(
+                        Named(
+                            "Pair",
+                        ),
+                    ),
+                ),
+                (
+                    "len",
+                    Usize,
+                ),
+                (
+                    "cap",
+                    Usize,
+                ),
+            ],
+        },
+    },
+    functions: [
+        MirFunction {
+            name: "main",
+            ret_type: Some(
+                I32,
+            ),
+            params: [],
+            locals: [
+                Local {
+                    name: Some(
+                        "pairs",
+                    ),
+                    ty: Some(
+                        Named(
+                            "Vec$Pair",
+                        ),
+                    ),
+                    mutable: true,
+                    skip_drop: false,
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        Named(
+                            "Vec$Pair",
+                        ),
+                    ),
+                    mutable: false,
+                    skip_drop: false,
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        Named(
+                            "Pair",
+                        ),
+                    ),
+                    mutable: false,
+                    skip_drop: false,
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        Named(
+                            "Vec$Pair",
+                        ),
+                    ),
+                    mutable: false,
+                    skip_drop: false,
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        Named(
+                            "Pair",
+                        ),
+                    ),
+                    mutable: false,
+                    skip_drop: false,
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        Named(
+                            "Vec$Pair",
+                        ),
+                    ),
+                    mutable: false,
+                    skip_drop: false,
+                },
+                Local {
+                    name: Some(
+                        "sum",
+                    ),
+                    ty: Some(
+                        I32,
+                    ),
+                    mutable: true,
+                    skip_drop: false,
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        Usize,
+                    ),
+                    mutable: true,
+                    skip_drop: false,
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        Usize,
+                    ),
+                    mutable: false,
+                    skip_drop: false,
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        Usize,
+                    ),
+                    mutable: false,
+                    skip_drop: false,
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        Bool,
+                    ),
+                    mutable: false,
+                    skip_drop: false,
+                },
+                Local {
+                    name: Some(
+                        "pair",
+                    ),
+                    ty: Some(
+                        Named(
+                            "Pair",
+                        ),
+                    ),
+                    mutable: false,
+                    skip_drop: false,
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        I32,
+                    ),
+                    mutable: false,
+                    skip_drop: false,
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        I32,
+                    ),
+                    mutable: false,
+                    skip_drop: false,
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        I32,
+                    ),
+                    mutable: false,
+                    skip_drop: false,
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        I32,
+                    ),
+                    mutable: false,
+                    skip_drop: false,
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        Usize,
+                    ),
+                    mutable: false,
+                    skip_drop: false,
+                },
+                Local {
+                    name: None,
+                    ty: Some(
+                        Usize,
+                    ),
+                    mutable: false,
+                    skip_drop: false,
+                },
+            ],
+            blocks: [
+                MirBlock {
+                    insts: [
+                        Assign {
+                            local: LocalId(
+                                1,
+                            ),
+                            value: VecNew {
+                                elem_type: Named(
+                                    "Pair",
+                                ),
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                0,
+                            ),
+                            value: Move(
+                                LocalId(
+                                    1,
+                                ),
+                            ),
+                        },
+                        Assign {
+                            local: LocalId(
+                                2,
+                            ),
+                            value: StructLit {
+                                struct_name: "Pair",
+                                field_values: [
+                                    (
+                                        "left",
+                                        Int(
+                                            1,
+                                        ),
+                                    ),
+                                    (
+                                        "right",
+                                        Int(
+                                            2,
+                                        ),
+                                    ),
+                                ],
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                3,
+                            ),
+                            value: VecPush {
+                                vec: LocalId(
+                                    0,
+                                ),
+                                elem_type: Named(
+                                    "Pair",
+                                ),
+                                value: Local(
+                                    LocalId(
+                                        2,
+                                    ),
+                                ),
+                            },
+                        },
+                        Nop,
+                        Assign {
+                            local: LocalId(
+                                4,
+                            ),
+                            value: StructLit {
+                                struct_name: "Pair",
+                                field_values: [
+                                    (
+                                        "left",
+                                        Int(
+                                            3,
+                                        ),
+                                    ),
+                                    (
+                                        "right",
+                                        Int(
+                                            4,
+                                        ),
+                                    ),
+                                ],
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                5,
+                            ),
+                            value: VecPush {
+                                vec: LocalId(
+                                    0,
+                                ),
+                                elem_type: Named(
+                                    "Pair",
+                                ),
+                                value: Local(
+                                    LocalId(
+                                        4,
+                                    ),
+                                ),
+                            },
+                        },
+                        Nop,
+                        Assign {
+                            local: LocalId(
+                                6,
+                            ),
+                            value: ConstInt(
+                                0,
+                            ),
+                        },
+                        Assign {
+                            local: LocalId(
+                                8,
+                            ),
+                            value: ConstInt(
+                                0,
+                            ),
+                        },
+                        Assign {
+                            local: LocalId(
+                                7,
+                            ),
+                            value: Move(
+                                LocalId(
+                                    8,
+                                ),
+                            ),
+                        },
+                        Assign {
+                            local: LocalId(
+                                9,
+                            ),
+                            value: VecLen {
+                                vec: LocalId(
+                                    0,
+                                ),
+                            },
+                        },
+                        Goto(
+                            BlockId(
+                                1,
+                            ),
+                        ),
+                    ],
+                },
+                MirBlock {
+                    insts: [
+                        Assign {
+                            local: LocalId(
+                                10,
+                            ),
+                            value: Binary {
+                                op: Lt,
+                                lhs: Local(
+                                    LocalId(
+                                        7,
+                                    ),
+                                ),
+                                rhs: Local(
+                                    LocalId(
+                                        9,
+                                    ),
+                                ),
+                            },
+                        },
+                        If {
+                            cond: Local(
+                                LocalId(
+                                    10,
+                                ),
+                            ),
+                            then_bb: BlockId(
+                                2,
+                            ),
+                            else_bb: BlockId(
+                                4,
+                            ),
+                        },
+                    ],
+                },
+                MirBlock {
+                    insts: [
+                        Assign {
+                            local: LocalId(
+                                11,
+                            ),
+                            value: VecIndex {
+                                vec: LocalId(
+                                    0,
+                                ),
+                                elem_type: Named(
+                                    "Pair",
+                                ),
+                                index: Local(
+                                    LocalId(
+                                        7,
+                                    ),
+                                ),
+                                bounds_check: false,
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                12,
+                            ),
+                            value: FieldAccess {
+                                base: LocalId(
+                                    11,
+                                ),
+                                field_name: "left",
+                                field_index: 0,
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                13,
+                            ),
+                            value: Binary {
+                                op: Add,
+                                lhs: Local(
+                                    LocalId(
+                                        6,
+                                    ),
+                                ),
+                                rhs: Local(
+                                    LocalId(
+                                        12,
+                                    ),
+                                ),
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                6,
+                            ),
+                            value: Move(
+                                LocalId(
+                                    13,
+                                ),
+                            ),
+                        },
+                        Assign {
+                            local: LocalId(
+                                14,
+                            ),
+                            value: FieldAccess {
+                                base: LocalId(
+                                    11,
+                                ),
+                                field_name: "right",
+                                field_index: 1,
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                15,
+                            ),
+                            value: Binary {
+                                op: Add,
+                                lhs: Local(
+                                    LocalId(
+                                        6,
+                                    ),
+                                ),
+                                rhs: Local(
+                                    LocalId(
+                                        14,
+                                    ),
+                                ),
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                6,
+                            ),
+                            value: Move(
+                                LocalId(
+                                    15,
+                                ),
+                            ),
+                        },
+                        Goto(
+                            BlockId(
+                                3,
+                            ),
+                        ),
+                    ],
+                },
+                MirBlock {
+                    insts: [
+                        Assign {
+                            local: LocalId(
+                                16,
+                            ),
+                            value: ConstInt(
+                                1,
+                            ),
+                        },
+                        Assign {
+                            local: LocalId(
+                                17,
+                            ),
+                            value: Binary {
+                                op: Add,
+                                lhs: Local(
+                                    LocalId(
+                                        7,
+                                    ),
+                                ),
+                                rhs: Local(
+                                    LocalId(
+                                        16,
+                                    ),
+                                ),
+                            },
+                        },
+                        Assign {
+                            local: LocalId(
+                                7,
+                            ),
+                            value: Move(
+                                LocalId(
+                                    17,
+                                ),
+                            ),
+                        },
+                        Goto(
+                            BlockId(
+                                1,
+                            ),
+                        ),
+                    ],
+                },
+                MirBlock {
+                    insts: [
+                        Drop(
+                            LocalId(
+                                11,
+                            ),
+                        ),
+                        Drop(
+                            LocalId(
+                                0,
+                            ),
+                        ),
+                        Return(
+                            Some(
+                                Local(
+                                    LocalId(
+                                        6,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+            ],
+        },
+    ],
+}

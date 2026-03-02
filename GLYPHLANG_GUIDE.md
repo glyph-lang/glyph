@@ -87,6 +87,7 @@ fn sum_to(n: i32) -> i32 {
 - `for i in start..end` is end-exclusive (`i < end`).
 - `for x in collection { ... }` iterates over a collection (e.g. `Vec<T>`).
 - Use `break` and `cont` (not `continue`).
+- In `for`/`for-in`, `cont` still runs the loop increment step before the next iteration.
 
 Void functions (no `-> Type` annotation):
 
@@ -169,6 +170,8 @@ fn main() -> i32 {
   ret 0
 }
 ```
+
+Maps with owned keys/values (e.g. `Map<String, String>`) are fully supported — drop glue walks all buckets and frees keys, values, and nodes automatically.
 
 Arrays:
 
@@ -297,6 +300,7 @@ Dependencies are resolved transitively with cycle detection.
 
 - Keywords are short: `ret` (not `return`), `cont` (not `continue`).
 - `match` only works on enum values; patterns are `Variant(binding)` or `_`.
+- `match` consumes the scrutinee by value — the matched local is moved and should not be used after the `match`.
 - `match` must be exhaustive; add `_ => ...` if needed.
 - Many std methods require the receiver to be a local variable (not a temporary). Always assign before calling:
   - Good: `let s = String::from_str("hi"); s.len()`
@@ -308,6 +312,9 @@ Dependencies are resolved transitively with cycle detection.
 - References can only be taken to locals (`&local`), not to temporaries.
 - Array `.len()` only works on local array variables.
 - The `?` operator works on `Result` types for error propagation (e.g. `let val = expr?`). The enclosing function must return `Result`.
+- Enum variants with owned-type payloads (e.g. `Option<String>`, `Result<String, E>`) are properly drop-managed — the active variant's payload is freed automatically when the enum goes out of scope.
+- `break` and `cont` in loops properly drop locals scoped inside the loop body.
+- `for`/`for-in` `cont` jumps to the loop's continue target (increment/index advance), not directly to condition check.
 - Floating-point literals parse, but arithmetic is mostly integer-focused; avoid floats unless you have verified support.
 - `extern` functions must end with `;` and only `extern "C"` is accepted.
 - `const` declarations require an explicit type annotation.

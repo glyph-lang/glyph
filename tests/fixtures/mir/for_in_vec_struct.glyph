@@ -1,0 +1,15 @@
+struct Pair { left: i32, right: i32 }
+
+fn main() -> i32 {
+  let mut pairs: Vec<Pair> = Vec::new()
+  pairs.push(Pair { left: 1, right: 2 })
+  pairs.push(Pair { left: 3, right: 4 })
+
+  let mut sum: i32 = 0
+  for pair in pairs {
+    sum = sum + pair.left
+    sum = sum + pair.right
+  }
+
+  ret sum
+}

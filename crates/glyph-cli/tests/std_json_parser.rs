@@ -1,4 +1,4 @@
-use glyph_frontend::{compile_source, FrontendOptions};
+use glyph_frontend::{FrontendOptions, compile_source};
 
 #[cfg(all(feature = "codegen", unix))]
 use glyph_backend::{
@@ -100,6 +100,23 @@ fn build_and_run_exit_code(source: &str) -> i32 {
     } else {
         -1
     }
+}
+
+#[cfg(all(feature = "codegen", unix))]
+fn glyph_string_literal(input: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in input.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
 }
 
 #[cfg(all(feature = "codegen", unix))]
@@ -364,4 +381,375 @@ fn std_json_parser_string_escapes() {
     "#;
 
     assert_eq!(build_and_run_exit_code(source), 0);
+}
+
+#[cfg(all(feature = "codegen", unix))]
+#[test]
+fn std_json_parser_hardening_valid_matrix() {
+    let source = r#"
+        from std/enums import Option
+        from std/json import JsonValue, ParseResult
+        from std/map import Map
+        from std/string import byte_at
+        from std/vec import Vec
+
+        from std/json/parser import parse
+
+        fn hash_str_mod(s: str) -> i64 {
+          let mut i: usize = 0
+          let len = s.len()
+          let mut h: i64 = 0
+          while i < len {
+            let b = byte_at(s, i)
+            h = (h * 131 + b) % 1000000007
+            i = i + 1
+          }
+          ret h
+        }
+
+        fn expect_ok(input: &str) -> i32 {
+          let r = parse(input)
+          ret match r {
+            Ok(_v) => 0,
+            Err(_e) => 1,
+          }
+        }
+
+        fn expect_bool(input: &str, expected: bool) -> i32 {
+          let r = parse(input)
+          ret match r {
+            Ok(v) => match v {
+              Bool(b) => if b == expected { 0 } else { 1 },
+              _ => 2,
+            },
+            Err(_e) => 3,
+          }
+        }
+
+        fn expect_number(input: &str) -> i32 {
+          let r = parse(input)
+          ret match r {
+            Ok(v) => match v {
+              Number(_n) => 0,
+              _ => 1,
+            },
+            Err(_e) => 2,
+          }
+        }
+
+        fn expect_string_hash(input: &str, expected: i64) -> i32 {
+          let r = parse(input)
+          ret match r {
+            Ok(v) => match v {
+              String(s) => if hash_str_mod(s) == expected { 0 } else { 1 },
+              _ => 2,
+            },
+            Err(_e) => 3,
+          }
+        }
+
+        fn check_meta(meta_value: JsonValue) -> i32 {
+          ret match meta_value {
+            Object(meta_obj) => {
+              let ok_opt = meta_obj.get(String::from_str("ok"))
+              let count_opt = meta_obj.get(String::from_str("count"))
+              match ok_opt {
+                Some(ok_val) => match ok_val {
+                  Bool(b) => if b {
+                    match count_opt {
+                      Some(count_val) => match count_val {
+                        Number(_n) => 0,
+                        _ => 1,
+                      },
+                      None => 2,
+                    }
+                  } else {
+                    3
+                  },
+                  _ => 4,
+                },
+                None => 5,
+              }
+            }
+            _ => 6,
+          }
+        }
+
+        fn check_data(data_value: JsonValue) -> i32 {
+          ret match data_value {
+            Array(values0) => {
+              let mut values = values0
+              let v3 = values.pop()
+              let v2 = values.pop()
+              let v1 = values.pop()
+              let v0 = values.pop()
+              let extra = values.pop()
+
+              match extra {
+                Some(_e) => 1,
+                None => match v0 {
+                  Some(a0) => match a0 {
+                    Null => match v1 {
+                      Some(a1) => match a1 {
+                        Bool(b1) => if b1 == false {
+                          match v2 {
+                            Some(a2) => match a2 {
+                              Number(_n) => match v3 {
+                                Some(a3) => match a3 {
+                                  String(s3) => if hash_str_mod(s3) == 120 { 0 } else { 2 },
+                                  _ => 3,
+                                },
+                                None => 4,
+                              },
+                              _ => 5,
+                            },
+                            None => 6,
+                          }
+                        } else {
+                          7
+                        },
+                        _ => 8,
+                      },
+                      None => 9,
+                    },
+                    _ => 10,
+                  },
+                  None => 11,
+                },
+              }
+            }
+            _ => 12,
+          }
+        }
+
+        fn expect_complex_object() -> i32 {
+          let r = parse("{\"meta\":{\"ok\":true,\"count\":3},\"data\":[null,false,1.5e2,\"x\"]}")
+          ret match r {
+            Ok(v) => match v {
+              Object(obj) => {
+                let meta_opt = obj.get(String::from_str("meta"))
+                let data_opt = obj.get(String::from_str("data"))
+                match meta_opt {
+                  Some(meta_value) => match data_opt {
+                    Some(data_value) => {
+                      let meta_status = check_meta(meta_value)
+                      if meta_status != 0 { meta_status } else { check_data(data_value) }
+                    }
+                    None => 13,
+                  },
+                  None => 14,
+                }
+              }
+              _ => 15,
+            },
+            Err(_e) => 16,
+          }
+        }
+
+        fn main() -> i32 {
+          let c0 = expect_ok("   null   ")
+          if c0 != 0 { ret 10 }
+
+          let c1 = expect_bool("true", true)
+          if c1 != 0 { ret 11 }
+          let c2 = expect_bool("false", false)
+          if c2 != 0 { ret 12 }
+
+          let c3 = expect_number("0")
+          if c3 != 0 { ret 13 }
+          let c4 = expect_number("-0")
+          if c4 != 0 { ret 14 }
+          let c5 = expect_number("12345")
+          if c5 != 0 { ret 15 }
+          let c6 = expect_number("-98")
+          if c6 != 0 { ret 16 }
+          let c7 = expect_number("0.5")
+          if c7 != 0 { ret 17 }
+          let c8 = expect_number("1e10")
+          if c8 != 0 { ret 18 }
+          let c9 = expect_number("1E-3")
+          if c9 != 0 { ret 19 }
+          let c10 = expect_number("-2.5e+7")
+          if c10 != 0 { ret 20 }
+
+          let c11 = expect_ok("[1, true, null, \"x\", {\"k\":[false]}]")
+          if c11 != 0 { ret 21 }
+          let c12 = expect_ok("{\"a\":1,\"b\":[2,3],\"c\":{\"d\":4}}")
+          if c12 != 0 { ret 22 }
+
+          let c13 = expect_string_hash("\"\\u0041\"", 65)
+          if c13 != 0 { ret 23 }
+          let c17 = expect_string_hash("\"line\\nfeed\\tok\"", 266679051)
+          if c17 != 0 { ret 27 }
+
+          let c18 = expect_complex_object()
+          if c18 != 0 { ret 28 }
+
+          ret 0
+        }
+    "#;
+
+    assert_eq!(build_and_run_exit_code(source), 0);
+}
+
+#[cfg(all(feature = "codegen", unix))]
+#[test]
+fn std_json_parser_hardening_invalid_matrix() {
+    let source = r#"
+        from std/json import JsonValue, ParseError, ParseResult
+        from std/string import byte_at
+        from std/json/parser import parse
+
+        fn hash_str_mod(s: str) -> i64 {
+          let mut i: usize = 0
+          let len = s.len()
+          let mut h: i64 = 0
+          while i < len {
+            let b = byte_at(s, i)
+            h = (h * 131 + b) % 1000000007
+            i = i + 1
+          }
+          ret h
+        }
+
+        fn expect_err_pos_msg(input: &str, expected_pos: usize, expected_msg_hash: i64) -> i32 {
+          let r = parse(input)
+          ret match r {
+            Ok(_v) => 1,
+            Err(e) => {
+              let pos = e.position
+              let msg: str = e.message
+              let msg_hash = hash_str_mod(msg)
+              if pos != expected_pos {
+                2
+              } else {
+                if msg_hash == expected_msg_hash { 0 } else { 3 }
+              }
+            },
+          }
+        }
+
+        fn main() -> i32 {
+          let c0 = expect_err_pos_msg("null x", 5, 316366985)
+          if c0 != 0 { ret 10 }
+          let c1 = expect_err_pos_msg("true false", 5, 316366985)
+          if c1 != 0 { ret 11 }
+
+          let c2 = expect_err_pos_msg("[1,]", 3, 207243600)
+          if c2 != 0 { ret 12 }
+          let c3 = expect_err_pos_msg("{\"a\":1,}", 7, 515054770)
+          if c3 != 0 { ret 13 }
+          let c4 = expect_err_pos_msg("{\"a\" 1}", 5, 82097310)
+          if c4 != 0 { ret 14 }
+          let c5 = expect_err_pos_msg("{\"a\":1 \"b\":2}", 7, 872308585)
+          if c5 != 0 { ret 15 }
+          let c6 = expect_err_pos_msg("[1 2]", 3, 872304393)
+          if c6 != 0 { ret 16 }
+
+          let c7 = expect_err_pos_msg("1.", 2, 600451706)
+          if c7 != 0 { ret 17 }
+          let c8 = expect_err_pos_msg("1e+", 3, 221197222)
+          if c8 != 0 { ret 18 }
+          let c9 = expect_err_pos_msg("-", 1, 943194561)
+          if c9 != 0 { ret 19 }
+          let c10 = expect_err_pos_msg("+1", 0, 207243600)
+          if c10 != 0 { ret 20 }
+          let c11 = expect_err_pos_msg("01", 1, 297189801)
+          if c11 != 0 { ret 21 }
+          let c12 = expect_err_pos_msg("-01", 2, 297189801)
+          if c12 != 0 { ret 22 }
+
+          let c13 = expect_err_pos_msg("\"\\x\"", 1, 444696919)
+          if c13 != 0 { ret 23 }
+          let c14 = expect_err_pos_msg("\"\\u12\"", 1, 55332458)
+          if c14 != 0 { ret 24 }
+          let c14a = expect_err_pos_msg("\"\\u00DF\"", 1, 356324073)
+          if c14a != 0 { ret 33 }
+          let c14b = expect_err_pos_msg("\"\\u4F60\"", 1, 356324073)
+          if c14b != 0 { ret 34 }
+          let c14c = expect_err_pos_msg("\"\\uD83D\\uDE03\"", 1, 356324073)
+          if c14c != 0 { ret 35 }
+          let c15 = expect_err_pos_msg("\"\\uD800\"", 1, 960656384)
+          if c15 != 0 { ret 25 }
+          let c16 = expect_err_pos_msg("\"\\uDC00\"", 1, 960656384)
+          if c16 != 0 { ret 26 }
+          let c17 = expect_err_pos_msg("\"\\uD800\\u0061\"", 1, 960656384)
+          if c17 != 0 { ret 27 }
+          let c18 = expect_err_pos_msg("\"\\u0000\"", 1, 260413370)
+          if c18 != 0 { ret 28 }
+
+          let c19 = expect_err_pos_msg("[", 1, 47974317)
+          if c19 != 0 { ret 29 }
+          let c20 = expect_err_pos_msg("{\"a\":", 5, 47974317)
+          if c20 != 0 { ret 30 }
+          let c21 = expect_err_pos_msg("\"unterminated", 0, 463322056)
+          if c21 != 0 { ret 31 }
+          let c22 = expect_err_pos_msg("\"a\nb\"", 2, 77597555)
+          if c22 != 0 { ret 32 }
+
+          ret 0
+        }
+    "#;
+
+    assert_eq!(build_and_run_exit_code(source), 0);
+}
+
+#[cfg(all(feature = "codegen", unix))]
+#[test]
+fn std_json_parser_hardening_deep_nesting() {
+    let depth = 96usize;
+    let mut json = String::new();
+    for _ in 0..depth {
+        json.push('[');
+    }
+    json.push('0');
+    for _ in 0..depth {
+        json.push(']');
+    }
+    let json_literal = glyph_string_literal(&json);
+
+    let source = format!(
+        r#"
+        from std/enums import Option
+        from std/json import JsonValue, ParseResult
+        from std/vec import Vec
+        from std/json/parser import parse
+
+        fn unwrap_depth(v: JsonValue, n: i32) -> i32 {{
+          if n == 0 {{
+            ret match v {{
+              Number(_x) => 0,
+              _ => 1,
+            }}
+          }}
+
+          ret match v {{
+            Array(values0) => {{
+              let mut values = values0
+              let child = values.pop()
+              let extra = values.pop()
+              match extra {{
+                Some(_e) => 2,
+                None => match child {{
+                  Some(next) => unwrap_depth(next, n - 1),
+                  None => 3,
+                }},
+              }}
+            }}
+            _ => 4,
+          }}
+        }}
+
+        fn main() -> i32 {{
+          let r = parse({})
+          ret match r {{
+            Ok(v) => unwrap_depth(v, {}),
+            Err(_e) => 5,
+          }}
+        }}
+    "#,
+        json_literal, depth
+    );
+
+    assert_eq!(build_and_run_exit_code(&source), 0);
 }

@@ -323,6 +323,12 @@ impl CodegenContext {
             return self.codegen_drop_enum_slot(slot, name);
         }
 
+        // Runtime-managed RAII type: ensure file handles are closed on scope exit
+        // when users rely on implicit cleanup instead of explicit `close()`.
+        if name == "File" {
+            return self.codegen_drop_file_slot(slot);
+        }
+
         let layout = match self.struct_layouts.get(name) {
             Some(l) => l.clone(),
             None => return Ok(()),

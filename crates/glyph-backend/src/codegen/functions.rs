@@ -305,7 +305,14 @@ impl CodegenContext {
             match inst {
                 MirInst::Assign { local, value } => {
                     self.debug_log(&format!("codegen_inst assign {}", self.rvalue_tag(value)));
-                    let val = self.codegen_rvalue_for_local(value, func, local_map, functions, mir_module, Some(*local))?;
+                    let val = self.codegen_rvalue_for_local(
+                        value,
+                        func,
+                        local_map,
+                        functions,
+                        mir_module,
+                        Some(*local),
+                    )?;
                     let local_ty = func
                         .locals
                         .get(local.0 as usize)

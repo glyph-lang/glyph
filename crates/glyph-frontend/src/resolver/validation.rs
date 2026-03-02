@@ -7,8 +7,7 @@ use glyph_core::{
 };
 
 use super::{
-    type_expr_to_string, resolve_type_expr_to_type, struct_generic_params,
-    ResolverContext,
+    ResolverContext, resolve_type_expr_to_type, struct_generic_params, type_expr_to_string,
 };
 
 const HASH_INTERFACE: &str = "Hash";

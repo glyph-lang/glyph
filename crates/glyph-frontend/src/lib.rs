@@ -14,14 +14,14 @@ mod parser;
 mod resolver;
 mod stdlib;
 
-pub use lexer::{lex, LexOutput};
+pub use lexer::{LexOutput, lex};
 pub use mir_lower::lower_module;
 pub use module_resolver::{
-    build_dependency_graph, resolve_multi_module, DependencyGraph, ImportScope, ModuleSymbols,
-    MultiModuleContext,
+    DependencyGraph, ImportScope, ModuleSymbols, MultiModuleContext, build_dependency_graph,
+    resolve_multi_module,
 };
-pub use parser::{parse, ParseOutput};
-pub use resolver::{resolve_types, ResolverContext};
+pub use parser::{ParseOutput, parse};
+pub use resolver::{ResolverContext, resolve_types};
 pub use stdlib::std_modules;
 
 #[derive(Debug, Clone, Default)]
@@ -508,8 +508,14 @@ mod tests {
                 "main".to_string(),
                 parse_module("import a\nimport b\nfn main() -> i32 { ret 0 }"),
             ),
-            ("a".to_string(), parse_module("fn helper() -> i32 { ret 1 }")),
-            ("b".to_string(), parse_module("fn helper() -> i32 { ret 2 }")),
+            (
+                "a".to_string(),
+                parse_module("fn helper() -> i32 { ret 1 }"),
+            ),
+            (
+                "b".to_string(),
+                parse_module("fn helper() -> i32 { ret 2 }"),
+            ),
         ]);
 
         let output = compile_modules(

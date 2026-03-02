@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use glyph_core::ast::Module;
-use glyph_frontend::{compile_modules, lex, parse, FrontendOptions};
+use glyph_frontend::{FrontendOptions, compile_modules, lex, parse};
 
 fn parse_module(source: &str, module_id: &str) -> Module {
     let lex_out = lex(source);

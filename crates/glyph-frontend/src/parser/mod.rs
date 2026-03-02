@@ -11,11 +11,11 @@ use glyph_core::{
     types::Mutability,
 };
 
-mod items;
-mod types;
-mod stmts;
 mod expr;
 mod imports;
+mod items;
+mod stmts;
+mod types;
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ParseOutput {
@@ -820,10 +820,7 @@ fn main() { p("hi") }"#;
 
     #[test]
     fn parses_hex_escape_in_string_literal() {
-        assert_eq!(
-            parse_string_literal(r#""\x1b[31m""#),
-            "\x1b[31m"
-        );
+        assert_eq!(parse_string_literal(r#""\x1b[31m""#), "\x1b[31m");
     }
 
     #[test]
@@ -836,19 +833,10 @@ fn main() { p("hi") }"#;
 
     #[test]
     fn parses_hex_escape_boundary_values() {
-        assert_eq!(
-            parse_string_literal(r#""\x00""#),
-            "\x00"
-        );
-        assert_eq!(
-            parse_string_literal(r#""\x7f""#),
-            "\x7f"
-        );
+        assert_eq!(parse_string_literal(r#""\x00""#), "\x00");
+        assert_eq!(parse_string_literal(r#""\x7f""#), "\x7f");
         // Standalone \xff is invalid UTF-8; treated as raw byte via lossy conversion
-        assert_eq!(
-            parse_string_literal(r#""\xff""#),
-            "\u{fffd}"
-        );
+        assert_eq!(parse_string_literal(r#""\xff""#), "\u{fffd}");
     }
 
     #[test]
@@ -862,10 +850,7 @@ fn main() { p("hi") }"#;
     #[test]
     fn hex_escape_invalid_digits_fallback() {
         // Invalid hex digits fall back to literal characters
-        assert_eq!(
-            parse_string_literal(r#""\xZZ""#),
-            "xZZ"
-        );
+        assert_eq!(parse_string_literal(r#""\xZZ""#), "xZZ");
     }
 
     #[test]
@@ -928,7 +913,13 @@ fn main() {
             panic!("expected let binding");
         };
         assert!(
-            matches!(expr, Expr::Binary { op: BinaryOp::Mod, .. }),
+            matches!(
+                expr,
+                Expr::Binary {
+                    op: BinaryOp::Mod,
+                    ..
+                }
+            ),
             "expected BinaryOp::Mod, got {:?}",
             expr
         );
@@ -958,7 +949,13 @@ fn main() {
                 ..
             } => {
                 assert!(
-                    matches!(rhs.as_ref(), Expr::Binary { op: BinaryOp::Mod, .. }),
+                    matches!(
+                        rhs.as_ref(),
+                        Expr::Binary {
+                            op: BinaryOp::Mod,
+                            ..
+                        }
+                    ),
                     "expected rhs to be Mod, got {:?}",
                     rhs
                 );
@@ -972,9 +969,10 @@ fn main() {
         let source = "const MISSING = 1";
         let lexed = lex(source);
         let out = parse(&lexed.tokens, source);
-        assert!(out
-            .diagnostics
-            .iter()
-            .any(|d| { d.message.contains("requires explicit type annotation") }));
+        assert!(
+            out.diagnostics
+                .iter()
+                .any(|d| { d.message.contains("requires explicit type annotation") })
+        );
     }
 }

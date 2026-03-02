@@ -12,8 +12,8 @@ use super::signatures::FnSig;
 
 #[derive(Debug, Clone)]
 pub(crate) struct LoopContext {
-    pub(crate) header: BlockId, // for continue
-    pub(crate) exit: BlockId,   // for break
+    pub(crate) continue_target: BlockId,
+    pub(crate) exit: BlockId, // for break
     // Scope stack depth when entering the loop body.
     // Locals in deeper scopes must be dropped on break/continue.
     pub(crate) scope_depth: usize,
@@ -185,9 +185,9 @@ impl<'a> LowerCtx<'a> {
         self.current = id;
     }
 
-    pub(crate) fn enter_loop(&mut self, header: BlockId, exit: BlockId) {
+    pub(crate) fn enter_loop(&mut self, continue_target: BlockId, exit: BlockId) {
         self.loop_stack.push(LoopContext {
-            header,
+            continue_target,
             exit,
             scope_depth: self.scope_stack.len(),
         });
@@ -320,6 +320,55 @@ impl<'a> LowerCtx<'a> {
             .unwrap_or(false)
     }
 
+    pub(crate) fn local_uses_ownership_tracking(&self, local: LocalId) -> bool {
+        self.local_needs_drop(local) || self.local_is_guard(local)
+    }
+
+    pub(crate) fn emit_use_of_moved_local(&mut self, local: LocalId, span: Option<Span>) {
+        let message = if self.local_is_guard(local) {
+            match self.local_name(local) {
+                Some(name) => format!(
+                    "use of moved guard `{}`; guard values are single-owner and cleanup runs exactly once",
+                    name
+                ),
+                None => "use of moved guard value; guard values are single-owner and cleanup runs exactly once".to_string(),
+            }
+        } else {
+            match (self.local_name(local), self.local_type_label(local)) {
+                (Some(name), Some(ty)) => {
+                    format!("use of moved value `{}` of type `{}`", name, ty)
+                }
+                (Some(name), None) => format!("use of moved value `{}`", name),
+                (None, Some(ty)) => format!("use of moved value of type `{}`", ty),
+                (None, None) => "use of moved value".to_string(),
+            }
+        };
+        self.error(message, span);
+    }
+
+    pub(crate) fn emit_use_of_uninitialized_local(&mut self, local: LocalId, span: Option<Span>) {
+        let message = if self.local_is_guard(local) {
+            match self.local_name(local) {
+                Some(name) => format!(
+                    "use of uninitialized guard `{}`; initialize the guard before using it",
+                    name
+                ),
+                None => "use of uninitialized guard value; initialize the guard before using it"
+                    .to_string(),
+            }
+        } else {
+            match (self.local_name(local), self.local_type_label(local)) {
+                (Some(name), Some(ty)) => {
+                    format!("use of uninitialized value `{}` of type `{}`", name, ty)
+                }
+                (Some(name), None) => format!("use of uninitialized value `{}`", name),
+                (None, Some(ty)) => format!("use of uninitialized value of type `{}`", ty),
+                (None, None) => "use of uninitialized value".to_string(),
+            }
+        };
+        self.error(message, span);
+    }
+
     fn type_has_drop_glue(ty: &Type) -> bool {
         match ty {
             Type::Own(_) | Type::Shared(_) | Type::String | Type::Enum(_) => true,
@@ -327,6 +376,77 @@ impl<'a> LowerCtx<'a> {
             Type::Named(_) => true,
             _ => false,
         }
+    }
+
+    fn type_is_guard(ty: &Type) -> bool {
+        match ty {
+            Type::Named(name) => {
+                let leaf = name.rsplit("::").next().unwrap_or(name);
+                leaf.ends_with("Guard")
+            }
+            _ => false,
+        }
+    }
+
+    fn type_label(ty: &Type) -> String {
+        match ty {
+            Type::I8 => "i8".to_string(),
+            Type::I32 => "i32".to_string(),
+            Type::I64 => "i64".to_string(),
+            Type::U8 => "u8".to_string(),
+            Type::U32 => "u32".to_string(),
+            Type::U64 => "u64".to_string(),
+            Type::Usize => "usize".to_string(),
+            Type::F32 => "f32".to_string(),
+            Type::F64 => "f64".to_string(),
+            Type::Bool => "bool".to_string(),
+            Type::Char => "char".to_string(),
+            Type::Str => "str".to_string(),
+            Type::String => "String".to_string(),
+            Type::Void => "()".to_string(),
+            Type::Named(name) | Type::Enum(name) | Type::Param(name) => name.clone(),
+            Type::App { base, args } => {
+                if args.is_empty() {
+                    return base.clone();
+                }
+                let rendered_args: Vec<String> = args.iter().map(Self::type_label).collect();
+                format!("{}<{}>", base, rendered_args.join(", "))
+            }
+            Type::Ref(inner, glyph_core::types::Mutability::Immutable) => {
+                format!("&{}", Self::type_label(inner))
+            }
+            Type::Ref(inner, glyph_core::types::Mutability::Mutable) => {
+                format!("&mut {}", Self::type_label(inner))
+            }
+            Type::Array(elem, size) => format!("[{}; {}]", Self::type_label(elem), size),
+            Type::Own(inner) => format!("Own<{}>", Self::type_label(inner)),
+            Type::RawPtr(inner) => format!("RawPtr<{}>", Self::type_label(inner)),
+            Type::Shared(inner) => format!("Shared<{}>", Self::type_label(inner)),
+            Type::Tuple(elements) => {
+                if elements.is_empty() {
+                    "()".to_string()
+                } else {
+                    let rendered: Vec<String> = elements.iter().map(Self::type_label).collect();
+                    format!("({})", rendered.join(", "))
+                }
+            }
+        }
+    }
+
+    fn local_name(&self, local: LocalId) -> Option<&str> {
+        self.locals
+            .get(local.0 as usize)
+            .and_then(|local| local.name.as_deref())
+    }
+
+    fn local_type_label(&self, local: LocalId) -> Option<String> {
+        self.local_ty(local).map(Self::type_label)
+    }
+
+    pub(crate) fn local_is_guard(&self, local: LocalId) -> bool {
+        self.local_ty(local)
+            .map(Self::type_is_guard)
+            .unwrap_or(false)
     }
 
     /// Mark a MirValue's source local as Moved if it has drop glue.
@@ -406,13 +526,13 @@ impl<'a> LowerCtx<'a> {
             return true; // Always allow reuse
         }
 
-        if !self.local_needs_drop(local) {
+        if !self.local_uses_ownership_tracking(local) {
             return true;
         }
         let idx = local.0 as usize;
         match self.local_states.get(idx) {
             Some(LocalState::Moved) => {
-                self.error("use of moved value", span);
+                self.emit_use_of_moved_local(local, span);
                 false
             }
             Some(LocalState::Initialized) => {
@@ -422,7 +542,7 @@ impl<'a> LowerCtx<'a> {
                 true
             }
             _ => {
-                self.error("use of uninitialized ownership pointer", span);
+                self.emit_use_of_uninitialized_local(local, span);
                 if let Some(state) = self.local_states.get_mut(idx) {
                     *state = LocalState::Moved;
                 }

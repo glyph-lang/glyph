@@ -1,4 +1,4 @@
-use glyph_frontend::{compile_source, FrontendOptions};
+use glyph_frontend::{FrontendOptions, compile_source};
 
 #[test]
 fn vec_get_returns_ref_option() {

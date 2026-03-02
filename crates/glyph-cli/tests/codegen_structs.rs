@@ -5,7 +5,7 @@ use std::path::Path;
 
 use glyph_backend::llvm::LlvmBackend;
 use glyph_backend::{Backend, CodegenOptions, EmitKind};
-use glyph_frontend::{compile_source, FrontendOptions};
+use glyph_frontend::{FrontendOptions, compile_source};
 
 fn load_fixture(name: &str) -> String {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/codegen");

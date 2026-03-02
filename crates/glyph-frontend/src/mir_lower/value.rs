@@ -60,7 +60,10 @@ pub(crate) fn infer_numeric_result_type(
 ) -> Option<Type> {
     fn type_for_value(v: &MirValue, ctx: &LowerCtx) -> (Option<Type>, bool) {
         match v {
-            MirValue::Local(id) => (ctx.locals.get(id.0 as usize).and_then(|l| l.ty.clone()), false),
+            MirValue::Local(id) => (
+                ctx.locals.get(id.0 as usize).and_then(|l| l.ty.clone()),
+                false,
+            ),
             MirValue::Int(_) => (None, true), // untyped literal: defer to the other operand
             MirValue::Bool(_) | MirValue::Unit => (None, false),
         }

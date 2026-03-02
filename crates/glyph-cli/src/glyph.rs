@@ -13,14 +13,14 @@ use glyph_backend::{
     codegen::CodegenContext,
     linker::{Linker, LinkerOptions},
 };
-use glyph_frontend::{compile_modules, FrontendOptions};
 use glyph_core::ast::Module;
+use glyph_frontend::{FrontendOptions, compile_modules};
 
 mod module_loader;
 use module_loader::{discover_and_parse_modules, module_id_from_path};
 
 mod diagnostics;
-use diagnostics::{format_diagnostic, SourceInfo};
+use diagnostics::{SourceInfo, format_diagnostic};
 
 mod dependency;
 use dependency::{load_dependency_modules, resolve_dependencies};

@@ -105,14 +105,14 @@ pub(crate) fn lower_string_as_str<'a>(
     };
 
     let Some(local) = ctx.bindings.get(name.0.as_str()).copied() else {
-        ctx.error(format!("unknown identifier '{}'", name.0), Some(*ident_span));
+        ctx.error(
+            format!("unknown identifier '{}'", name.0),
+            Some(*ident_span),
+        );
         return None;
     };
 
-    let receiver_ty = ctx
-        .locals
-        .get(local.0 as usize)
-        .and_then(|l| l.ty.clone());
+    let receiver_ty = ctx.locals.get(local.0 as usize).and_then(|l| l.ty.clone());
     let is_string = matches!(receiver_ty.as_ref(), Some(Type::String | Type::Str))
         || matches!(receiver_ty.as_ref(), Some(Type::Ref(inner, _)) if matches!(inner.as_ref(), Type::String | Type::Str));
     if !is_string {
@@ -121,14 +121,14 @@ pub(crate) fn lower_string_as_str<'a>(
     }
 
     let prev_state = ctx.local_states.get(local.0 as usize).copied();
-    if ctx.local_needs_drop(local) {
+    if ctx.local_uses_ownership_tracking(local) {
         match prev_state {
             Some(LocalState::Moved) => {
-                ctx.error("use of moved value", Some(*ident_span));
+                ctx.emit_use_of_moved_local(local, Some(*ident_span));
                 return None;
             }
             Some(LocalState::Uninitialized) => {
-                ctx.error("use of uninitialized ownership pointer", Some(*ident_span));
+                ctx.emit_use_of_uninitialized_local(local, Some(*ident_span));
                 return None;
             }
             _ => {}
@@ -142,7 +142,7 @@ pub(crate) fn lower_string_as_str<'a>(
         value: Rvalue::Move(local),
     });
 
-    if ctx.local_needs_drop(local) {
+    if ctx.local_uses_ownership_tracking(local) {
         if let Some(state) = prev_state {
             ctx.local_states[local.0 as usize] = state;
         }

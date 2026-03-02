@@ -1,9 +1,9 @@
-pub mod span;
-pub mod diag;
 pub mod ast;
+pub mod diag;
+pub mod mir;
+pub mod span;
 pub mod token;
 pub mod types;
-pub mod mir;
 
 #[cfg(test)]
 mod tests {
@@ -99,7 +99,7 @@ mod tests {
         if let Expr::StructLit { name, fields, .. } = expr {
             assert_eq!(name.0, "Point");
             assert_eq!(fields.len(), 2);
-            assert_eq!(fields[0].0 .0, "x");
+            assert_eq!(fields[0].0.0, "x");
         } else {
             panic!("Expected StructLit");
         }

@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use glyph_frontend::{compile_source, FrontendOptions};
+use glyph_frontend::{FrontendOptions, compile_source};
 use insta::assert_debug_snapshot;
 
 fn run_fixture(name: &str) -> String {
@@ -359,10 +359,11 @@ fn mir_break_outside_loop() {
         },
     );
     assert!(!out.diagnostics.is_empty());
-    assert!(out
-        .diagnostics
-        .iter()
-        .any(|d| d.message.contains("outside of loop")));
+    assert!(
+        out.diagnostics
+            .iter()
+            .any(|d| d.message.contains("outside of loop"))
+    );
 }
 
 #[test]
@@ -376,10 +377,11 @@ fn mir_continue_outside_loop() {
         },
     );
     assert!(!out.diagnostics.is_empty());
-    assert!(out
-        .diagnostics
-        .iter()
-        .any(|d| d.message.contains("outside of loop")));
+    assert!(
+        out.diagnostics
+            .iter()
+            .any(|d| d.message.contains("outside of loop"))
+    );
 }
 
 #[test]
@@ -393,10 +395,11 @@ fn mir_if_void_condition_reports_error() {
         },
     );
     assert!(!out.diagnostics.is_empty());
-    assert!(out
-        .diagnostics
-        .iter()
-        .any(|d| d.message.contains("condition expression has void type")));
+    assert!(
+        out.diagnostics
+            .iter()
+            .any(|d| d.message.contains("condition expression has void type"))
+    );
 }
 
 #[test]
@@ -433,6 +436,45 @@ fn mir_for_nested() {
         FrontendOptions {
             emit_mir: true,
             include_std: false,
+        },
+    );
+    assert_debug_snapshot!(out.mir);
+}
+
+#[test]
+fn mir_for_continue() {
+    let src = run_fixture("for_continue.glyph");
+    let out = compile_source(
+        &src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: false,
+        },
+    );
+    assert_debug_snapshot!(out.mir);
+}
+
+#[test]
+fn mir_for_in_vec_struct() {
+    let src = run_fixture("for_in_vec_struct.glyph");
+    let out = compile_source(
+        &src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: true,
+        },
+    );
+    assert_debug_snapshot!(out.mir);
+}
+
+#[test]
+fn mir_for_in_vec_enum() {
+    let src = run_fixture("for_in_vec_enum.glyph");
+    let out = compile_source(
+        &src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: true,
         },
     );
     assert_debug_snapshot!(out.mir);

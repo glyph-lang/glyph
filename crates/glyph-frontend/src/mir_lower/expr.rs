@@ -378,11 +378,7 @@ fn lower_binary<'a>(
     let lhs_val = lower_value(ctx, lhs)?;
     let lhs_ty = infer_value_type(&lhs_val, ctx);
     let rhs_expected = if let Some(ty) = &lhs_ty {
-        if ty.is_int() {
-            Some(ty.clone())
-        } else {
-            None
-        }
+        if ty.is_int() { Some(ty.clone()) } else { None }
     } else {
         None
     };

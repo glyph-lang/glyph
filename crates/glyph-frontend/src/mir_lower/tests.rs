@@ -1,11 +1,11 @@
 use super::*;
-use crate::resolver::{resolve_types, ResolverContext};
-use crate::{compile_source, FrontendOptions};
+use crate::resolver::{ResolverContext, resolve_types};
+use crate::{FrontendOptions, compile_source};
 use glyph_core::ast::{
     BinaryOp, Block, EnumDef, EnumVariantDef, Expr, FieldDef, Function, Ident, Item, Literal,
     MatchArm, MatchPattern, Module, Param, Stmt, StructDef, TypeExpr,
 };
-use glyph_core::mir::{MirInst, MirValue, Rvalue};
+use glyph_core::mir::{LocalId, MirInst, MirValue, Rvalue};
 use glyph_core::span::Span;
 use glyph_core::types::{Mutability, Type};
 
@@ -127,10 +127,12 @@ fn lowers_function_to_mir_with_return() {
     let (mir, diags) = lower_module(&module, &ResolverContext::default());
     assert!(diags.is_empty(), "unexpected diagnostics: {:?}", diags);
     assert_eq!(mir.functions.len(), 1);
-    assert!(mir.functions[0]
-        .blocks
-        .iter()
-        .any(|b| matches!(b.insts.last(), Some(MirInst::Return(_)))));
+    assert!(
+        mir.functions[0]
+            .blocks
+            .iter()
+            .any(|b| matches!(b.insts.last(), Some(MirInst::Return(_))))
+    );
 }
 
 #[test]
@@ -761,9 +763,11 @@ fn lowers_assignment_statements_to_mir() {
         })
         .collect();
 
-    assert!(assigns
-        .iter()
-        .any(|(local, value)| { local.0 == 0 && matches!(value, Rvalue::ConstInt(2)) }));
+    assert!(
+        assigns
+            .iter()
+            .any(|(local, value)| { local.0 == 0 && matches!(value, Rvalue::ConstInt(2)) })
+    );
 }
 
 #[test]
@@ -1242,4 +1246,176 @@ fn match_expression_allows_diverging_arm() {
     "#;
 
     compile_ok(src);
+}
+
+fn compile_with_std(src: &str) -> crate::FrontendOutput {
+    compile_source(
+        src,
+        FrontendOptions {
+            emit_mir: true,
+            include_std: true,
+        },
+    )
+}
+
+fn main_fn_from_output(out: &crate::FrontendOutput) -> &glyph_core::mir::MirFunction {
+    out.mir
+        .functions
+        .iter()
+        .find(|f| f.name == "main")
+        .expect("main function should exist")
+}
+
+fn local_id_by_name(func: &glyph_core::mir::MirFunction, name: &str) -> LocalId {
+    func.locals
+        .iter()
+        .enumerate()
+        .find_map(|(idx, local)| {
+            (local.name.as_deref() == Some(name)).then_some(LocalId(idx as u32))
+        })
+        .unwrap_or_else(|| panic!("missing local named '{}'", name))
+}
+
+fn has_drop_followed_by_goto(func: &glyph_core::mir::MirFunction, local: LocalId) -> bool {
+    func.blocks.iter().any(|block| {
+        block.insts.windows(2).any(|pair| {
+            matches!(pair[0], MirInst::Drop(id) if id == local)
+                && matches!(pair[1], MirInst::Goto(_))
+        })
+    })
+}
+
+#[test]
+fn guard_drops_before_return_in_reverse_order() {
+    let src = r#"
+        struct UiSessionGuard { token: String }
+
+        fn main() -> i32 {
+          let first = UiSessionGuard { token: String::from_str("a") }
+          let second = UiSessionGuard { token: String::from_str("b") }
+          ret 0
+        }
+    "#;
+
+    let out = compile_with_std(src);
+    assert!(
+        out.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        out.diagnostics
+    );
+
+    let main = main_fn_from_output(&out);
+    let first_local = local_id_by_name(main, "first");
+    let second_local = local_id_by_name(main, "second");
+    let insts = &main.blocks[0].insts;
+
+    let second_drop_idx = insts
+        .iter()
+        .position(|inst| matches!(inst, MirInst::Drop(id) if *id == second_local))
+        .expect("missing drop for `second`");
+    let first_drop_idx = insts
+        .iter()
+        .position(|inst| matches!(inst, MirInst::Drop(id) if *id == first_local))
+        .expect("missing drop for `first`");
+    let ret_idx = insts
+        .iter()
+        .position(|inst| matches!(inst, MirInst::Return(_)))
+        .expect("missing return");
+
+    assert!(
+        second_drop_idx < first_drop_idx,
+        "guards must drop in reverse declaration order"
+    );
+    assert!(
+        first_drop_idx < ret_idx,
+        "guard drops must be emitted before return"
+    );
+}
+
+#[test]
+fn guard_drops_before_break() {
+    let src = r#"
+        struct UiSessionGuard { token: String }
+
+        fn main() -> i32 {
+          let mut i: i32 = 0
+          while i < 3 {
+            let session = UiSessionGuard { token: String::from_str("loop") }
+            if i == 1 { break }
+            i = i + 1
+          }
+          ret 0
+        }
+    "#;
+
+    let out = compile_with_std(src);
+    assert!(
+        out.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        out.diagnostics
+    );
+
+    let main = main_fn_from_output(&out);
+    let session_local = local_id_by_name(main, "session");
+    assert!(
+        has_drop_followed_by_goto(main, session_local),
+        "expected guard drop before break goto"
+    );
+}
+
+#[test]
+fn guard_drops_before_continue() {
+    let src = r#"
+        struct UiSessionGuard { token: String }
+
+        fn main() -> i32 {
+          let mut i: i32 = 0
+          while i < 4 {
+            let session = UiSessionGuard { token: String::from_str("loop") }
+            if i == 1 {
+              i = i + 1
+              cont
+            }
+            i = i + 1
+          }
+          ret 0
+        }
+    "#;
+
+    let out = compile_with_std(src);
+    assert!(
+        out.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        out.diagnostics
+    );
+
+    let main = main_fn_from_output(&out);
+    let session_local = local_id_by_name(main, "session");
+    assert!(
+        has_drop_followed_by_goto(main, session_local),
+        "expected guard drop before continue goto"
+    );
+}
+
+#[test]
+fn guard_double_move_reports_clear_error() {
+    let src = r#"
+        struct UiSessionGuard { token: String }
+
+        fn main() -> i32 {
+          let session = UiSessionGuard { token: String::from_str("ui") }
+          let _moved = session
+          let _moved_again = session
+          ret 0
+        }
+    "#;
+
+    let out = compile_with_std(src);
+    assert!(
+        out.diagnostics
+            .iter()
+            .any(|d| d.message.contains("use of moved guard `session`")),
+        "expected moved-guard diagnostic, got: {:?}",
+        out.diagnostics
+    );
 }

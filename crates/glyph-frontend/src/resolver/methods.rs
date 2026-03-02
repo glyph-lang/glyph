@@ -8,7 +8,7 @@ use glyph_core::{
 
 use crate::method_symbols::interface_method_symbol;
 
-use super::{type_expr_to_string, MethodInfo, ResolverContext, SelfKind, InterfaceImplState};
+use super::{InterfaceImplState, MethodInfo, ResolverContext, SelfKind, type_expr_to_string};
 
 pub fn detect_self_kind(param_ty: &Option<TypeExpr>) -> SelfKind {
     match param_ty {

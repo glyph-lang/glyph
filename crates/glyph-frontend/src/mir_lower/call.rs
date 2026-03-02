@@ -12,9 +12,8 @@ use super::builtins::{
     lower_own_from_raw, lower_own_into_raw, lower_own_new, lower_print_builtin, lower_shared_clone,
     lower_shared_new, lower_string_as_str, lower_string_clone, lower_string_concat,
     lower_string_ends_with, lower_string_from, lower_string_len, lower_string_slice,
-    lower_string_split, lower_string_starts_with, lower_string_trim, lower_vec_get,
-    lower_vec_len, lower_vec_pop,
-    lower_vec_push, lower_vec_static_new, lower_vec_static_with_capacity,
+    lower_string_split, lower_string_starts_with, lower_string_trim, lower_vec_get, lower_vec_len,
+    lower_vec_pop, lower_vec_push, lower_vec_static_new, lower_vec_static_with_capacity,
 };
 use super::context::{LocalState, LowerCtx};
 use super::expr::{lower_array_len, lower_value, lower_value_with_expected};
@@ -35,7 +34,10 @@ fn consume_call_local(ctx: &mut LowerCtx<'_>, value: &MirValue, span: Span) {
     // App types (Vec/Map). At call sites these are passed by value
     // (shallow copy), so the callee will drop its copy. Mark as Moved
     // to prevent the caller from also dropping → double-free.
-    if matches!(ctx.local_states.get(local.0 as usize), Some(LocalState::Initialized)) {
+    if matches!(
+        ctx.local_states.get(local.0 as usize),
+        Some(LocalState::Initialized)
+    ) {
         if let Some(ty) = ctx.local_ty(*local) {
             if matches!(ty, Type::Named(_) | Type::App { .. }) {
                 if let Some(state) = ctx.local_states.get_mut(local.0 as usize) {

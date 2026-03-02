@@ -69,56 +69,17 @@ fn build_and_run_exit_code(source: &str) -> i32 {
 
 #[cfg(all(feature = "codegen", unix))]
 #[test]
-fn early_return_if_then_runtime() {
+fn for_range_break_and_bounds() {
     let source = r#"
-        from std/string import byte_at
-
         fn main() -> i32 {
-          let s = String::from_str("abc")
-          if false { ret 9 }
-          let s_ref: str = s
-          if s_ref.len() != 3 { ret 1 }
-          if byte_at(s_ref, 2) != 99 { ret 2 }
-          ret 0
-        }
-    "#;
-
-    assert_eq!(build_and_run_exit_code(source), 0);
-}
-
-#[cfg(all(feature = "codegen", unix))]
-#[test]
-fn early_return_if_else_runtime() {
-    let source = r#"
-        from std/string import byte_at
-
-        fn main() -> i32 {
-          let s = String::from_str("xy")
-          if true { } else { ret 7 }
-          let s_ref: str = s
-          if s_ref.len() != 2 { ret 1 }
-          if byte_at(s_ref, 0) != 120 { ret 2 }
-          ret 0
-        }
-    "#;
-
-    assert_eq!(build_and_run_exit_code(source), 0);
-}
-
-#[cfg(all(feature = "codegen", unix))]
-#[test]
-fn early_return_nested_if_runtime() {
-    let source = r#"
-        from std/string import byte_at
-
-        fn main() -> i32 {
-          let s = String::from_str("nest")
-          if true {
-            if false { ret 3 }
+          let mut acc: i32 = 0
+          for i in 0..10 {
+            if i > 7 { break }
+            if i % 2 == 1 {
+              acc = acc + i
+            }
           }
-          let s_ref: str = s
-          if s_ref.len() != 4 { ret 1 }
-          if byte_at(s_ref, 3) != 116 { ret 2 }
+          if acc != 16 { ret 1 }
           ret 0
         }
     "#;
@@ -128,42 +89,105 @@ fn early_return_nested_if_runtime() {
 
 #[cfg(all(feature = "codegen", unix))]
 #[test]
-fn early_return_if_expr_runtime() {
+fn for_range_continue_runs_increment_path() {
     let source = r#"
-        from std/string import byte_at
-
         fn main() -> i32 {
-          let s = String::from_str("ok")
-          let v = if false { ret 4 } else { 2 }
-          if v != 2 { ret 1 }
-          let s_ref: str = s
-          if byte_at(s_ref, 1) != 107 { ret 2 }
-          ret 0
-        }
-    "#;
-
-    assert_eq!(build_and_run_exit_code(source), 0);
-}
-
-#[cfg(all(feature = "codegen", unix))]
-#[test]
-fn early_return_match_arm_runtime() {
-    let source = r#"
-        from std/string import byte_at
-
-        enum Flag { A, B }
-
-        fn main() -> i32 {
-          let s = String::from_str("hi")
-          let flag = B()
-          let v = match flag {
-            A => { ret 3 }
-            B => 1
+          let mut acc: i32 = 0
+          for i in 0..8 {
+            if i % 2 == 0 { cont }
+            acc = acc + i
           }
-          if v != 1 { ret 1 }
-          let s_ref: str = s
-          if s_ref.len() != 2 { ret 2 }
-          if byte_at(s_ref, 1) != 105 { ret 3 }
+          if acc != 16 { ret 1 }
+          ret 0
+        }
+    "#;
+
+    assert_eq!(build_and_run_exit_code(source), 0);
+}
+
+#[cfg(all(feature = "codegen", unix))]
+#[test]
+fn for_in_vec_struct_unpacks_fields() {
+    let source = r#"
+        struct Pair { left: i32, right: i32 }
+
+        fn main() -> i32 {
+          let mut pairs: Vec<Pair> = Vec::new()
+          pairs.push(Pair { left: 1, right: 2 })
+          pairs.push(Pair { left: 3, right: 4 })
+          pairs.push(Pair { left: 5, right: 6 })
+
+          let mut sum: i32 = 0
+          for pair in pairs {
+            sum = sum + pair.left
+            sum = sum + pair.right
+          }
+
+          if sum != 21 { ret 1 }
+          ret 0
+        }
+    "#;
+
+    assert_eq!(build_and_run_exit_code(source), 0);
+}
+
+#[cfg(all(feature = "codegen", unix))]
+#[test]
+fn for_in_vec_struct_continue_runs_index_increment() {
+    let source = r#"
+        struct Pair { left: i32, right: i32 }
+
+        fn main() -> i32 {
+          let mut pairs: Vec<Pair> = Vec::new()
+          pairs.push(Pair { left: 0, right: 10 })
+          pairs.push(Pair { left: 1, right: 11 })
+          pairs.push(Pair { left: 2, right: 12 })
+          pairs.push(Pair { left: 3, right: 13 })
+
+          let mut sum: i32 = 0
+          for pair in pairs {
+            if pair.left % 2 == 0 { cont }
+            sum = sum + pair.right
+          }
+
+          if sum != 24 { ret 1 }
+          ret 0
+        }
+    "#;
+
+    assert_eq!(build_and_run_exit_code(source), 0);
+}
+
+#[cfg(all(feature = "codegen", unix))]
+#[test]
+fn for_in_vec_enum_unpacks_match_payloads() {
+    let source = r#"
+        struct Pair { left: i32, right: i32 }
+
+        enum Item {
+          Scalar(i32)
+          PairValue(Pair)
+          Skip
+        }
+
+        fn main() -> i32 {
+          let mut items: Vec<Item> = Vec::new()
+          items.push(Scalar(2))
+          items.push(PairValue(Pair { left: 3, right: 4 }))
+          items.push(Skip())
+          items.push(Scalar(5))
+
+          let mut sum: i32 = 0
+          for item in items {
+            let value = match item {
+              Scalar(v) => v,
+              PairValue(p) => p.left + p.right,
+              Skip => 0,
+            }
+            sum = sum + value
+          }
+
+          if sum != 14 { ret 1 }
           ret 0
         }
     "#;

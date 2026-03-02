@@ -22,24 +22,24 @@ fn resolve_builtin_target(ctx: &mut LowerCtx<'_>, key: &str, span: Span) -> Opti
     }
 }
 
-fn lower_print_value<'a>(
-    ctx: &mut LowerCtx<'a>,
-    expr: &'a Expr,
-) -> Option<MirValue> {
+fn lower_print_value<'a>(ctx: &mut LowerCtx<'a>, expr: &'a Expr) -> Option<MirValue> {
     match expr {
         Expr::Ident(name, ident_span) => {
             let Some(local) = ctx.bindings.get(name.0.as_str()).copied() else {
-                ctx.error(format!("unknown identifier '{}'", name.0), Some(*ident_span));
+                ctx.error(
+                    format!("unknown identifier '{}'", name.0),
+                    Some(*ident_span),
+                );
                 return None;
             };
-            if ctx.local_needs_drop(local) {
+            if ctx.local_uses_ownership_tracking(local) {
                 match ctx.local_states.get(local.0 as usize) {
                     Some(LocalState::Moved) => {
-                        ctx.error("use of moved value", Some(*ident_span));
+                        ctx.emit_use_of_moved_local(local, Some(*ident_span));
                         return None;
                     }
                     Some(LocalState::Uninitialized) => {
-                        ctx.error("use of uninitialized ownership pointer", Some(*ident_span));
+                        ctx.emit_use_of_uninitialized_local(local, Some(*ident_span));
                         return None;
                     }
                     _ => {}

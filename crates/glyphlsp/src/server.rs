@@ -6,7 +6,7 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
-use glyph_frontend::{compile_source, FrontendOptions};
+use glyph_frontend::{FrontendOptions, compile_source};
 
 use crate::diagnostics::glyph_diagnostic_to_lsp;
 use crate::document::DocumentState;
@@ -54,9 +54,7 @@ impl GlyphLanguageServer {
         .await
         .unwrap_or_default();
 
-        self.client
-            .publish_diagnostics(uri, lsp_diags, None)
-            .await;
+        self.client.publish_diagnostics(uri, lsp_diags, None).await;
     }
 
     async fn debounced_compile(&self, uri: Url) {
@@ -106,10 +104,7 @@ impl LanguageServer for GlyphLanguageServer {
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri.clone();
-        let doc = DocumentState::new(
-            params.text_document.text,
-            params.text_document.version,
-        );
+        let doc = DocumentState::new(params.text_document.text, params.text_document.version);
         self.documents.insert(uri.clone(), doc);
         self.compile_and_publish(uri).await;
     }
@@ -126,11 +121,7 @@ impl LanguageServer for GlyphLanguageServer {
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         let uri = params.text_document.uri;
         if let Some(text) = params.text {
-            let version = self
-                .documents
-                .get(&uri)
-                .map(|d| d.version)
-                .unwrap_or(0);
+            let version = self.documents.get(&uri).map(|d| d.version).unwrap_or(0);
             let doc = DocumentState::new(text, version);
             self.documents.insert(uri.clone(), doc);
         }
@@ -140,8 +131,6 @@ impl LanguageServer for GlyphLanguageServer {
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
         self.documents.remove(&uri);
-        self.client
-            .publish_diagnostics(uri, vec![], None)
-            .await;
+        self.client.publish_diagnostics(uri, vec![], None).await;
     }
 }

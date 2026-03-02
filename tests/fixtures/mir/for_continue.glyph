@@ -1,0 +1,10 @@
+fn main() -> i32 {
+  let mut acc: i32 = 0
+  for i in 0..8 {
+    if i % 2 == 0 {
+      cont
+    }
+    acc = acc + i
+  }
+  ret acc
+}

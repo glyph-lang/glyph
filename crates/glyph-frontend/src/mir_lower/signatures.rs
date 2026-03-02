@@ -314,7 +314,8 @@ pub(crate) fn collect_function_signatures(
                             );
                             signatures.insert(key, sig);
 
-                            if func.name.0.contains("::") && !signatures.contains_key(&func.name.0) {
+                            if func.name.0.contains("::") && !signatures.contains_key(&func.name.0)
+                            {
                                 let sig = resolve_fn_sig(
                                     resolver,
                                     &mut diagnostics,

@@ -175,7 +175,11 @@ impl CodegenContext {
                             unsafe {
                                 let llvm_ty = self.get_llvm_type(ty)?;
                                 let signed = matches!(ty, Type::I8 | Type::I32 | Type::I64);
-                                return Ok(LLVMConstInt(llvm_ty, *i as u64, if signed { 1 } else { 0 }));
+                                return Ok(LLVMConstInt(
+                                    llvm_ty,
+                                    *i as u64,
+                                    if signed { 1 } else { 0 },
+                                ));
                             }
                         }
                     }

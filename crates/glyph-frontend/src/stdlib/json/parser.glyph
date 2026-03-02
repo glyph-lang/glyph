@@ -158,13 +158,24 @@ fn parse_number(p: &mut Parser) -> ParseResult<JsonValue> {
   if i >= len {
     ret Err(ParseError { message: String::from_str("expected digit"), position: i })
   }
-  if is_digit(byte_at(input, i)) {
-    // ok
-  } else {
+
+  let first = byte_at(input, i)
+  if is_digit(first) == false {
     ret Err(ParseError { message: String::from_str("expected digit"), position: i })
   }
 
-  i = parse_digits(input, len, i)
+  // JSON numbers cannot contain leading zeros (except the single digit "0").
+  if first == 48 {
+    i = i + 1
+    if i < len && is_digit(byte_at(input, i)) {
+      ret Err(ParseError {
+        message: String::from_str("leading zeros are not allowed"),
+        position: i,
+      })
+    }
+  } else {
+    i = parse_digits(input, len, i + 1)
+  }
 
   // fraction
   if i < len && byte_at(input, i) == 46 {
@@ -323,9 +334,9 @@ fn parse_string(p: &mut Parser) -> ParseResult<String> {
         }
         let code: i32 = hex.value
 
-          if code == 0 {
-            ret Err(make_parse_error(String::from_str("nul escape unsupported"), esc_pos))
-          }
+        if code == 0 {
+          ret Err(make_parse_error(String::from_str("nul escape unsupported"), esc_pos))
+        }
 
         if code >= 55296 && code <= 56319 {
           if i + 11 >= len {
@@ -347,6 +358,12 @@ fn parse_string(p: &mut Parser) -> ParseResult<String> {
           let high: i32 = code - 55296
           let low_adj: i32 = low - 56320
           let codepoint: i32 = 65536 + (high * 1024) + low_adj
+          if codepoint > 127 {
+            ret Err(make_parse_error(
+              String::from_str("non-ascii unicode escape unsupported"),
+              esc_pos,
+            ))
+          }
           segments = push_utf8_codepoint(segments, codepoint)
           i = i + 12
           seg_start = i
@@ -355,6 +372,13 @@ fn parse_string(p: &mut Parser) -> ParseResult<String> {
 
         if code >= 56320 && code <= 57343 {
           ret Err(make_parse_error(String::from_str("invalid unicode surrogate"), esc_pos))
+        }
+
+        if code > 127 {
+          ret Err(make_parse_error(
+            String::from_str("non-ascii unicode escape unsupported"),
+            esc_pos,
+          ))
         }
 
         segments = push_utf8_codepoint(segments, code)

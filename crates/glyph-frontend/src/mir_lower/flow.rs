@@ -195,8 +195,7 @@ pub(crate) fn lower_block_with_expected<'a>(
             Stmt::Continue(span) => {
                 if let Some(loop_ctx) = ctx.current_loop().cloned() {
                     ctx.drop_scopes_after_depth(loop_ctx.scope_depth);
-                    let header = loop_ctx.header;
-                    ctx.push_inst(MirInst::Goto(header));
+                    ctx.push_inst(MirInst::Goto(loop_ctx.continue_target));
                 } else {
                     ctx.error("continue statement outside of loop", Some(*span));
                     ctx.push_inst(MirInst::Nop);
@@ -654,9 +653,14 @@ pub(crate) fn lower_for<'a>(
         ctx.push_inst(MirInst::Nop);
     }
 
-    // Create blocks for while loop structure
+    // Create loop blocks:
+    // - header: range condition
+    // - body_bb: user body
+    // - continue_bb: increment + back edge (continue target)
+    // - exit_bb: loop exit
     let header_block = ctx.new_block();
     let body_bb = ctx.new_block();
+    let continue_bb = ctx.new_block();
     let exit_bb = ctx.new_block();
 
     // Jump to header
@@ -690,55 +694,58 @@ pub(crate) fn lower_for<'a>(
     let base_states = ctx.local_states.clone();
     let mut merged_states = base_states.clone();
 
-    // Body: execute loop body and increment
+    // Body: execute loop body
     ctx.switch_to(body_bb);
-    ctx.enter_loop(header_block, exit_bb);
+    ctx.enter_loop(continue_bb, exit_bb);
     let _ = lower_block(ctx, body_block);
     ctx.exit_loop();
 
-    // Increment: var = var + 1
+    // Fallthrough path runs increment.
+    // `continue` statements also jump directly to continue_bb.
     let body_terminated = ctx.terminated();
-    if !body_terminated {
-        let inc_temp = ctx.fresh_local(None);
-        let var_ty = ctx.locals[var_local.0 as usize].ty.clone();
-        ctx.locals[inc_temp.0 as usize].ty = var_ty.clone();
-        // Create a typed increment value matching the loop variable type
-        let inc_val = if let Some(ty) = &var_ty {
-            if ty.is_int() && *ty != Type::I32 {
-                let one_tmp = ctx.fresh_local(None);
-                ctx.locals[one_tmp.0 as usize].ty = Some(ty.clone());
-                ctx.push_inst(MirInst::Assign {
-                    local: one_tmp,
-                    value: Rvalue::ConstInt(1),
-                });
-                MirValue::Local(one_tmp)
-            } else {
-                MirValue::Int(1)
-            }
-        } else {
-            MirValue::Int(1)
-        };
-        ctx.push_inst(MirInst::Assign {
-            local: inc_temp,
-            value: Rvalue::Binary {
-                op: glyph_core::ast::BinaryOp::Add,
-                lhs: var_val.clone(),
-                rhs: inc_val,
-            },
-        });
-        ctx.push_inst(MirInst::Assign {
-            local: var_local,
-            value: Rvalue::Move(inc_temp),
-        });
-        ctx.push_inst(MirInst::Goto(header_block));
-    }
-
     let body_returns = ctx
         .blocks
         .get(ctx.current.0 as usize)
         .and_then(|block| block.insts.last())
         .map(|inst| matches!(inst, MirInst::Return(_)))
         .unwrap_or(false);
+    if !body_terminated {
+        ctx.push_inst(MirInst::Goto(continue_bb));
+    }
+
+    ctx.switch_to(continue_bb);
+    let inc_temp = ctx.fresh_local(None);
+    let var_ty = ctx.locals[var_local.0 as usize].ty.clone();
+    ctx.locals[inc_temp.0 as usize].ty = var_ty.clone();
+    // Create a typed increment value matching the loop variable type
+    let inc_val = if let Some(ty) = &var_ty {
+        if ty.is_int() && *ty != Type::I32 {
+            let one_tmp = ctx.fresh_local(None);
+            ctx.locals[one_tmp.0 as usize].ty = Some(ty.clone());
+            ctx.push_inst(MirInst::Assign {
+                local: one_tmp,
+                value: Rvalue::ConstInt(1),
+            });
+            MirValue::Local(one_tmp)
+        } else {
+            MirValue::Int(1)
+        }
+    } else {
+        MirValue::Int(1)
+    };
+    ctx.push_inst(MirInst::Assign {
+        local: inc_temp,
+        value: Rvalue::Binary {
+            op: glyph_core::ast::BinaryOp::Add,
+            lhs: var_val.clone(),
+            rhs: inc_val,
+        },
+    });
+    ctx.push_inst(MirInst::Assign {
+        local: var_local,
+        value: Rvalue::Move(inc_temp),
+    });
+    ctx.push_inst(MirInst::Goto(header_block));
 
     if !body_returns {
         merge_local_states(
@@ -831,9 +838,14 @@ pub(crate) fn lower_for_in<'a>(
         value: len_rvalue,
     });
 
-    // 5. Create loop blocks
+    // 5. Create loop blocks:
+    // - header: bounds check
+    // - body_bb: bind element + user body
+    // - continue_bb: index increment + back edge (continue target)
+    // - exit_bb: loop exit
     let header_block = ctx.new_block();
     let body_bb = ctx.new_block();
+    let continue_bb = ctx.new_block();
     let exit_bb = ctx.new_block();
 
     if !ctx.terminated() {
@@ -862,9 +874,9 @@ pub(crate) fn lower_for_in<'a>(
     let base_states = ctx.local_states.clone();
     let mut merged_states = base_states.clone();
 
-    // 7. Body: let x = collection[_i]; body; _i = _i + 1
+    // 7. Body: let x = collection[_i]; body
     ctx.switch_to(body_bb);
-    ctx.enter_loop(header_block, exit_bb);
+    ctx.enter_loop(continue_bb, exit_bb);
 
     // Bind loop variable
     let var_local = ctx.fresh_local(Some(&var.0));
@@ -901,38 +913,42 @@ pub(crate) fn lower_for_in<'a>(
     let _ = lower_block(ctx, body_block);
     ctx.exit_loop();
 
-    // Increment: _i = _i + 1
+    // Fallthrough path runs increment.
+    // `continue` statements also jump directly to continue_bb.
     let body_terminated = ctx.terminated();
-    if !body_terminated {
-        let one_tmp = ctx.fresh_local(None);
-        ctx.locals[one_tmp.0 as usize].ty = Some(Type::Usize);
-        ctx.push_inst(MirInst::Assign {
-            local: one_tmp,
-            value: Rvalue::ConstInt(1),
-        });
-        let inc_temp = ctx.fresh_local(None);
-        ctx.locals[inc_temp.0 as usize].ty = Some(Type::Usize);
-        ctx.push_inst(MirInst::Assign {
-            local: inc_temp,
-            value: Rvalue::Binary {
-                op: glyph_core::ast::BinaryOp::Add,
-                lhs: MirValue::Local(idx_local),
-                rhs: MirValue::Local(one_tmp),
-            },
-        });
-        ctx.push_inst(MirInst::Assign {
-            local: idx_local,
-            value: Rvalue::Move(inc_temp),
-        });
-        ctx.push_inst(MirInst::Goto(header_block));
-    }
-
     let body_returns = ctx
         .blocks
         .get(ctx.current.0 as usize)
         .and_then(|block| block.insts.last())
         .map(|inst| matches!(inst, MirInst::Return(_)))
         .unwrap_or(false);
+
+    if !body_terminated {
+        ctx.push_inst(MirInst::Goto(continue_bb));
+    }
+
+    ctx.switch_to(continue_bb);
+    let one_tmp = ctx.fresh_local(None);
+    ctx.locals[one_tmp.0 as usize].ty = Some(Type::Usize);
+    ctx.push_inst(MirInst::Assign {
+        local: one_tmp,
+        value: Rvalue::ConstInt(1),
+    });
+    let inc_temp = ctx.fresh_local(None);
+    ctx.locals[inc_temp.0 as usize].ty = Some(Type::Usize);
+    ctx.push_inst(MirInst::Assign {
+        local: inc_temp,
+        value: Rvalue::Binary {
+            op: glyph_core::ast::BinaryOp::Add,
+            lhs: MirValue::Local(idx_local),
+            rhs: MirValue::Local(one_tmp),
+        },
+    });
+    ctx.push_inst(MirInst::Assign {
+        local: idx_local,
+        value: Rvalue::Move(inc_temp),
+    });
+    ctx.push_inst(MirInst::Goto(header_block));
 
     if !body_returns {
         merge_local_states(

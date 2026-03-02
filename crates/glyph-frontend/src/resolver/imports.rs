@@ -9,9 +9,8 @@ use crate::method_symbols::inherent_method_symbol;
 use crate::module_resolver::MultiModuleContext;
 
 use super::{
-    collect_type_names, find_struct_def,
-    find_enum_def, struct_type_from_def, enum_type_from_def, detect_self_kind, MethodInfo,
-    ResolverContext,
+    MethodInfo, ResolverContext, collect_type_names, detect_self_kind, enum_type_from_def,
+    find_enum_def, find_struct_def, struct_type_from_def,
 };
 
 /// Populate the resolver context with struct/enum types made available through imports.
