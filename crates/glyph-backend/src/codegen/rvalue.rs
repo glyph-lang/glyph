@@ -407,21 +407,21 @@ impl CodegenContext {
                         .payload
                         .clone();
 
-                    if let Some(val) = payload {
+                    let variant_is_unit =
+                        variant_ty.as_ref().map(Self::is_unit_type).unwrap_or(true);
+
+                    if variant_is_unit {
+                        let zero = LLVMConstInt(LLVMInt8TypeInContext(self.context), 0, 0);
+                        LLVMBuildStore(self.builder, zero, field_ptr);
+                    } else if let Some(val) = payload {
                         let llvm_val = self.codegen_value(val, func, local_map)?;
                         LLVMBuildStore(self.builder, llvm_val, field_ptr);
                     } else {
-                        let placeholder_ty = match variant_ty.as_ref() {
-                            Some(Type::Void) | None => LLVMInt8TypeInContext(self.context),
-                            Some(ty) => self.get_llvm_type(ty)?,
-                        };
-                        let zero = match variant_ty.as_ref() {
-                            Some(Type::Void) | None => LLVMConstInt(placeholder_ty, 0, 0),
-                            Some(ty) => {
-                                let llvm_ty = self.get_llvm_type(ty)?;
-                                LLVMConstNull(llvm_ty)
-                            }
-                        };
+                        let llvm_ty =
+                            self.get_llvm_type(variant_ty.as_ref().ok_or_else(|| {
+                                anyhow!("missing payload type for {}", enum_name)
+                            })?)?;
+                        let zero = LLVMConstNull(llvm_ty);
                         LLVMBuildStore(self.builder, zero, field_ptr);
                     }
 
@@ -468,7 +468,7 @@ impl CodegenContext {
                         CString::new("enum.payload.ptr")?.as_ptr(),
                     );
                     let llvm_payload_ty = match payload_type {
-                        Type::Void => LLVMInt8TypeInContext(self.context),
+                        ty if Self::is_unit_type(ty) => LLVMInt8TypeInContext(self.context),
                         _ => self.get_llvm_type(payload_type)?,
                     };
                     Ok(LLVMBuildLoad2(
@@ -872,7 +872,7 @@ impl CodegenContext {
             .get(local_id.0 as usize)
             .ok_or_else(|| anyhow!("missing local {:?}", local_id))?;
         if let Some(ty) = local.ty.as_ref() {
-            if matches!(ty, Type::Void) {
+            if Self::is_unit_type(ty) {
                 return Ok(unsafe { LLVMInt8TypeInContext(self.context) });
             }
             self.get_llvm_type(ty)

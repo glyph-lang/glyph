@@ -3,6 +3,7 @@ mod map;
 mod print;
 mod ptr;
 mod string;
+mod term;
 mod vec;
 
 pub(crate) use file::{
@@ -21,6 +22,7 @@ pub(crate) use string::{
     lower_string_from, lower_string_len, lower_string_slice, lower_string_split,
     lower_string_starts_with, lower_string_trim,
 };
+pub(crate) use term::lower_term_stdout;
 pub(crate) use vec::{
     lower_vec_get, lower_vec_len, lower_vec_pop, lower_vec_push, lower_vec_static_new,
     lower_vec_static_with_capacity,

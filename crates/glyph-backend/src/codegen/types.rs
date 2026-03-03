@@ -1,6 +1,10 @@
 use super::*;
 
 impl CodegenContext {
+    pub(super) fn is_unit_type(ty: &Type) -> bool {
+        matches!(ty, Type::Void) || matches!(ty, Type::Tuple(elem_types) if elem_types.is_empty())
+    }
+
     pub(super) fn create_named_types(&mut self, mir_module: &MirModule) -> Result<()> {
         for (name, layout) in &mir_module.struct_types {
             let name_c = CString::new(name.as_str())?;
@@ -54,11 +58,11 @@ impl CodegenContext {
             field_tys.push(unsafe { LLVMInt32TypeInContext(self.context) });
             for variant in &layout.variants {
                 let ty = if let Some(payload) = &variant.payload {
-                    match payload {
-                        Type::Void => unsafe { LLVMInt8TypeInContext(self.context) },
-                        _ => self.get_llvm_type(payload).with_context(|| {
-                            format!("in enum {} variant {}", name, variant.name)
-                        })?,
+                    if Self::is_unit_type(payload) {
+                        unsafe { LLVMInt8TypeInContext(self.context) }
+                    } else {
+                        self.get_llvm_type(payload)
+                            .with_context(|| format!("in enum {} variant {}", name, variant.name))?
                     }
                 } else {
                     unsafe { LLVMInt8TypeInContext(self.context) }
@@ -179,6 +183,10 @@ impl CodegenContext {
     }
 
     pub(super) fn ret_uses_sret(&self, ret_ty: &Type) -> Result<bool> {
+        if Self::is_unit_type(ret_ty) {
+            return Ok(false);
+        }
+
         match ret_ty {
             Type::Named(_)
             | Type::Tuple(_)

@@ -1,6 +1,10 @@
 use super::*;
 
 impl CodegenContext {
+    fn type_leaf_name(name: &str) -> &str {
+        name.rsplit("::").next().unwrap_or(name)
+    }
+
     pub(super) fn codegen_drop_local(
         &mut self,
         local: LocalId,
@@ -318,15 +322,129 @@ impl CodegenContext {
         Ok(())
     }
 
+    pub(super) fn codegen_drop_ui_session_guard_slot(
+        &mut self,
+        slot: LLVMValueRef,
+        struct_name: &str,
+    ) -> Result<()> {
+        unsafe {
+            let guard_ty = self.get_struct_type(struct_name)?;
+            let layout = self
+                .struct_layouts
+                .get(struct_name)
+                .ok_or_else(|| anyhow!("missing layout for struct {}", struct_name))?;
+
+            let terminal_field_index = layout
+                .fields
+                .iter()
+                .position(|(field_name, _)| field_name == "terminal_id")
+                .ok_or_else(|| {
+                    anyhow!(
+                        "missing 'terminal_id' field on UiSessionGuard layout '{}'",
+                        struct_name
+                    )
+                })?;
+            let active_field_index = layout
+                .fields
+                .iter()
+                .position(|(field_name, _)| field_name == "active")
+                .ok_or_else(|| {
+                    anyhow!(
+                        "missing 'active' field on UiSessionGuard layout '{}'",
+                        struct_name
+                    )
+                })?;
+
+            let terminal_ty = self.get_llvm_type(&layout.fields[terminal_field_index].1)?;
+            let active_ty = self.get_llvm_type(&layout.fields[active_field_index].1)?;
+
+            let terminal_ptr = LLVMBuildStructGEP2(
+                self.builder,
+                guard_ty,
+                slot,
+                terminal_field_index as u32,
+                CString::new("term.guard.terminal.ptr")?.as_ptr(),
+            );
+            let active_ptr = LLVMBuildStructGEP2(
+                self.builder,
+                guard_ty,
+                slot,
+                active_field_index as u32,
+                CString::new("term.guard.active.ptr")?.as_ptr(),
+            );
+            let active_val = LLVMBuildLoad2(
+                self.builder,
+                active_ty,
+                active_ptr,
+                CString::new("term.guard.active.load")?.as_ptr(),
+            );
+            let is_inactive = LLVMBuildICmp(
+                self.builder,
+                llvm_sys::LLVMIntPredicate::LLVMIntEQ,
+                active_val,
+                LLVMConstInt(active_ty, 0, 0),
+                CString::new("term.guard.inactive")?.as_ptr(),
+            );
+
+            let func = LLVMGetBasicBlockParent(LLVMGetInsertBlock(self.builder));
+            let drop_bb = LLVMAppendBasicBlockInContext(
+                self.context,
+                func,
+                CString::new("term.guard.drop")?.as_ptr(),
+            );
+            let cont_bb = LLVMAppendBasicBlockInContext(
+                self.context,
+                func,
+                CString::new("term.guard.drop.cont")?.as_ptr(),
+            );
+            LLVMBuildCondBr(self.builder, is_inactive, cont_bb, drop_bb);
+
+            LLVMPositionBuilderAtEnd(self.builder, drop_bb);
+            let end_fn = LLVMGetNamedFunction(
+                self.module,
+                CString::new("glyph_term_session_end")?.as_ptr(),
+            );
+            if !end_fn.is_null() {
+                let terminal_id = LLVMBuildLoad2(
+                    self.builder,
+                    terminal_ty,
+                    terminal_ptr,
+                    CString::new("term.guard.terminal.load")?.as_ptr(),
+                );
+                let mut args = vec![terminal_id];
+                if let Ok(fn_ty) = self.function_type_for("glyph_term_session_end") {
+                    LLVMBuildCall2(
+                        self.builder,
+                        fn_ty,
+                        end_fn,
+                        args.as_mut_ptr(),
+                        args.len() as u32,
+                        CString::new("term.guard.drop.end")?.as_ptr(),
+                    );
+                }
+            }
+            LLVMBuildStore(self.builder, LLVMConstInt(active_ty, 0, 0), active_ptr);
+            LLVMBuildBr(self.builder, cont_bb);
+
+            LLVMPositionBuilderAtEnd(self.builder, cont_bb);
+        }
+        Ok(())
+    }
+
     pub(super) fn codegen_drop_named_slot(&mut self, slot: LLVMValueRef, name: &str) -> Result<()> {
         if self.enum_layouts.contains_key(name) {
             return self.codegen_drop_enum_slot(slot, name);
         }
 
+        let leaf_name = Self::type_leaf_name(name);
+
         // Runtime-managed RAII type: ensure file handles are closed on scope exit
         // when users rely on implicit cleanup instead of explicit `close()`.
-        if name == "File" {
+        if leaf_name == "File" {
             return self.codegen_drop_file_slot(slot);
+        }
+        if leaf_name == "UiSessionGuard" {
+            return self.codegen_drop_ui_session_guard_slot(slot, name);
         }
 
         let layout = match self.struct_layouts.get(name) {

@@ -447,7 +447,7 @@ impl<'a> Parser<'a> {
                 let normalized = render_type_expr(ty).replace(' ', "");
                 let value_ty = struct_name.0.as_str();
                 let ref_ty = format!("&{}", value_ty);
-                let mutref_ty = format!("&mut {}", value_ty);
+                let mutref_ty = format!("&mut{}", value_ty);
 
                 if normalized == value_ty {
                     TypeExpr::Path {

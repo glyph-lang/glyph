@@ -103,7 +103,7 @@ impl<'a> LowerCtx<'a> {
                     if let Some(state) = self.local_states.get_mut(src.0 as usize) {
                         *state = LocalState::Moved;
                     }
-                    if src_was_moved && !self.local_needs_drop(*src) {
+                    if src_was_moved && !self.local_uses_ownership_tracking(*src) {
                         if let Some(state) = self.local_states.get_mut(local.0 as usize) {
                             *state = LocalState::Moved;
                         }
@@ -344,6 +344,14 @@ impl<'a> LowerCtx<'a> {
             }
         };
         self.error(message, span);
+        self.diagnostics.push(Diagnostic::note(
+            "Glyph uses single-owner move semantics and conservatively merges ownership across reachable control-flow paths",
+            span,
+        ));
+        self.diagnostics.push(Diagnostic::help(
+            "avoid branch-local moves before unconditional post-branch use, or reinitialize the value on every reachable branch",
+            span,
+        ));
     }
 
     pub(crate) fn emit_use_of_uninitialized_local(&mut self, local: LocalId, span: Option<Span>) {
@@ -367,6 +375,14 @@ impl<'a> LowerCtx<'a> {
             }
         };
         self.error(message, span);
+        self.diagnostics.push(Diagnostic::note(
+            "this value is not definitely initialized on all reachable paths",
+            span,
+        ));
+        self.diagnostics.push(Diagnostic::help(
+            "initialize the value on every reachable branch before use",
+            span,
+        ));
     }
 
     fn type_has_drop_glue(ty: &Type) -> bool {

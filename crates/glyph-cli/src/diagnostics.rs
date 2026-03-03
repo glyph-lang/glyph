@@ -108,4 +108,10 @@ mod tests {
         assert_eq!(line_from_span(9, &starts), 3);
         assert_eq!(line_from_span(10, &starts), 4);
     }
+
+    #[test]
+    fn severity_labels_include_note_and_help() {
+        assert_eq!(severity_label(&Severity::Note), "note");
+        assert_eq!(severity_label(&Severity::Help), "help");
+    }
 }

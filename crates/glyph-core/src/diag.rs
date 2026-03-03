@@ -36,6 +36,14 @@ impl Diagnostic {
         Self::new(message, Severity::Warning, span)
     }
 
+    pub fn note(message: impl Into<String>, span: Option<Span>) -> Self {
+        Self::new(message, Severity::Note, span)
+    }
+
+    pub fn help(message: impl Into<String>, span: Option<Span>) -> Self {
+        Self::new(message, Severity::Help, span)
+    }
+
     pub fn with_module_id(mut self, module_id: impl Into<String>) -> Self {
         self.module_id = Some(module_id.into());
         self

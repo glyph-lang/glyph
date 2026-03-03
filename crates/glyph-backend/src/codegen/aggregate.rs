@@ -65,20 +65,20 @@ impl CodegenContext {
                 .payload
                 .clone();
 
-            if let Some(val) = payload {
+            let variant_is_unit = variant_ty.as_ref().map(Self::is_unit_type).unwrap_or(true);
+
+            if variant_is_unit {
+                let zero = LLVMConstInt(LLVMInt8TypeInContext(self.context), 0, 0);
+                LLVMBuildStore(self.builder, zero, field_ptr);
+            } else if let Some(val) = payload {
                 LLVMBuildStore(self.builder, val, field_ptr);
             } else {
-                let placeholder_ty = match variant_ty.as_ref() {
-                    Some(Type::Void) | None => LLVMInt8TypeInContext(self.context),
-                    Some(ty) => self.get_llvm_type(ty)?,
-                };
-                let zero = match variant_ty.as_ref() {
-                    Some(Type::Void) | None => LLVMConstInt(placeholder_ty, 0, 0),
-                    Some(ty) => {
-                        let llvm_ty = self.get_llvm_type(ty)?;
-                        LLVMConstNull(llvm_ty)
-                    }
-                };
+                let llvm_ty = self.get_llvm_type(
+                    variant_ty
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("missing payload type for {}", enum_name))?,
+                )?;
+                let zero = LLVMConstNull(llvm_ty);
                 LLVMBuildStore(self.builder, zero, field_ptr);
             }
 

@@ -328,6 +328,38 @@ fn run(path: &PathBuf) -> Result<()> {
             "glyph_process_run".to_string(),
             glyph_process_run as usize as u64,
         );
+        symbols.insert(
+            "glyph_term_stdout".to_string(),
+            glyph_term_stdout as usize as u64,
+        );
+        symbols.insert(
+            "glyph_term_enter_ui_session".to_string(),
+            glyph_term_enter_ui_session as usize as u64,
+        );
+        symbols.insert(
+            "glyph_term_session_end".to_string(),
+            glyph_term_session_end as usize as u64,
+        );
+        symbols.insert(
+            "glyph_term_move_to".to_string(),
+            glyph_term_move_to as usize as u64,
+        );
+        symbols.insert(
+            "glyph_term_clear_line".to_string(),
+            glyph_term_clear_line as usize as u64,
+        );
+        symbols.insert(
+            "glyph_term_write_str".to_string(),
+            glyph_term_write_str as usize as u64,
+        );
+        symbols.insert(
+            "glyph_term_flush".to_string(),
+            glyph_term_flush as usize as u64,
+        );
+        symbols.insert(
+            "glyph_term_poll_event".to_string(),
+            glyph_term_poll_event as usize as u64,
+        );
 
         let exit = ctx.jit_execute_i32_with_symbols("main", &symbols)?;
         if exit != 0 {
@@ -500,6 +532,72 @@ pub extern "C" fn glyph_process_run(cmd: *const std::ffi::c_char, args: GlyphVec
 #[unsafe(no_mangle)]
 pub extern "C" fn glyph_process_run(_cmd: *const std::ffi::c_char, _args: GlyphVec) -> i32 {
     -(libc::ENOSYS as i32)
+}
+
+#[cfg(feature = "codegen")]
+static mut GLYPH_TERM_ACTIVE_SESSION: i32 = 0;
+
+#[cfg(feature = "codegen")]
+#[unsafe(no_mangle)]
+pub extern "C" fn glyph_term_stdout() -> i32 {
+    1
+}
+
+#[cfg(feature = "codegen")]
+#[unsafe(no_mangle)]
+pub extern "C" fn glyph_term_enter_ui_session(term_id: i32) -> i32 {
+    if term_id != 1 {
+        return -2;
+    }
+    unsafe {
+        if GLYPH_TERM_ACTIVE_SESSION != 0 {
+            return -1;
+        }
+        GLYPH_TERM_ACTIVE_SESSION = 1;
+    }
+    0
+}
+
+#[cfg(feature = "codegen")]
+#[unsafe(no_mangle)]
+pub extern "C" fn glyph_term_session_end(term_id: i32) -> i32 {
+    if term_id != 1 {
+        return -2;
+    }
+    unsafe {
+        GLYPH_TERM_ACTIVE_SESSION = 0;
+    }
+    0
+}
+
+#[cfg(feature = "codegen")]
+#[unsafe(no_mangle)]
+pub extern "C" fn glyph_term_move_to(term_id: i32, _row: u32, _col: u32) -> i32 {
+    if term_id != 1 { -2 } else { 0 }
+}
+
+#[cfg(feature = "codegen")]
+#[unsafe(no_mangle)]
+pub extern "C" fn glyph_term_clear_line(term_id: i32) -> i32 {
+    if term_id != 1 { -2 } else { 0 }
+}
+
+#[cfg(feature = "codegen")]
+#[unsafe(no_mangle)]
+pub extern "C" fn glyph_term_write_str(term_id: i32, _s: *const std::ffi::c_char) -> i32 {
+    if term_id != 1 { -2 } else { 0 }
+}
+
+#[cfg(feature = "codegen")]
+#[unsafe(no_mangle)]
+pub extern "C" fn glyph_term_flush(term_id: i32) -> i32 {
+    if term_id != 1 { -2 } else { 0 }
+}
+
+#[cfg(feature = "codegen")]
+#[unsafe(no_mangle)]
+pub extern "C" fn glyph_term_poll_event(term_id: i32, _timeout_ms: u32) -> i32 {
+    if term_id != 1 { -2 } else { 0 }
 }
 
 #[cfg(test)]

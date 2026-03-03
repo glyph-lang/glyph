@@ -12,8 +12,9 @@ use super::builtins::{
     lower_own_from_raw, lower_own_into_raw, lower_own_new, lower_print_builtin, lower_shared_clone,
     lower_shared_new, lower_string_as_str, lower_string_clone, lower_string_concat,
     lower_string_ends_with, lower_string_from, lower_string_len, lower_string_slice,
-    lower_string_split, lower_string_starts_with, lower_string_trim, lower_vec_get, lower_vec_len,
-    lower_vec_pop, lower_vec_push, lower_vec_static_new, lower_vec_static_with_capacity,
+    lower_string_split, lower_string_starts_with, lower_string_trim, lower_term_stdout,
+    lower_vec_get, lower_vec_len, lower_vec_pop, lower_vec_push, lower_vec_static_new,
+    lower_vec_static_with_capacity,
 };
 use super::context::{LocalState, LowerCtx};
 use super::expr::{lower_array_len, lower_value, lower_value_with_expected};
@@ -543,6 +544,7 @@ fn lower_static_builtin_with_expected<'a>(
         "Own::new" => lower_own_new(ctx, args, span),
         "Own::from_raw" => lower_own_from_raw(ctx, args, span),
         "Shared::new" => lower_shared_new(ctx, args, span),
+        "Terminal::stdout" => lower_term_stdout(ctx, args, span),
         "Vec::new" => lower_vec_static_new(ctx, args, span, expected_ret),
         "Vec::with_capacity" => lower_vec_static_with_capacity(ctx, args, span, expected_ret),
         "Map::new" => lower_map_static_new(ctx, args, span, expected_ret),

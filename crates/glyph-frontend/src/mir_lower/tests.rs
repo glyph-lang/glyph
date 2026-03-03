@@ -5,6 +5,7 @@ use glyph_core::ast::{
     BinaryOp, Block, EnumDef, EnumVariantDef, Expr, FieldDef, Function, Ident, Item, Literal,
     MatchArm, MatchPattern, Module, Param, Stmt, StructDef, TypeExpr,
 };
+use glyph_core::diag::Severity;
 use glyph_core::mir::{LocalId, MirInst, MirValue, Rvalue};
 use glyph_core::span::Span;
 use glyph_core::types::{Mutability, Type};
@@ -1418,4 +1419,96 @@ fn guard_double_move_reports_clear_error() {
         "expected moved-guard diagnostic, got: {:?}",
         out.diagnostics
     );
+    assert!(
+        out.diagnostics.iter().any(|d| {
+            d.severity == Severity::Note && d.message.contains("single-owner move semantics")
+        }),
+        "expected ownership note diagnostic, got: {:?}",
+        out.diagnostics
+    );
+    assert!(
+        out.diagnostics.iter().any(|d| {
+            d.severity == Severity::Help && d.message.contains("reinitialize the value")
+        }),
+        "expected ownership help diagnostic, got: {:?}",
+        out.diagnostics
+    );
+}
+
+#[test]
+fn uninitialized_value_reports_note_and_help() {
+    let src = r#"
+        fn main() -> i32 {
+          let mut s: String
+          if true {
+            s = String::from_str("hello")
+          }
+
+          let t = s
+          let t_ref: str = t
+          ret t_ref.len()
+        }
+    "#;
+
+    let out = compile_with_std(src);
+    assert!(
+        out.diagnostics
+            .iter()
+            .any(|d| d.message.contains("use of uninitialized value `s`")),
+        "expected uninitialized-value diagnostic, got: {:?}",
+        out.diagnostics
+    );
+    assert!(
+        out.diagnostics.iter().any(|d| {
+            d.severity == Severity::Note
+                && d.message
+                    .contains("not definitely initialized on all reachable paths")
+        }),
+        "expected uninitialized note diagnostic, got: {:?}",
+        out.diagnostics
+    );
+    assert!(
+        out.diagnostics.iter().any(|d| {
+            d.severity == Severity::Help
+                && d.message
+                    .contains("initialize the value on every reachable branch before use")
+        }),
+        "expected uninitialized help diagnostic, got: {:?}",
+        out.diagnostics
+    );
+}
+
+#[test]
+fn std_term_api_smoke_compiles() {
+    let src = r#"
+        from std/term import KeyCode, Terminal
+        from std/term import TermError
+        from std/enums import Option, Result
+
+        fn run() -> Result<i32, TermError> {
+          let mut t = Terminal::stdout()
+          let _session = t.enter_ui_session()?
+          let _move = t.move_to(1, 2)?
+          let _clear = t.clear_line()?
+          let _write = t.write_str("hello")?
+          let _flush = t.flush()?
+
+          let event = t.poll_event(0)
+          let _code = match event {
+            Some(_ev) => 1
+            None => 0
+          }
+
+          ret Ok(0)
+        }
+
+        fn main() -> i32 {
+          ret match run() {
+            Ok(v) => v
+            Err(_e) => 1
+          }
+        }
+    "#;
+
+    compile_ok(src);
 }

@@ -1,0 +1,146 @@
+from std/enums import Option
+from std/enums import Result
+
+extern "C" fn glyph_term_enter_ui_session(term_id: i32) -> i32;
+extern "C" fn glyph_term_stdout() -> i32;
+extern "C" fn glyph_term_session_end(term_id: i32) -> i32;
+extern "C" fn glyph_term_move_to(term_id: i32, row: u32, col: u32) -> i32;
+extern "C" fn glyph_term_clear_line(term_id: i32) -> i32;
+extern "C" fn glyph_term_write_str(term_id: i32, s: str) -> i32;
+extern "C" fn glyph_term_flush(term_id: i32) -> i32;
+extern "C" fn glyph_term_poll_event(term_id: i32, timeout_ms: u32) -> i32;
+
+struct TermError {
+  message: String
+  code: i32
+}
+
+enum KeyCode {
+  Char(char)
+  Enter
+  Esc
+  Up
+  Down
+  Left
+  Right
+  Backspace
+}
+
+struct KeyEvent {
+  code: KeyCode
+  ctrl: bool
+  alt: bool
+  shift: bool
+}
+
+fn term_error(msg: str, code: i32) -> TermError {
+  ret TermError {
+    message: String::from_str(msg),
+    code: code,
+  }
+}
+
+fn map_key_code(raw: i32) -> Option<KeyCode> {
+  if raw == 13 {
+    ret Some(KeyCode::Enter())
+  }
+  if raw == 27 {
+    ret Some(KeyCode::Esc())
+  }
+  if raw == 1001 {
+    ret Some(KeyCode::Up())
+  }
+  if raw == 1002 {
+    ret Some(KeyCode::Down())
+  }
+  if raw == 1003 {
+    ret Some(KeyCode::Left())
+  }
+  if raw == 1004 {
+    ret Some(KeyCode::Right())
+  }
+  if raw == 127 {
+    ret Some(KeyCode::Backspace())
+  }
+
+  ret None()
+}
+
+struct Terminal {
+  id: i32
+
+  fn enter_ui_session(self: &mut Terminal) -> Result<UiSessionGuard, TermError> {
+    let rc = glyph_term_enter_ui_session(self.id)
+    if rc != 0 {
+      ret Err(term_error("failed to enter terminal UI session", rc))
+    }
+
+    ret Ok(UiSessionGuard {
+      terminal_id: self.id,
+      active: 1,
+    })
+  }
+
+  fn move_to(self: &mut Terminal, row: u32, col: u32) -> Result<(), TermError> {
+    let rc = glyph_term_move_to(self.id, row, col)
+    if rc != 0 {
+      ret Err(term_error("failed to move terminal cursor", rc))
+    }
+    ret Ok(())
+  }
+
+  fn clear_line(self: &mut Terminal) -> Result<(), TermError> {
+    let rc = glyph_term_clear_line(self.id)
+    if rc != 0 {
+      ret Err(term_error("failed to clear terminal line", rc))
+    }
+    ret Ok(())
+  }
+
+  fn write_str(self: &mut Terminal, s: str) -> Result<(), TermError> {
+    let rc = glyph_term_write_str(self.id, s)
+    if rc != 0 {
+      ret Err(term_error("failed to write terminal output", rc))
+    }
+    ret Ok(())
+  }
+
+  fn flush(self: &mut Terminal) -> Result<(), TermError> {
+    let rc = glyph_term_flush(self.id)
+    if rc != 0 {
+      ret Err(term_error("failed to flush terminal output", rc))
+    }
+    ret Ok(())
+  }
+
+  fn poll_event(self: &mut Terminal, timeout_ms: u32) -> Option<KeyEvent> {
+    let raw = glyph_term_poll_event(self.id, timeout_ms)
+    if raw <= 0 {
+      ret None()
+    }
+
+    let mapped = map_key_code(raw)
+    ret match mapped {
+      Some(code) => Some(KeyEvent {
+        code: code,
+        ctrl: false,
+        alt: false,
+        shift: false,
+      }),
+      None => None(),
+    }
+  }
+}
+
+struct UiSessionGuard {
+  terminal_id: i32
+  active: i32
+
+  fn is_active(self: &UiSessionGuard) -> bool {
+    ret self.active != 0
+  }
+
+  fn terminal(self: &UiSessionGuard) -> i32 {
+    ret self.terminal_id
+  }
+}
