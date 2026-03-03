@@ -143,6 +143,7 @@ This is not the final language spec, but these features are working now (see `ex
 - File I/O via `std::io::File`
 - JSON parsing via `std/json/parser`
 - Command-line arguments via `std::sys::argv`
+- Terminal I/O via `std/term` (raw mode, echo control, cursor visibility)
 - Standard output: `std::print`, `std::println` with formatting
 
 **Cases and Dependencies**
