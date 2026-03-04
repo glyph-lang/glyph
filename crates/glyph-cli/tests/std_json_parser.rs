@@ -663,12 +663,6 @@ fn std_json_parser_hardening_invalid_matrix() {
           if c13 != 0 { ret 23 }
           let c14 = expect_err_pos_msg("\"\\u12\"", 1, 55332458)
           if c14 != 0 { ret 24 }
-          let c14a = expect_err_pos_msg("\"\\u00DF\"", 1, 356324073)
-          if c14a != 0 { ret 33 }
-          let c14b = expect_err_pos_msg("\"\\u4F60\"", 1, 356324073)
-          if c14b != 0 { ret 34 }
-          let c14c = expect_err_pos_msg("\"\\uD83D\\uDE03\"", 1, 356324073)
-          if c14c != 0 { ret 35 }
           let c15 = expect_err_pos_msg("\"\\uD800\"", 1, 960656384)
           if c15 != 0 { ret 25 }
           let c16 = expect_err_pos_msg("\"\\uDC00\"", 1, 960656384)
@@ -753,3 +747,478 @@ fn std_json_parser_hardening_deep_nesting() {
 
     assert_eq!(build_and_run_exit_code(&source), 0);
 }
+
+#[cfg(all(feature = "codegen", unix))]
+#[test]
+fn std_json_parser_drop_object_no_heap_corruption() {
+    let source = r#"
+        from std/json import JsonValue, ParseResult
+        from std/json/parser import parse
+
+        fn parse_and_drop() -> i32 {
+          let r = parse("{\"phase\": \"implementation\", \"version\": 1, \"name\": \"hello\"}")
+          ret match r {
+            Ok(_v) => 0,
+            Err(_e) => 1,
+          }
+        }
+
+        fn main() -> i32 {
+          let a = parse_and_drop()
+          let _b = String::from_str("post-drop allocation")
+          let _c = String::from_str("second post-drop allocation")
+          ret a
+        }
+    "#;
+
+    assert_eq!(build_and_run_exit_code(source), 0);
+}
+
+#[cfg(all(feature = "codegen", unix))]
+#[test]
+fn std_json_parser_drop_nested_object_no_heap_corruption() {
+    let source = r#"
+        from std/json import JsonValue, ParseResult
+        from std/json/parser import parse
+
+        fn main() -> i32 {
+          let r = parse("{\"version\": 1, \"project_root\": \"snake_e\", \"phase\": \"implementation\", \"opencode\": {\"bin\": \"/usr/bin/opencode\"}, \"run\": {\"max_iterations\": 200, \"iteration\": 1}}")
+          let exit = match r {
+            Ok(_v) => 0,
+            Err(_e) => 1,
+          }
+          let _probe = String::from_str("heap probe after json drop")
+          ret exit
+        }
+    "#;
+
+    assert_eq!(build_and_run_exit_code(source), 0);
+}
+
+#[cfg(all(feature = "codegen", unix))]
+#[test]
+fn std_json_parser_drop_string_escape_no_heap_corruption() {
+    let source = r#"
+        from std/json import JsonValue, ParseResult
+        from std/json/parser import parse
+
+        fn main() -> i32 {
+          let r = parse("\"hello\\nworld\\ttab\\\"quote\"")
+          let exit = match r {
+            Ok(_v) => 0,
+            Err(_e) => 1,
+          }
+          let _probe = String::from_str("heap probe")
+          ret exit
+        }
+    "#;
+
+    assert_eq!(build_and_run_exit_code(source), 0);
+}
+
+#[cfg(all(feature = "codegen", unix))]
+#[test]
+fn std_json_parser_drop_loop_no_heap_corruption() {
+    let source = r#"
+        from std/json import JsonValue, ParseResult
+        from std/json/parser import parse
+
+        fn main() -> i32 {
+          let mut i: i32 = 0
+          while i < 10 {
+            let r = parse("{\"key\": \"value\", \"n\": 42}")
+            let _ = match r {
+              Ok(_v) => 0,
+              Err(_e) => 1,
+            }
+            let _probe = String::from_str("loop probe")
+            i = i + 1
+          }
+          ret 0
+        }
+    "#;
+
+    assert_eq!(build_and_run_exit_code(source), 0);
+}
+
+#[cfg(all(feature = "codegen", unix))]
+#[test]
+fn std_json_parser_unicode() {
+    let source = r#"
+        from std/enums import Option
+        from std/json import JsonValue, ParseResult
+        from std/string import byte_at
+        from std/json/parser import parse
+
+        fn check_bytes2(input: &str, b0: u8, b1: u8) -> i32 {
+          let r = parse(input)
+          ret match r {
+            Ok(v) => match v {
+              String(s) => {
+                let sr: str = s
+                if sr.len() != 2 { ret 1 }
+                if byte_at(sr, 0) != b0 { ret 2 }
+                if byte_at(sr, 1) != b1 { ret 3 }
+                0
+              },
+              _ => 4,
+            },
+            Err(_e) => 5,
+          }
+        }
+
+        fn check_bytes3(input: &str, b0: u8, b1: u8, b2: u8) -> i32 {
+          let r = parse(input)
+          ret match r {
+            Ok(v) => match v {
+              String(s) => {
+                let sr: str = s
+                if sr.len() != 3 { ret 1 }
+                if byte_at(sr, 0) != b0 { ret 2 }
+                if byte_at(sr, 1) != b1 { ret 3 }
+                if byte_at(sr, 2) != b2 { ret 4 }
+                0
+              },
+              _ => 5,
+            },
+            Err(_e) => 6,
+          }
+        }
+
+        fn check_bytes4(input: &str, b0: u8, b1: u8, b2: u8, b3: u8) -> i32 {
+          let r = parse(input)
+          ret match r {
+            Ok(v) => match v {
+              String(s) => {
+                let sr: str = s
+                if sr.len() != 4 { ret 1 }
+                if byte_at(sr, 0) != b0 { ret 2 }
+                if byte_at(sr, 1) != b1 { ret 3 }
+                if byte_at(sr, 2) != b2 { ret 4 }
+                if byte_at(sr, 3) != b3 { ret 5 }
+                0
+              },
+              _ => 6,
+            },
+            Err(_e) => 7,
+          }
+        }
+
+        fn main() -> i32 {
+          // U+00DF = ß (2-byte UTF-8: 0xC3 0x9F)
+          let c0 = check_bytes2("\"\\u00DF\"", 195, 159)
+          if c0 != 0 { ret 10 + c0 }
+
+          // U+4F60 = 你 (3-byte UTF-8: 0xE4 0xBD 0xA0)
+          let c1 = check_bytes3("\"\\u4F60\"", 228, 189, 160)
+          if c1 != 0 { ret 20 + c1 }
+
+          // U+1F603 = surrogate pair (4-byte UTF-8: 0xF0 0x9F 0x98 0x83)
+          let c2 = check_bytes4("\"\\uD83D\\uDE03\"", 240, 159, 152, 131)
+          if c2 != 0 { ret 30 + c2 }
+
+          ret 0
+        }
+    "#;
+
+    assert_eq!(build_and_run_exit_code(source), 0);
+}
+
+#[cfg(all(feature = "codegen", unix))]
+#[test]
+fn std_json_parser_accessors() {
+    let source = r#"
+        from std/enums import Option
+        from std/json import JsonValue, ParseResult
+        from std/map import Map
+        from std/vec import Vec
+        from std/json/parser import parse, json_get_string, json_get_number, json_get_bool, json_is_null, json_get_array, json_get_object
+
+        fn test_get_string() -> i32 {
+          let r = parse("\"hello\"")
+          ret match r {
+            Ok(v) => {
+              let s = json_get_string(v)
+              match s {
+                Some(ss) => {
+                  let sr: str = ss
+                  if sr.len() != 5 { 11 } else { 0 }
+                },
+                None => 12,
+              }
+            },
+            Err(_e) => 10,
+          }
+        }
+
+        fn test_get_number() -> i32 {
+          let r = parse("42")
+          ret match r {
+            Ok(v) => {
+              let n = json_get_number(v)
+              match n {
+                Some(_nn) => 0,
+                None => 21,
+              }
+            },
+            Err(_e) => 20,
+          }
+        }
+
+        fn test_get_bool() -> i32 {
+          let r = parse("true")
+          ret match r {
+            Ok(v) => {
+              let b = json_get_bool(v)
+              match b {
+                Some(bb) => if bb == false { 31 } else { 0 },
+                None => 32,
+              }
+            },
+            Err(_e) => 30,
+          }
+        }
+
+        fn test_is_null() -> i32 {
+          let r = parse("null")
+          ret match r {
+            Ok(v) => if json_is_null(v) == false { 41 } else { 0 },
+            Err(_e) => 40,
+          }
+        }
+
+        fn test_get_string_wrong_type() -> i32 {
+          let r = parse("42")
+          ret match r {
+            Ok(v) => {
+              let s = json_get_string(v)
+              match s {
+                Some(_ss) => 51,
+                None => 0,
+              }
+            },
+            Err(_e) => 50,
+          }
+        }
+
+        fn test_get_array() -> i32 {
+          let r = parse("[1,2]")
+          ret match r {
+            Ok(v) => {
+              let a = json_get_array(v)
+              match a {
+                Some(arr) => if arr.len() != 2 { 61 } else { 0 },
+                None => 62,
+              }
+            },
+            Err(_e) => 60,
+          }
+        }
+
+        fn test_get_object() -> i32 {
+          let r = parse("{\"a\":1}")
+          ret match r {
+            Ok(v) => {
+              let o = json_get_object(v)
+              match o {
+                Some(obj) => {
+                  let has_a = obj.has(String::from_str("a"))
+                  if has_a == false { 71 } else { 0 }
+                },
+                None => 72,
+              }
+            },
+            Err(_e) => 70,
+          }
+        }
+
+        fn main() -> i32 {
+          let c0 = test_get_string()
+          if c0 != 0 { ret c0 }
+          let c1 = test_get_number()
+          if c1 != 0 { ret c1 }
+          let c2 = test_get_bool()
+          if c2 != 0 { ret c2 }
+          let c3 = test_is_null()
+          if c3 != 0 { ret c3 }
+          let c4 = test_get_string_wrong_type()
+          if c4 != 0 { ret c4 }
+          let c5 = test_get_array()
+          if c5 != 0 { ret c5 }
+          let c6 = test_get_object()
+          if c6 != 0 { ret c6 }
+          ret 0
+        }
+    "#;
+
+    assert_eq!(build_and_run_exit_code(source), 0);
+}
+
+#[cfg(all(feature = "codegen", unix))]
+#[test]
+fn std_json_parser_stringify_roundtrip() {
+    let source = r#"
+        from std/enums import Option
+        from std/json import JsonValue, ParseResult
+        from std/map import Map
+        from std/vec import Vec
+        from std/string import byte_at
+        from std/json/parser import parse, stringify, json_is_null, json_get_bool, json_get_number, json_get_string, json_get_array, json_get_object
+
+        fn str_eq(a: str, b: str) -> bool {
+          let alen = a.len()
+          let blen = b.len()
+          if alen != blen { ret false }
+          let mut i: usize = 0
+          while i < alen {
+            if byte_at(a, i) != byte_at(b, i) { ret false }
+            i = i + 1
+          }
+          ret true
+        }
+
+        fn test_stringify_null() -> i32 {
+          let r = parse("null")
+          ret match r {
+            Ok(v) => {
+              let s: str = stringify(v)
+              if str_eq(s, "null") { 0 } else { 11 }
+            },
+            Err(_e) => 10,
+          }
+        }
+
+        fn test_stringify_true() -> i32 {
+          let r = parse("true")
+          ret match r {
+            Ok(v) => {
+              let s: str = stringify(v)
+              if str_eq(s, "true") { 0 } else { 21 }
+            },
+            Err(_e) => 20,
+          }
+        }
+
+        fn test_stringify_false() -> i32 {
+          let r = parse("false")
+          ret match r {
+            Ok(v) => {
+              let s: str = stringify(v)
+              if str_eq(s, "false") { 0 } else { 31 }
+            },
+            Err(_e) => 30,
+          }
+        }
+
+        fn test_stringify_number() -> i32 {
+          let r = parse("42")
+          ret match r {
+            Ok(v) => {
+              let s = stringify(v)
+              let r2 = parse(s)
+              match r2 {
+                Ok(v2) => {
+                  let n = json_get_number(v2)
+                  match n {
+                    Some(_nn) => 0,
+                    None => 42,
+                  }
+                },
+                Err(_e2) => 41,
+              }
+            },
+            Err(_e) => 40,
+          }
+        }
+
+        fn test_stringify_string_escape() -> i32 {
+          let r = parse("\"hello\\nworld\"")
+          ret match r {
+            Ok(v) => {
+              let s = stringify(v)
+              let r2 = parse(s)
+              match r2 {
+                Ok(v2) => {
+                  let gs = json_get_string(v2)
+                  match gs {
+                    Some(ss) => {
+                      let sr: str = ss
+                      if sr.len() != 11 { 52 } else { 0 }
+                    },
+                    None => 53,
+                  }
+                },
+                Err(_e2) => 51,
+              }
+            },
+            Err(_e) => 50,
+          }
+        }
+
+        fn test_stringify_array() -> i32 {
+          let r = parse("[1,2,3]")
+          ret match r {
+            Ok(v) => {
+              let s = stringify(v)
+              let r2 = parse(s)
+              match r2 {
+                Ok(v2) => {
+                  let a = json_get_array(v2)
+                  match a {
+                    Some(arr) => if arr.len() != 3 { 62 } else { 0 },
+                    None => 63,
+                  }
+                },
+                Err(_e2) => 61,
+              }
+            },
+            Err(_e) => 60,
+          }
+        }
+
+        fn test_stringify_object() -> i32 {
+          let r = parse("{\"a\":1}")
+          ret match r {
+            Ok(v) => {
+              let s = stringify(v)
+              let r2 = parse(s)
+              match r2 {
+                Ok(v2) => {
+                  let o = json_get_object(v2)
+                  match o {
+                    Some(obj) => {
+                      let has_a = obj.has(String::from_str("a"))
+                      if has_a == false { 72 } else { 0 }
+                    },
+                    None => 73,
+                  }
+                },
+                Err(_e2) => 71,
+              }
+            },
+            Err(_e) => 70,
+          }
+        }
+
+        fn main() -> i32 {
+          let c0 = test_stringify_null()
+          if c0 != 0 { ret c0 }
+          let c1 = test_stringify_true()
+          if c1 != 0 { ret c1 }
+          let c2 = test_stringify_false()
+          if c2 != 0 { ret c2 }
+          let c3 = test_stringify_number()
+          if c3 != 0 { ret c3 }
+          let c4 = test_stringify_string_escape()
+          if c4 != 0 { ret c4 }
+          let c5 = test_stringify_array()
+          if c5 != 0 { ret c5 }
+          let c6 = test_stringify_object()
+          if c6 != 0 { ret c6 }
+          ret 0
+        }
+    "#;
+
+    assert_eq!(build_and_run_exit_code(source), 0);
+}
+

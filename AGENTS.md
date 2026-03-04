@@ -152,3 +152,4 @@ Git push command: GIT_SSH_COMMAND="ssh -i ~/.ssh/id_glyph -o IdentitiesOnly=yes"
 Utilities
 ----------
 (1) Update glyph binary: use justfile:  `just build && just install`
+(2) SSH Push to remote "the command": GIT_SSH_COMMAND="ssh -i ~/.ssh/id_glyph -o IdentitiesOnly=yes" git push origin master

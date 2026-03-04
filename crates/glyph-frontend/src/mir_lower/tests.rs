@@ -1249,6 +1249,319 @@ fn match_expression_allows_diverging_arm() {
     compile_ok(src);
 }
 
+#[test]
+fn if_branch_move_without_reinit_reports_moved() {
+    let src = r#"
+        fn main() -> i32 {
+          let s = String::from_str("hi")
+          if true {
+            let moved = s
+            let moved_ref: str = moved
+            if moved_ref.len() != 2 { ret 1 }
+          }
+          let again = s
+          let again_ref: str = again
+          ret again_ref.len()
+        }
+    "#;
+
+    let out = compile_with_std(src);
+    assert!(
+        out.diagnostics
+            .iter()
+            .any(|d| d.message.contains("use of moved value `s`")),
+        "expected moved-value diagnostic, got: {:?}",
+        out.diagnostics
+    );
+}
+
+#[test]
+fn if_branch_move_and_reinitialize_on_all_paths_allows_join_use() {
+    let src = r#"
+        fn main() -> i32 {
+          let mut s = String::from_str("seed")
+          if true {
+            let consumed = s
+            let _consumed_ref: str = consumed
+            s = String::from_str("left")
+          } else {
+            s = String::from_str("right")
+          }
+          let final_s = s
+          let final_ref: str = final_s
+          if final_ref.len() < 4 { ret 1 }
+          ret 0
+        }
+    "#;
+
+    compile_ok(src);
+}
+
+#[test]
+fn match_arm_move_without_reinit_reports_moved() {
+    let src = r#"
+        enum Flag { A, B }
+
+        fn main() -> i32 {
+          let s = String::from_str("hi")
+          let flag = A()
+          let _code = match flag {
+            A => {
+              let taken = s
+              let taken_ref: str = taken
+              if taken_ref.len() != 2 { ret 1 }
+              0
+            },
+            B => 0,
+          }
+          let again = s
+          let again_ref: str = again
+          ret again_ref.len()
+        }
+    "#;
+
+    let out = compile_with_std(src);
+    assert!(
+        out.diagnostics
+            .iter()
+            .any(|d| d.message.contains("use of moved value `s`")),
+        "expected moved-value diagnostic, got: {:?}",
+        out.diagnostics
+    );
+}
+
+#[test]
+fn match_arm_move_and_reinitialize_allows_join_use() {
+    let src = r#"
+        enum Flag { A, B }
+
+        fn main() -> i32 {
+          let mut s = String::from_str("seed")
+          let flag = A()
+          let _code = match flag {
+            A => {
+              let moved = s
+              let _moved_ref: str = moved
+              s = String::from_str("left")
+              0
+            },
+            B => {
+              s = String::from_str("right")
+              0
+            },
+          }
+          let final_s = s
+          let final_ref: str = final_s
+          if final_ref.len() < 4 { ret 1 }
+          ret 0
+        }
+    "#;
+
+    compile_ok(src);
+}
+
+#[test]
+fn control_flow_ownership_matrix_cases() {
+    enum Expected {
+        Ok,
+        DiagContains(&'static str),
+    }
+
+    struct Case {
+        name: &'static str,
+        src: &'static str,
+        expected: Expected,
+    }
+
+    let cases = [
+        Case {
+            name: "if_diverging_then_join_use_ok",
+            src: r#"
+                fn main() -> i32 {
+                  let s = String::from_str("hi")
+                  if false { ret 1 }
+                  let t = s
+                  let t_ref: str = t
+                  if t_ref.len() != 2 { ret 2 }
+                  ret 0
+                }
+            "#,
+            expected: Expected::Ok,
+        },
+        Case {
+            name: "if_move_no_else_diag_moved",
+            src: r#"
+                fn main() -> i32 {
+                  let s = String::from_str("hi")
+                  if true {
+                    let moved = s
+                    let _moved_ref: str = moved
+                  }
+                  let t = s
+                  let t_ref: str = t
+                  ret t_ref.len()
+                }
+            "#,
+            expected: Expected::DiagContains("use of moved value `s`"),
+        },
+        Case {
+            name: "if_move_reinit_both_paths_ok",
+            src: r#"
+                fn main() -> i32 {
+                  let mut s = String::from_str("seed")
+                  if true {
+                    let moved = s
+                    let _moved_ref: str = moved
+                    s = String::from_str("left")
+                  } else {
+                    s = String::from_str("right")
+                  }
+                  let t = s
+                  let t_ref: str = t
+                  if t_ref.len() < 4 { ret 1 }
+                  ret 0
+                }
+            "#,
+            expected: Expected::Ok,
+        },
+        Case {
+            name: "if_conditional_init_no_else_diag_uninitialized",
+            src: r#"
+                fn main() -> i32 {
+                  let mut s: String
+                  if true {
+                    s = String::from_str("init")
+                  }
+                  let t = s
+                  let t_ref: str = t
+                  ret t_ref.len()
+                }
+            "#,
+            expected: Expected::DiagContains("use of uninitialized value `s`"),
+        },
+        Case {
+            name: "match_diverging_arm_join_use_ok",
+            src: r#"
+                enum Flag { A, B }
+
+                fn main() -> i32 {
+                  let s = String::from_str("hi")
+                  let flag = B()
+                  let v = match flag {
+                    A => { ret 1 }
+                    B => 2
+                  }
+                  let t = s
+                  let t_ref: str = t
+                  if t_ref.len() != 2 { ret 3 }
+                  ret v
+                }
+            "#,
+            expected: Expected::Ok,
+        },
+        Case {
+            name: "match_move_one_arm_diag_moved",
+            src: r#"
+                enum Flag { A, B }
+
+                fn main() -> i32 {
+                  let s = String::from_str("hi")
+                  let flag = A()
+                  let _v = match flag {
+                    A => {
+                      let moved = s
+                      let _moved_ref: str = moved
+                      0
+                    }
+                    B => 1
+                  }
+                  let t = s
+                  let t_ref: str = t
+                  ret t_ref.len()
+                }
+            "#,
+            expected: Expected::DiagContains("use of moved value `s`"),
+        },
+        Case {
+            name: "match_reinit_both_arms_ok",
+            src: r#"
+                enum Flag { A, B }
+
+                fn main() -> i32 {
+                  let mut s = String::from_str("seed")
+                  let flag = A()
+                  let _v = match flag {
+                    A => {
+                      let moved = s
+                      let _moved_ref: str = moved
+                      s = String::from_str("left")
+                      0
+                    }
+                    B => {
+                      s = String::from_str("right")
+                      1
+                    }
+                  }
+                  let t = s
+                  let t_ref: str = t
+                  if t_ref.len() < 4 { ret 1 }
+                  ret 0
+                }
+            "#,
+            expected: Expected::Ok,
+        },
+        Case {
+            name: "nested_if_inside_match_reinit_ok",
+            src: r#"
+                enum Side { Left, Right }
+
+                fn main() -> i32 {
+                  let mut s = String::from_str("seed")
+                  let side = Left()
+                  let _v = match side {
+                    Left => {
+                      if true {
+                        s = String::from_str("left")
+                      } else {
+                        s = String::from_str("left_alt")
+                      }
+                      0
+                    }
+                    Right => {
+                      s = String::from_str("right")
+                      1
+                    }
+                  }
+                  let t = s
+                  let t_ref: str = t
+                  if t_ref.len() < 4 { ret 1 }
+                  ret 0
+                }
+            "#,
+            expected: Expected::Ok,
+        },
+    ];
+
+    for case in cases {
+        let out = compile_with_std(case.src);
+        match case.expected {
+            Expected::Ok => assert!(
+                out.diagnostics.is_empty(),
+                "case {} expected success, got diagnostics: {:?}",
+                case.name,
+                out.diagnostics
+            ),
+            Expected::DiagContains(msg) => assert!(
+                out.diagnostics.iter().any(|d| d.message.contains(msg)),
+                "case {} expected diagnostic containing {:?}, got {:?}",
+                case.name,
+                msg,
+                out.diagnostics
+            ),
+        }
+    }
+}
+
 fn compile_with_std(src: &str) -> crate::FrontendOutput {
     compile_source(
         src,
@@ -1284,6 +1597,154 @@ fn has_drop_followed_by_goto(func: &glyph_core::mir::MirFunction, local: LocalId
                 && matches!(pair[1], MirInst::Goto(_))
         })
     })
+}
+
+fn count_drop_in_goto_terminated_blocks(func: &glyph_core::mir::MirFunction, local: LocalId) -> usize {
+    func.blocks
+        .iter()
+        .filter(|block| {
+            matches!(block.insts.last(), Some(MirInst::Goto(_)))
+                && block
+                    .insts
+                    .iter()
+                    .any(|inst| matches!(inst, MirInst::Drop(id) if *id == local))
+        })
+        .count()
+}
+
+fn max_drop_count_per_block(func: &glyph_core::mir::MirFunction, local: LocalId) -> usize {
+    func.blocks
+        .iter()
+        .map(|block| {
+            block
+                .insts
+                .iter()
+                .filter(|inst| matches!(inst, MirInst::Drop(id) if *id == local))
+                .count()
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+#[test]
+fn if_else_reassign_drops_old_value_in_both_branches() {
+    let src = r#"
+        fn main() -> i32 {
+          let mut s = String::from_str("seed")
+          if true {
+            s = String::from_str("left")
+          } else {
+            s = String::from_str("right")
+          }
+          ret 0
+        }
+    "#;
+
+    let out = compile_with_std(src);
+    assert!(
+        out.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        out.diagnostics
+    );
+
+    let main = main_fn_from_output(&out);
+    let s_local = local_id_by_name(main, "s");
+    assert_eq!(
+        count_drop_in_goto_terminated_blocks(main, s_local),
+        2,
+        "expected one branch-local drop in each if/else arm"
+    );
+    assert!(
+        max_drop_count_per_block(main, s_local) <= 1,
+        "did not expect duplicate drops of `s` in a single block"
+    );
+}
+
+#[test]
+fn match_reassign_drops_old_value_in_reachable_arms() {
+    let src = r#"
+        enum Flag { A, B }
+
+        fn main() -> i32 {
+          let mut s = String::from_str("seed")
+          let flag = A()
+          let _code = match flag {
+            A => {
+              s = String::from_str("left")
+              0
+            },
+            B => {
+              s = String::from_str("right")
+              1
+            },
+          }
+          ret 0
+        }
+    "#;
+
+    let out = compile_with_std(src);
+    assert!(
+        out.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        out.diagnostics
+    );
+
+    let main = main_fn_from_output(&out);
+    let s_local = local_id_by_name(main, "s");
+    assert_eq!(
+        count_drop_in_goto_terminated_blocks(main, s_local),
+        2,
+        "expected one branch-local drop in each match arm that reaches join"
+    );
+    assert!(
+        max_drop_count_per_block(main, s_local) <= 1,
+        "did not expect duplicate drops of `s` in a single block"
+    );
+}
+
+#[test]
+fn nested_if_inside_match_does_not_double_drop_in_same_block() {
+    let src = r#"
+        enum Side { Left, Right }
+
+        fn main() -> i32 {
+          let mut s = String::from_str("seed")
+          let mut i: i32 = 0
+          while i < 2 {
+            let side = if i == 0 { Left() } else { Right() }
+            let _code = match side {
+              Left => {
+                if true {
+                  s = String::from_str("left")
+                } else {
+                  s = String::from_str("left_alt")
+                }
+                0
+              },
+              Right => {
+                s = String::from_str("right")
+                1
+              },
+            }
+            i = i + 1
+          }
+          ret 0
+        }
+    "#;
+
+    let out = compile_with_std(src);
+    assert!(
+        out.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        out.diagnostics
+    );
+
+    let main = main_fn_from_output(&out);
+    let s_local = local_id_by_name(main, "s");
+    assert!(
+        max_drop_count_per_block(main, s_local) <= 1,
+        "did not expect duplicate drops of `s` in a single block under nested control flow"
+    );
 }
 
 #[test]

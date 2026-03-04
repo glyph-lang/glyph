@@ -801,6 +801,19 @@ pub fn std_modules() -> HashMap<String, Module> {
         span,
     };
 
+    let string_from_f64_extern = ExternFunctionDecl {
+        abi: Some("C".into()),
+        name: Ident("string_from_f64".into()),
+        params: vec![Param {
+            name: Ident("value".into()),
+            ty: Some(tp("f64", span)),
+            span,
+        }],
+        ret_type: Some(tp("String", span)),
+        link_name: Some("glyph_string_from_f64".into()),
+        span,
+    };
+
     let string_char_at_extern = ExternFunctionDecl {
         abi: Some("C".into()),
         name: Ident("string_char_at".into()),
@@ -857,6 +870,7 @@ pub fn std_modules() -> HashMap<String, Module> {
             glyph_core::ast::Item::ExternFunction(string_from_byte_extern),
             glyph_core::ast::Item::ExternFunction(string_from_char_extern),
             glyph_core::ast::Item::ExternFunction(string_from_i32_extern),
+            glyph_core::ast::Item::ExternFunction(string_from_f64_extern),
             glyph_core::ast::Item::ExternFunction(string_char_at_extern),
             glyph_core::ast::Item::ExternFunction(string_index_of_extern),
         ],

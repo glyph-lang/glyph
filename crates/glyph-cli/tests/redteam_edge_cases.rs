@@ -80,6 +80,16 @@ fn build_and_run_exit_code(source: &str) -> i32 {
     }
 }
 
+#[cfg(all(feature = "codegen", unix))]
+fn assert_crashes_with_known_signal(exit_code: i32, context: &str) {
+    assert!(
+        matches!(exit_code, -6 | -11),
+        "{}: expected crash signal (-6 SIGABRT or -11 SIGSEGV), got {}",
+        context,
+        exit_code
+    );
+}
+
 // ---------------------------------------------------------------------------
 // T1: Enum with String payload constructed 100x in loop — leaked silently.
 // BUG: codegen_drop_named_slot returns Ok(()) for enums.
@@ -630,4 +640,181 @@ fn struct_with_enum_field_drop() {
     // Exits 0 but leaks — struct drop recurses into fields, but enum
     // field drop is a no-op, so the String payload leaks.
     assert_eq!(build_and_run_exit_code(source), 0);
+}
+
+// ---------------------------------------------------------------------------
+// T21: if/else branch-local struct reassignment stress.
+// Targets pre-assignment drop + join behavior under repeated branch flips.
+// ---------------------------------------------------------------------------
+#[cfg(all(feature = "codegen", unix))]
+#[test]
+fn if_else_struct_reassign_branch_stress() {
+    let source = r#"
+        struct Pair { a: String, b: String }
+
+        fn main() -> i32 {
+          let mut pair = Pair { a: String::from_str("seed"), b: String::from_str("seed") }
+          let mut i: i32 = 0
+          while i < 200 {
+            if (i % 2) == 0 {
+              pair = Pair { a: String::from_str("left"), b: String::from_str("arm") }
+            } else {
+              pair = Pair { a: String::from_str("right"), b: String::from_str("arm") }
+            }
+            i = i + 1
+          }
+          let a_ref: str = pair.a
+          if a_ref.len() < 4 { ret 1 }
+          ret 0
+        }
+    "#;
+
+    assert_eq!(build_and_run_exit_code(source), 0);
+}
+
+// ---------------------------------------------------------------------------
+// T22: match-arm struct reassignment stress.
+// Targets per-arm reassignment/drop behavior when all arms join.
+// ---------------------------------------------------------------------------
+#[cfg(all(feature = "codegen", unix))]
+#[test]
+fn match_struct_reassign_branch_stress() {
+    let source = r#"
+        enum Side { Left, Right }
+        struct Pair { a: String, b: String }
+
+        fn main() -> i32 {
+          let mut pair = Pair { a: String::from_str("seed"), b: String::from_str("seed") }
+          let mut i: i32 = 0
+          while i < 200 {
+            let side = if (i % 2) == 0 { Left() } else { Right() }
+            let _code = match side {
+              Left => {
+                pair = Pair { a: String::from_str("left"), b: String::from_str("arm") }
+                0
+              },
+              Right => {
+                pair = Pair { a: String::from_str("right"), b: String::from_str("arm") }
+                1
+              },
+            }
+            i = i + 1
+          }
+          let b_ref: str = pair.b
+          if b_ref.len() != 3 { ret 1 }
+          ret 0
+        }
+    "#;
+
+    assert_eq!(build_and_run_exit_code(source), 0);
+}
+
+// ---------------------------------------------------------------------------
+// T23: nested if-inside-match reassignment stress.
+// Targets nested control-flow join interactions for drop/reassign logic.
+// ---------------------------------------------------------------------------
+#[cfg(all(feature = "codegen", unix))]
+#[test]
+fn nested_if_inside_match_reassign_stress() {
+    let source = r#"
+        enum Side { Left, Right }
+        struct Pair { a: String, b: String }
+
+        fn main() -> i32 {
+          let mut pair = Pair { a: String::from_str("s0"), b: String::from_str("s0") }
+          let mut i: i32 = 0
+          while i < 150 {
+            let side = if (i % 2) == 0 { Left() } else { Right() }
+            let _code = match side {
+              Left => {
+                if (i % 3) == 0 {
+                  pair = Pair { a: String::from_str("l0"), b: String::from_str("aa") }
+                } else {
+                  pair = Pair { a: String::from_str("l1"), b: String::from_str("bb") }
+                }
+                0
+              },
+              Right => {
+                if (i % 5) == 0 {
+                  pair = Pair { a: String::from_str("r0"), b: String::from_str("cc") }
+                } else {
+                  pair = Pair { a: String::from_str("r1"), b: String::from_str("dd") }
+                }
+                1
+              },
+            }
+            i = i + 1
+          }
+          let a_ref: str = pair.a
+          if a_ref.len() != 2 { ret 1 }
+          ret 0
+        }
+    "#;
+
+    assert_eq!(build_and_run_exit_code(source), 0);
+}
+
+// ---------------------------------------------------------------------------
+// T24: If-split pass-by-value crash probe.
+// BUG: B5 shallow copy may crash when caller/callee both drop aliased fields.
+// ---------------------------------------------------------------------------
+#[cfg(all(feature = "codegen", unix))]
+#[test]
+#[ignore = "known B5 shallow-copy crash probe; enable when validating fixes"]
+fn struct_pass_by_value_double_free_if_branch_crash_probe() {
+    let source = r#"
+        struct TwoStrings { a: String, b: String }
+
+        fn consume(ts: TwoStrings) -> i32 {
+          let sa: str = ts.a
+          if sa.len() != 5 { ret 1 }
+          ret 0
+        }
+
+        fn main() -> i32 {
+          let ts = TwoStrings { a: String::from_str("hello"), b: String::from_str("world") }
+          let cond: bool = true
+          if cond {
+            ret consume(ts)
+          } else {
+            ret 0
+          }
+        }
+    "#;
+
+    let exit_code = build_and_run_exit_code(source);
+    assert_crashes_with_known_signal(exit_code, "if-branch pass-by-value probe");
+}
+
+// ---------------------------------------------------------------------------
+// T25: Match-split pass-by-value crash probe.
+// BUG: same B5 shallow-copy issue, triggered from match-arm join context.
+// ---------------------------------------------------------------------------
+#[cfg(all(feature = "codegen", unix))]
+#[test]
+#[ignore = "known B5 shallow-copy crash probe; enable when validating fixes"]
+fn struct_pass_by_value_double_free_match_arm_crash_probe() {
+    let source = r#"
+        enum Branch { Run, Skip }
+        struct TwoStrings { a: String, b: String }
+
+        fn consume(ts: TwoStrings) -> i32 {
+          let sa: str = ts.a
+          if sa.len() != 5 { ret 1 }
+          ret 0
+        }
+
+        fn main() -> i32 {
+          let ts = TwoStrings { a: String::from_str("hello"), b: String::from_str("world") }
+          let branch = Run()
+          let code = match branch {
+            Run => consume(ts),
+            Skip => 0,
+          }
+          ret code
+        }
+    "#;
+
+    let exit_code = build_and_run_exit_code(source);
+    assert_crashes_with_known_signal(exit_code, "match-arm pass-by-value probe");
 }

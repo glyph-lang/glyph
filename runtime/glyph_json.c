@@ -72,3 +72,13 @@ int64_t glyph_string_index_of(const char* haystack, const char* needle) {
     }
     return (int64_t)(found - haystack);
 }
+
+char* glyph_string_from_f64(double value) {
+    char buffer[32];
+    int len = snprintf(buffer, sizeof(buffer), "%.17g", value);
+    if (len < 0) return NULL;
+    char* out = (char*)malloc((size_t)len + 1);
+    if (!out) return NULL;
+    memcpy(out, buffer, (size_t)len + 1);
+    return out;
+}
