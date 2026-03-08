@@ -38,6 +38,7 @@ jobs:
           rm -rf public
           mkdir -p public/book
           cp -R docs/book/book public/book/
+          cp docs/llm-token-cost.html public/
           touch public/.nojekyll
 
       - name: Upload Pages artifact

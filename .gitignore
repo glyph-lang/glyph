@@ -3,6 +3,7 @@
 **/.DS_Store
 docs/*
 !docs/index.html
+!docs/llm-token-cost.html
 !docs/reports/
 !docs/book/
 !docs/plan/
