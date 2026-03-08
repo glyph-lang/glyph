@@ -38,7 +38,6 @@ jobs:
           rm -rf public
           mkdir -p public
           cp -R docs/book/book public/book
-          cp docs/index.html public/
           cp docs/llm-token-cost.html public/
           touch public/.nojekyll
 

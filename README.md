@@ -226,7 +226,7 @@ glyph-cli build examples/std_hello/hello.glyph --emit exe
 ## 📚 Documentation
 
 The mdBook documentation lives in `docs/book/`. Read the generated book at
-https://glyph-lang.github.io/glyph/book/book/. Build it with:
+https://glyph-lang.github.io/glyph/book/. Build it with:
 
 ```bash
 mdbook build docs/book
@@ -315,7 +315,7 @@ from my_lib import greet
 from my_lib/helpers import format_name
 ```
 
-See the [Cases and Dependencies](https://glyph-lang.github.io/glyph/book/book/cases.html) chapter in the book for the full guide.
+See the [Cases and Dependencies](https://glyph-lang.github.io/glyph/book/cases.html) chapter in the book for the full guide.
 
 ---
 
@@ -412,30 +412,10 @@ This is an experimental research project! Issues and PRs are welcome, especially
 
 ### Experimental Validation
 
-We ran a **490-experiment study** comparing LLM reasoning costs (total tokens to generate code) across 7 languages with statistical significance testing:
+We ran a study comparing LLM token costs across 8 languages (Python, Clojure, Rust, Glyph, Go, C++, Java, C) with 2 OpenAI models and 7 programming tasks. Full results and all generated code are available:
 
-**Results (Mean ± SD tokens):**
-1. 🥇 Rust: 239.7 ± 91.5
-2. 🥈 **Glyph: 242.4 ± 93.1** ✅ (statistically tied with Rust!)
-3. 🥉 Python: 255.5 ± 150.3
-4. Go: 273.9 ± 103.5
-5. C: 336.7 ± 160.2
-6. C++: 339.9 ± 180.0
-7. Java: 385.1 ± 238.2
-
-**Key Findings:**
-- ✅ **Glyph matches Rust's efficiency** despite being **much simpler** (24 keywords vs Rust's 50+)
-- ✅ **Glyph dominates error handling** — tied with Rust, but 259 tokens better than Java (p<0.001, Cohen's d = -3.09)
-- ✅ **Simplicity works** — Glyph beats all compiled languages on algorithmic tasks (fibonacci)
-- ✅ **Statistical rigor** — 7 repetitions per condition, paired t-tests, 95% CIs
-
-**The breakthrough:** Glyph proves that **radical simplicity** (fewer keywords, regular grammar, explicit error handling) achieves world-class LLM reasoning efficiency.
-
-See `experiments/llm-reasoning-cost/` for full methodology and results.
-
-### Glyph's Value Proposition
-
-Glyph demonstrates that **a language designed for predictability and regularity** can match or beat established languages for LLM code generation — while being dramatically simpler to learn and use.
+- **[LLM Token Cost Report](https://glyph-lang.github.io/glyph/llm-token-cost.html)** — interactive results page
+- **[Raw data and code](experiments/llm-reasoning-cost/)** — runner script, prompts, and generated code for all languages
 
 ---
 
