@@ -1,4 +1,3 @@
-```python
 def write_greeting(filename: str) -> str:
     try:
         with open(filename, 'w') as file:
@@ -6,4 +5,3 @@ def write_greeting(filename: str) -> str:
         return "Success"
     except Exception as e:
         return f"Error: {str(e)}"
-```

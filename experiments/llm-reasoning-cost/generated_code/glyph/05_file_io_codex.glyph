@@ -1,8 +1,24 @@
-from std/io import File, Error
+from std/io import File
+from std/enums import Err
 
-fn write_greeting(filename: &str) -> Result<(), Error> {
-  let mut f = File::create(filename)?
-  f.write("Hello from the program!")?
-  f.close()?
-  ret Ok(())
+fn write_greeting(filename: str) -> Result<i32, Err> {
+  let file = match File::create(filename) {
+    Ok(f) => f,
+    Err(e) => {
+      ret Err(e)
+    },
+  }
+
+  match file.write("Hello from the program!") {
+    Ok(_) => {}
+    Err(e) => {
+      let _ = file.close()
+      ret Err(e)
+    },
+  }
+
+  match file.close() {
+    Ok(_) => Ok(0),
+    Err(e) => Err(e),
+  }
 }

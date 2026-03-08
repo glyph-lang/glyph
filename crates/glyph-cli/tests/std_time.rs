@@ -96,3 +96,63 @@ fn std_time_human_readable_format() {
 
     assert_eq!(build_and_run_exit_code(source), 0);
 }
+
+#[cfg(all(feature = "codegen", unix))]
+#[test]
+fn std_time_sleep_ms_zero() {
+    let source = r#"
+        from std/time import sleep_ms
+
+        fn main() -> i32 {
+          let _r = sleep_ms(0)
+          ret 0
+        }
+    "#;
+
+    assert_eq!(build_and_run_exit_code(source), 0);
+}
+
+#[cfg(all(feature = "codegen", unix))]
+#[test]
+fn std_time_sleep_us_zero() {
+    let source = r#"
+        from std/time import sleep_us
+
+        fn main() -> i32 {
+          let _r = sleep_us(0)
+          ret 0
+        }
+    "#;
+
+    assert_eq!(build_and_run_exit_code(source), 0);
+}
+
+#[cfg(all(feature = "codegen", unix))]
+#[test]
+fn std_time_sleep_ms_small() {
+    let source = r#"
+        from std/time import sleep_ms
+
+        fn main() -> i32 {
+          let _r = sleep_ms(10)
+          ret 0
+        }
+    "#;
+
+    assert_eq!(build_and_run_exit_code(source), 0);
+}
+
+#[cfg(all(feature = "codegen", unix))]
+#[test]
+fn std_time_sleep_us_small() {
+    let source = r#"
+        from std/time import sleep_us
+
+        fn main() -> i32 {
+          let _r = sleep_us(5000)
+          ret 0
+        }
+    "#;
+
+    assert_eq!(build_and_run_exit_code(source), 0);
+}

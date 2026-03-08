@@ -1,21 +1,16 @@
 #include <stdint.h>
+#include <stdbool.h>
+#include <stdio.h>
 
 typedef struct {
-    int ok;
+    bool is_ok;
     int32_t value;
     const char *error;
-} Result;
+} ResultInt32;
 
-Result safe_divide(int32_t numerator, int32_t denominator) {
-    Result res;
+ResultInt32 safe_divide(int32_t numerator, int32_t denominator) {
     if (denominator == 0) {
-        res.ok = 0;
-        res.value = 0;
-        res.error = "division by zero";
-    } else {
-        res.ok = 1;
-        res.value = numerator / denominator;
-        res.error = 0;
+        return (ResultInt32){ .is_ok = false, .value = 0, .error = "division by zero" };
     }
-    return res;
+    return (ResultInt32){ .is_ok = true, .value = numerator / denominator, .error = NULL };
 }

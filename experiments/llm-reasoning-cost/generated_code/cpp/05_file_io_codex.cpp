@@ -1,20 +1,33 @@
 #include <fstream>
-#include <system_error>
 #include <string>
-#include <cerrno>
 
-std::error_code write_greeting(const std::string& filename) {
-    std::ofstream file(filename, std::ios::out | std::ios::trunc);
-    if (!file.is_open()) {
-        return std::error_code(errno, std::generic_category());
+enum class WriteError {
+    None,
+    OpenFailed,
+    WriteFailed,
+    CloseFailed
+};
+
+struct WriteResult {
+    bool ok;
+    WriteError error;
+};
+
+WriteResult write_greeting(const std::string& filename) {
+    std::ofstream out(filename, std::ios::out | std::ios::trunc);
+    if (!out.is_open()) {
+        return {false, WriteError::OpenFailed};
     }
-    file << "Hello from the program!";
-    if (!file) {
-        return std::error_code(errno, std::generic_category());
+
+    out << "Hello from the program!";
+    if (!out) {
+        return {false, WriteError::WriteFailed};
     }
-    file.close();
-    if (!file) {
-        return std::error_code(errno, std::generic_category());
+
+    out.close();
+    if (!out) {
+        return {false, WriteError::CloseFailed};
     }
-    return {};
+
+    return {true, WriteError::None};
 }

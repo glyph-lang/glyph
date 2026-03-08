@@ -1,4 +1,3 @@
-```go
 package main
 
 import "fmt"
@@ -16,4 +15,3 @@ func main() {
     fmt.Println(fib(5))  // Output: 5
     fmt.Println(fib(10)) // Output: 55
 }
-```

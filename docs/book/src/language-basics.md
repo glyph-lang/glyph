@@ -125,6 +125,183 @@ let name: str = user.name
 let owned = user.name.clone()
 ```
 
+## Methods
+
+Structs can have methods defined directly inside the struct body. The first
+parameter must be named `self` with an explicit type annotation.
+
+### Inherent Methods
+
+Methods declared directly inside a struct (without an `impl` block) are
+*inherent methods* — they belong to the struct itself:
+
+```glyph
+struct Point {
+  x: i32
+  y: i32
+
+  fn norm(self: &Point) -> i32 {
+    ret self.x * self.x + self.y * self.y
+  }
+}
+
+fn main() -> i32 {
+  let p = Point { x: 3, y: 4 }
+  ret p.norm()
+}
+```
+
+Call methods with dot notation: `p.norm()`. The compiler auto-borrows the
+receiver, so you pass a value and it becomes `&Point` automatically.
+
+### Self Parameter
+
+The `self` parameter determines how the receiver is passed:
+
+| Syntax | Meaning |
+|--------|---------|
+| `self: &Point` | Immutable borrow — reads fields but cannot mutate |
+| `self: &mut Point` | Mutable borrow — can read and write fields |
+| `self: Point` | By value — consumes the struct |
+
+The `self` type must always be written explicitly (no shorthand like `&self`).
+
+### Mutable Methods
+
+Use `&mut` when a method needs to modify the receiver:
+
+```glyph
+struct Counter {
+  value: i32
+
+  fn increment(self: &mut Counter) {
+    self.value = self.value + 1
+  }
+
+  fn get(self: &Counter) -> i32 {
+    ret self.value
+  }
+}
+```
+
+### Methods with Extra Parameters
+
+Methods can take additional parameters after `self`:
+
+```glyph
+struct Accumulator {
+  total: i32
+
+  fn add(self: &Accumulator, value: i32, weight: i32) -> i32 {
+    ret self.total + value * weight
+  }
+}
+
+fn main() -> i32 {
+  let acc = Accumulator { total: 10 }
+  ret acc.add(2, 3)
+}
+```
+
+## Interfaces
+
+Interfaces declare a set of method signatures that structs can implement.
+
+### Defining an Interface
+
+```glyph
+interface Drawable {
+  fn draw(self: &Point) -> i32;
+}
+```
+
+### Implementing an Interface
+
+Use an `impl` block inside the struct to implement the interface methods:
+
+```glyph
+interface Drawable {
+  fn draw(self: &Point) -> i32;
+}
+
+struct Point {
+  x: i32
+  y: i32
+
+  impl Drawable {
+    fn draw(self: &Point) -> i32 {
+      ret self.x + self.y
+    }
+  }
+}
+
+fn main() -> i32 {
+  let p = Point { x: 10, y: 20 }
+  ret p.draw()
+}
+```
+
+### Mixing Inherent Methods and Interface Impls
+
+A struct can have both inherent methods and interface implementations:
+
+```glyph
+interface Drawable {
+  fn draw(self: &Point) -> i32;
+}
+
+struct Point {
+  x: i32
+  y: i32
+
+  fn norm(self: &Point) -> i32 {
+    ret self.x * self.x + self.y * self.y
+  }
+
+  impl Drawable {
+    fn draw(self: &Point) -> i32 {
+      ret self.x + self.y
+    }
+  }
+}
+
+fn main() -> i32 {
+  let p = Point { x: 3, y: 4 }
+  ret p.norm() + p.draw()
+}
+```
+
+### Multiple Interfaces
+
+A struct can implement multiple interfaces with separate `impl` blocks:
+
+```glyph
+interface Drawable {
+  fn draw(self: &Point) -> i32;
+}
+
+interface Serializable {
+  fn serialize(self: &Point) -> i32;
+}
+
+struct Point {
+  x: i32
+  y: i32
+
+  impl Drawable {
+    fn draw(self: &Point) -> i32 {
+      ret self.x + self.y
+    }
+  }
+
+  impl Serializable {
+    fn serialize(self: &Point) -> i32 {
+      ret self.x * 100 + self.y
+    }
+  }
+}
+```
+
 ## Enums
 
 Enums can be simple tags or carry payload values:

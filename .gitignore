@@ -9,3 +9,4 @@ docs/*
 !docs/plan/
 !docs/todo/
 .opencode
+.env

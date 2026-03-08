@@ -1,32 +1,24 @@
-```c
 #include <stdint.h>
 #include <stdlib.h>
 
-int32_t sum_positive(const int32_t *arr, size_t len) {
-    int32_t *vec = NULL;
-    size_t size = 0, capacity = 0;
+int32_t sum_positive(const int32_t *input, size_t length) {
+    int32_t *positives = (int32_t *)malloc(length * sizeof(int32_t));
+    if (positives == NULL && length > 0) {
+        return 0;
+    }
 
-    for (size_t i = 0; i < len; i++) {
-        if (arr[i] > 0) {
-            if (size == capacity) {
-                capacity = capacity ? capacity * 2 : 4;
-                int32_t *tmp = (int32_t *)realloc(vec, capacity * sizeof(int32_t));
-                if (!tmp) {
-                    free(vec);
-                    return 0;
-                }
-                vec = tmp;
-            }
-            vec[size++] = arr[i];
+    size_t pos_count = 0;
+    for (size_t i = 0; i < length; ++i) {
+        if (input[i] > 0) {
+            positives[pos_count++] = input[i]; // push/append
         }
     }
 
     int32_t sum = 0;
-    for (size_t i = 0; i < size; i++) {
-        sum += vec[i];
+    for (size_t i = 0; i < pos_count; ++i) {
+        sum += positives[i];
     }
 
-    free(vec);
+    free(positives);
     return sum;
 }
-```

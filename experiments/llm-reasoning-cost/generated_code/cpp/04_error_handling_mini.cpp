@@ -1,6 +1,4 @@
-```cpp
 #include <iostream>
-#include <optional>
 #include <string>
 #include <variant>
 
@@ -38,4 +36,3 @@ int main() {
 
     return 0;
 }
-```

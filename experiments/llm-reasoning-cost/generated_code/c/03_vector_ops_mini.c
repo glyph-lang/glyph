@@ -1,4 +1,3 @@
-```c
 #include <stdio.h>
 
 int sum_positive(int *vec, int size) {
@@ -28,4 +27,3 @@ int main() {
     printf("Sum of positive numbers: %d\n", result);
     return 0;
 }
-```

@@ -2,17 +2,21 @@
 #include <errno.h>
 
 int write_greeting(const char *filename) {
-    FILE *f = fopen(filename, "w");
-    if (!f) return -1;
-
-    int ret = 0;
-    if (fputs("Hello from the program!", f) == EOF) {
-        ret = -1;
+    FILE *file = fopen(filename, "w");
+    if (file == NULL) {
+        return errno ? errno : -1;
     }
 
-    if (fclose(f) == EOF) {
-        ret = -1;
+    const char *text = "Hello from the program!";
+    if (fputs(text, file) == EOF) {
+        int write_err = ferror(file) ? errno : -1;
+        fclose(file);
+        return write_err;
     }
 
-    return ret;
+    if (fclose(file) != 0) {
+        return errno ? errno : -1;
+    }
+
+    return 0;
 }

@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <time.h>
 #include <stdio.h>
+#include <errno.h>
 
 uint64_t glyph_time_now(void) {
     time_t t = time(NULL);
@@ -52,4 +53,24 @@ const char* glyph_time_to_human_readable(uint64_t ts) {
     }
 
     return buffer;
+}
+
+int32_t glyph_time_sleep_ms(uint32_t ms) {
+    struct timespec ts;
+    ts.tv_sec = ms / 1000;
+    ts.tv_nsec = (long)(ms % 1000) * 1000000L;
+    if (nanosleep(&ts, NULL) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int32_t glyph_time_sleep_us(uint32_t us) {
+    struct timespec ts;
+    ts.tv_sec = us / 1000000;
+    ts.tv_nsec = (long)(us % 1000000) * 1000L;
+    if (nanosleep(&ts, NULL) != 0) {
+        return -1;
+    }
+    return 0;
 }

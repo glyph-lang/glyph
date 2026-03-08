@@ -1,11 +1,22 @@
-```glyph
 from std/io import File
-from std/io import Error
-from std import Result
+from std/enums import Err
 
-fn write_greeting(filename: &str) -> Result<(), Error> {
-  let f = File::create(filename)?    // Create/open the file
-  f.write("Hello from the program!")? // Write the greeting
-  ret Ok(())                          // Return success
+fn write_greeting(filename: str) -> Result<i32, Err> {
+  let created = File::create(filename)
+  let file = match created {
+    Ok(f) => f,
+    Err(e) => ret Err(e),
+  }
+  
+  let write_result = file.write("Hello from the program!")
+  if let Err(e) = write_result {
+    file.close()
+    ret Err(e)
+  }
+  
+  let close_result = file.close()
+  match close_result {
+    Ok(_) => Ok(0),
+    Err(e) => ret Err(e),
+  }
 }
-```

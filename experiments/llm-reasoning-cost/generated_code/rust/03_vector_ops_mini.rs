@@ -1,4 +1,3 @@
-```rust
 fn sum_positive(nums: Vec<i32>) -> i32 {
     let mut positive_numbers = Vec::new();
     
@@ -10,4 +9,3 @@ fn sum_positive(nums: Vec<i32>) -> i32 {
     
     positive_numbers.iter().sum()
 }
-```

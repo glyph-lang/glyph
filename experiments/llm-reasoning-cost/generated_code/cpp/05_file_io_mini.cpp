@@ -1,4 +1,3 @@
-```cpp
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -27,4 +26,3 @@ Result write_greeting(const std::string& filename) {
     file.close();
     return Result::Success;
 }
-```

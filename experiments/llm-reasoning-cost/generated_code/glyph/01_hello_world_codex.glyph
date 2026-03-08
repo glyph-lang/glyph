@@ -2,5 +2,5 @@ from std import println
 
 fn main() -> i32 {
   println("Hello, World!")
-  ret 0
+  0
 }

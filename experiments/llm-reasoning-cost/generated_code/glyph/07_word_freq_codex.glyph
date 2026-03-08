@@ -1,0 +1,62 @@
+from std import println
+from std/map import Map
+from std/vec import Vec
+from std/string import String
+
+struct Entry {
+  word: String
+  count: i32
+}
+
+fn count_words(text: str) -> Map<String, i32> {
+  let mut counts: Map<String, i32> = Map::new()
+  let lower = text.to_lowercase()
+  let parts = lower.split_whitespace()
+
+  for w in parts {
+    let existing = counts.get(w)
+    let next = match existing {
+      Some(v) => v + 1,
+      None => 1,
+    }
+    counts.add(w, next)
+  }
+
+  counts
+}
+
+fn print_top(counts: Map<String, i32>, n: i32) {
+  let mut entries: Vec<Entry> = Vec::new()
+
+  for (word, count) in counts {
+    entries.push(Entry { word: word, count: count })
+  }
+
+  entries.sort_by(fn(a: &Entry, b: &Entry) -> i32 {
+    if a.count > b.count {
+      -1
+    } else if a.count < b.count {
+      1
+    } else if a.word < b.word {
+      -1
+    } else if a.word > b.word {
+      1
+    } else {
+      0
+    }
+  })
+
+  let mut i = 0
+  while i < n && i < entries.len() {
+    let e = entries[i]
+    println($"  {e.count} {e.word}")
+    i = i + 1
+  }
+}
+
+fn main() -> i32 {
+  let text = "the cat sat on the mat the cat sat"
+  let counts = count_words(text)
+  print_top(counts, 5)
+  0
+}

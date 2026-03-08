@@ -1,5 +1,6 @@
-```glyph
-fn main() {
+from std import println
+
+fn main() -> i32 {
   println("Hello, World!")
+  0
 }
-```

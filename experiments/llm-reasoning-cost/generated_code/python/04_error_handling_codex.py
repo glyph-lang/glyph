@@ -1,17 +1,7 @@
-from dataclasses import dataclass
 from typing import Union
 
-@dataclass(frozen=True)
-class Ok:
-    value: int
 
-@dataclass(frozen=True)
-class Err:
-    error: str
-
-Result = Union[Ok, Err]
-
-def safe_divide(numerator: int, denominator: int) -> Result:
+def safe_divide(numerator: int, denominator: int) -> Union[int, str]:
     if denominator == 0:
-        return Err("division by zero")
-    return Ok(numerator // denominator)
+        return "division by zero"
+    return numerator // denominator

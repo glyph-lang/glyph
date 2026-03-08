@@ -1,6 +1,8 @@
 package main
 
-import "os"
+import (
+	"os"
+)
 
 func write_greeting(filename string) error {
 	f, err := os.Create(filename)
@@ -9,9 +11,9 @@ func write_greeting(filename string) error {
 	}
 	defer f.Close()
 
-	_, err = f.WriteString("Hello from the program!")
-	if err != nil {
+	if _, err := f.WriteString("Hello from the program!"); err != nil {
 		return err
 	}
+
 	return nil
 }

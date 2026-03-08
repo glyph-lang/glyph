@@ -1,4 +1,3 @@
-```cpp
 #include <vector>
 
 int sum_positive(const std::vector<int>& nums) {
@@ -16,4 +15,3 @@ int sum_positive(const std::vector<int>& nums) {
     
     return sum;
 }
-```

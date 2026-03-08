@@ -1,27 +1,25 @@
-```c
 #include <stdio.h>
 #include <stdlib.h>
 
 typedef enum {
     SUCCESS,
-    ERROR
+    FILE_ERROR
 } Result;
 
 Result write_greeting(const char *filename) {
     FILE *file = fopen(filename, "w");
     if (file == NULL) {
-        return ERROR;
+        return FILE_ERROR;
     }
 
     if (fputs("Hello from the program!\n", file) == EOF) {
         fclose(file);
-        return ERROR;
+        return FILE_ERROR;
     }
 
     if (fclose(file) != 0) {
-        return ERROR;
+        return FILE_ERROR;
     }
 
     return SUCCESS;
 }
-```

@@ -1,4 +1,3 @@
-```go
 package main
 
 import "fmt"
@@ -24,4 +23,3 @@ func main() {
     result := sum_positive(input)
     fmt.Println(result) // Output: 9
 }
-```

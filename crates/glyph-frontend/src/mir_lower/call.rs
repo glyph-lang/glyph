@@ -275,7 +275,7 @@ pub(crate) fn lower_method_call<'a>(
         "keys" => return lower_map_keys(ctx, receiver, args, span),
         "vals" => return lower_map_vals(ctx, receiver, args, span),
         "read_to_string" => return lower_file_read_to_string(ctx, receiver, args, span),
-        "write_string" => return lower_file_write_string(ctx, receiver, args, span),
+        "write_string" | "write" => return lower_file_write_string(ctx, receiver, args, span),
         "close" => return lower_file_close(ctx, receiver, args, span),
         "concat" => return lower_string_concat(ctx, receiver, args, span),
         "slice" => return lower_string_slice(ctx, receiver, args, span),

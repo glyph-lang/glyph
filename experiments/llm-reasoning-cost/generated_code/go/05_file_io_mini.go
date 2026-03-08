@@ -1,4 +1,3 @@
-```go
 package main
 
 import (
@@ -6,31 +5,35 @@ import (
 	"os"
 )
 
-func writeGreeting(filename string) error {
+type Result struct {
+	Message string
+	Error   error
+}
+
+func writeGreeting(filename string) Result {
 	file, err := os.Create(filename)
 	if err != nil {
-		return fmt.Errorf("failed to create file: %w", err)
+		return Result{"", err}
 	}
 	defer func() {
 		if closeErr := file.Close(); closeErr != nil {
-			fmt.Printf("error closing file: %v\n", closeErr)
+			err = closeErr
 		}
 	}()
 
 	_, err = file.WriteString("Hello from the program!")
 	if err != nil {
-		return fmt.Errorf("failed to write to file: %w", err)
+		return Result{"", err}
 	}
 
-	return nil
+	return Result{"File written successfully", nil}
 }
 
 func main() {
-	err := writeGreeting("output.txt")
-	if err != nil {
-		fmt.Println("Error:", err)
+	result := writeGreeting("output.txt")
+	if result.Error != nil {
+		fmt.Println("Error:", result.Error)
 	} else {
-		fmt.Println("File written successfully.")
+		fmt.Println(result.Message)
 	}
 }
-```

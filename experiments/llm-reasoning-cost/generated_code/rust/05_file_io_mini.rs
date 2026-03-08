@@ -1,4 +1,3 @@
-```rust
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::Path;
@@ -11,4 +10,3 @@ pub fn write_greeting(filename: &str) -> Result<(), io::Error> {
     
     Ok(())
 }
-```

@@ -1,4 +1,3 @@
-```go
 package main
 
 import (
@@ -22,4 +21,3 @@ func main() {
 	fmt.Println(safe_divide(7, 3))  // Output: {2 }
 	fmt.Println(safe_divide(5, 0))  // Output: {0 division by zero}
 }
-```

@@ -1,10 +1,10 @@
-#include <variant>
-#include <string>
 #include <cstdint>
+#include <string>
+#include <variant>
 
-using Result = std::variant<int32_t, std::string>;
+using DivideResult = std::variant<int32_t, std::string>;
 
-Result safe_divide(int32_t numerator, int32_t denominator) {
+DivideResult safe_divide(int32_t numerator, int32_t denominator) {
     if (denominator == 0) {
         return std::string("division by zero");
     }

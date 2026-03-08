@@ -10,12 +10,22 @@ import openai
 import os
 import json
 import csv
+import re
 import time
 import subprocess
 import tempfile
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Literal
+
+
+def strip_code_fences(code: str) -> str:
+    """Remove leading/trailing markdown code fences (e.g. ```glyph ... ```)."""
+    stripped = code.strip()
+    m = re.match(r'^```\w*\s*\n(.*?)```\s*$', stripped, re.DOTALL)
+    if m:
+        return m.group(1)
+    return code
 
 @dataclass
 class ExperimentResult:
@@ -100,6 +110,11 @@ Please write the solution in Java. Only output the code, no explanations."""
 
 Please write the solution in Python. Only output the code, no explanations."""
 
+        elif language == "clojure":
+            return f"""{task_prompt}
+
+Please write the solution in Clojure. Only output the code, no explanations."""
+
         else:
             raise ValueError(f"Unknown language: {language}")
 
@@ -170,6 +185,8 @@ Please write the solution in Python. Only output the code, no explanations."""
                 return self._validate_java(code)
             elif language == "python":
                 return self._validate_python(code)
+            elif language == "clojure":
+                return self._validate_clojure(code)
             else:
                 return False, f"Unknown language: {language}"
         except Exception as e:
@@ -177,11 +194,13 @@ Please write the solution in Python. Only output the code, no explanations."""
 
     def _validate_glyph(self, code: str) -> tuple[bool, str]:
         """Validate Glyph code by running glyph-cli check"""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.glyph', delete=False) as f:
-            f.write(code)
-            temp_file = f.name
+        # Use a dedicated temp directory so the compiler doesn't pick up
+        # stale .glyph files from /tmp
+        with tempfile.TemporaryDirectory() as tmpdir:
+            temp_file = os.path.join(tmpdir, "main.glyph")
+            with open(temp_file, 'w') as f:
+                f.write(code)
 
-        try:
             # Try to find glyph-cli
             glyph_cli = self.base_dir.parent.parent / "target" / "release" / "glyph-cli"
             if not glyph_cli.exists():
@@ -202,18 +221,17 @@ Please write the solution in Python. Only output the code, no explanations."""
             else:
                 return False, result.stderr or result.stdout
 
-        finally:
-            os.unlink(temp_file)
-
     def _validate_rust(self, code: str) -> tuple[bool, str]:
         """Validate Rust code by compiling it"""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.rs', delete=False) as f:
-            f.write(code)
-            temp_file = f.name
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src_file = os.path.join(tmpdir, "temp.rs")
+            out_file = os.path.join(tmpdir, "temp.rlib")
+            with open(src_file, 'w') as f:
+                f.write(code)
 
-        try:
             result = subprocess.run(
-                ["rustc", "--crate-type=lib", temp_file, "-o", "/dev/null"],
+                ["rustc", "--crate-type=lib", src_file, "-o", out_file,
+                 "-A", "dead_code", "-A", "unused_imports"],
                 capture_output=True,
                 text=True,
                 timeout=30
@@ -223,19 +241,17 @@ Please write the solution in Python. Only output the code, no explanations."""
                 return True, ""
             else:
                 return False, result.stderr
-
-        finally:
-            os.unlink(temp_file)
 
     def _validate_c(self, code: str) -> tuple[bool, str]:
         """Validate C code by compiling it"""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.c', delete=False) as f:
-            f.write(code)
-            temp_file = f.name
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src_file = os.path.join(tmpdir, "temp.c")
+            out_file = os.path.join(tmpdir, "temp.o")
+            with open(src_file, 'w') as f:
+                f.write(code)
 
-        try:
             result = subprocess.run(
-                ["gcc", "-c", temp_file, "-o", "/dev/null"],
+                ["gcc", "-c", src_file, "-o", out_file],
                 capture_output=True,
                 text=True,
                 timeout=30
@@ -245,19 +261,17 @@ Please write the solution in Python. Only output the code, no explanations."""
                 return True, ""
             else:
                 return False, result.stderr
-
-        finally:
-            os.unlink(temp_file)
 
     def _validate_cpp(self, code: str) -> tuple[bool, str]:
         """Validate C++ code by compiling it"""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.cpp', delete=False) as f:
-            f.write(code)
-            temp_file = f.name
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src_file = os.path.join(tmpdir, "temp.cpp")
+            out_file = os.path.join(tmpdir, "temp.o")
+            with open(src_file, 'w') as f:
+                f.write(code)
 
-        try:
             result = subprocess.run(
-                ["g++", "-c", temp_file, "-o", "/dev/null"],
+                ["g++", "-c", src_file, "-o", out_file],
                 capture_output=True,
                 text=True,
                 timeout=30
@@ -268,18 +282,26 @@ Please write the solution in Python. Only output the code, no explanations."""
             else:
                 return False, result.stderr
 
-        finally:
-            os.unlink(temp_file)
+    def _find_go(self) -> str:
+        """Find the go binary"""
+        import shutil
+        go = shutil.which("go")
+        if go:
+            return go
+        for path in ["/usr/local/go/bin/go", "/opt/homebrew/bin/go"]:
+            if os.path.isfile(path):
+                return path
+        return "go"
 
     def _validate_go(self, code: str) -> tuple[bool, str]:
-        """Validate Go code by compiling it"""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.go', delete=False) as f:
-            f.write(code)
-            temp_file = f.name
+        """Validate Go code by compiling it (vet only, no main required)"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src_file = os.path.join(tmpdir, "temp.go")
+            with open(src_file, 'w') as f:
+                f.write(code)
 
-        try:
             result = subprocess.run(
-                ["go", "build", "-o", "/dev/null", temp_file],
+                [self._find_go(), "vet", src_file],
                 capture_output=True,
                 text=True,
                 timeout=30
@@ -289,9 +311,6 @@ Please write the solution in Python. Only output the code, no explanations."""
                 return True, ""
             else:
                 return False, result.stderr
-
-        finally:
-            os.unlink(temp_file)
 
     def _validate_java(self, code: str) -> tuple[bool, str]:
         """Validate Java code by compiling it"""
@@ -343,6 +362,28 @@ Please write the solution in Python. Only output the code, no explanations."""
         finally:
             os.unlink(temp_file)
 
+    def _validate_clojure(self, code: str) -> tuple[bool, str]:
+        """Validate Clojure code by running it (compile + execute)"""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.clj', delete=False) as f:
+            f.write(code)
+            temp_file = f.name
+
+        try:
+            result = subprocess.run(
+                ["clojure", "-M", temp_file],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
+            if result.returncode == 0:
+                return True, ""
+            else:
+                return False, result.stderr
+
+        finally:
+            os.unlink(temp_file)
+
     def run_experiment(self, language: str, model: str, task: str) -> ExperimentResult:
         """Run a single experiment and return the result"""
         print(f"Running: {language:6s} | {model:25s} | {task:20s} ... ", end="", flush=True)
@@ -355,6 +396,7 @@ Please write the solution in Python. Only output the code, no explanations."""
 
         # Call API
         code, input_tokens, output_tokens = self.call_api(full_prompt, model)
+        code = strip_code_fences(code)
         total_tokens = input_tokens + output_tokens
 
         # Calculate adjusted tokens (subtract description for Glyph)
@@ -401,7 +443,8 @@ Please write the solution in Python. Only output the code, no explanations."""
             "cpp": "cpp",
             "go": "go",
             "java": "java",
-            "python": "py"
+            "python": "py",
+            "clojure": "clj"
         }
         return extensions[language]
 
@@ -437,10 +480,10 @@ Please write the solution in Python. Only output the code, no explanations."""
     def run_all(self, languages=None, models=None, tasks=None, pilot=False, repeats=1):
         """Run the full experiment matrix"""
         if languages is None:
-            languages = ["glyph", "rust", "c", "cpp", "go", "java", "python"]
+            languages = ["glyph", "rust", "c", "cpp", "go", "java", "python", "clojure"]
         if models is None:
             models = [
-                "gpt-5.2-codex",
+                "gpt-5.3-codex",
                 "gpt-4o-mini"
             ]
         if tasks is None:
@@ -449,13 +492,15 @@ Please write the solution in Python. Only output the code, no explanations."""
                 "02_fibonacci",
                 "03_vector_ops",
                 "04_error_handling",
-                "05_file_io"
+                "05_file_io",
+                "06_struct_methods",
+                "07_word_freq"
             ]
 
         if pilot:
             # Just run fibonacci with one model for testing
-            languages = ["glyph", "rust", "c", "cpp", "go", "java", "python"]
-            models = ["gpt-5.2-codex"]
+            languages = ["glyph", "rust", "c", "cpp", "go", "java", "python", "clojure"]
+            models = ["gpt-5.3-codex"]
             tasks = ["02_fibonacci"]
             repeats = 1
             print("=== PILOT MODE: Running fibonacci only ===\n")
@@ -500,7 +545,7 @@ Please write the solution in Python. Only output the code, no explanations."""
 
         # Print averages (and std dev if repeats)
         tasks = sorted(set(r.task for r in self.results))
-        languages = ["glyph", "rust", "c", "cpp", "go", "java", "python"]
+        languages = ["glyph", "rust", "c", "cpp", "go", "java", "python", "clojure"]
 
         for task in tasks:
             print(f"\n{task}:")

@@ -2,6 +2,8 @@ from std/enums import Result
 
 extern "C" fn glyph_time_now() -> u64;
 extern "C" fn glyph_time_to_human_readable(ts: u64) -> str;
+extern "C" fn glyph_time_sleep_ms(ms: u32) -> i32;
+extern "C" fn glyph_time_sleep_us(us: u32) -> i32;
 
 struct Error {
   message: String
@@ -26,4 +28,20 @@ struct Timestamp {
 
 fn get_timestamp() -> Timestamp {
   ret Timestamp { value: glyph_time_now() }
+}
+
+fn sleep_ms(ms: u32) -> Result<(), Error> {
+  let rc = glyph_time_sleep_ms(ms)
+  if rc == 0 {
+    ret Ok(())
+  }
+  ret Err(Error { message: String::from_str("sleep_ms failed") })
+}
+
+fn sleep_us(us: u32) -> Result<(), Error> {
+  let rc = glyph_time_sleep_us(us)
+  if rc == 0 {
+    ret Ok(())
+  }
+  ret Err(Error { message: String::from_str("sleep_us failed") })
 }

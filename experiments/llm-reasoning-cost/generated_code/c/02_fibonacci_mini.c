@@ -1,4 +1,3 @@
-```c
 #include <stdio.h>
 
 int fib(int n) {
@@ -15,4 +14,3 @@ int main() {
     printf("%d\n", fib(10)); // Output: 55
     return 0;
 }
-```

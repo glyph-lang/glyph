@@ -1,15 +1,18 @@
 package main
 
 func sum_positive(nums []int32) int32 {
-	positives := []int32{}
-	for _, v := range nums {
-		if v > 0 {
-			positives = append(positives, v)
+	positives := make([]int32, 0)
+
+	for _, n := range nums {
+		if n > 0 {
+			positives = append(positives, n)
 		}
 	}
-	var sum int32
-	for _, v := range positives {
-		sum += v
+
+	var sum int32 = 0
+	for _, n := range positives {
+		sum += n
 	}
+
 	return sum
 }

@@ -11,7 +11,7 @@ Glyph's simple, regular grammar should reduce the **total token cost** for LLMs 
 ### Test Matrix
 
 - **Languages:** Glyph, C, C++, Go, Java
-- **Models:** Claude Sonnet 4.5, Claude Haiku 4
+- **Models:** Claude Sonnet 4.6, Claude Haiku 4.5
 - **Tasks:** 5 programming challenges (hello world, fibonacci, vectors, error handling, file I/O)
 
 **Total:** 5 languages × 2 models × 5 tasks = **50 experiments**
@@ -97,52 +97,59 @@ The runner prints a summary showing average token costs by task and language.
 
 ## Results Summary
 
-### ✅ Experiment Complete (490 runs with statistical validation)
+### Experiment Complete (490 runs, March 4 2026 rerun)
 
-**Date:** January 17, 2026
+**Date:** March 4, 2026 (rerun of January 17, 2026 experiment)
 **Models:** gpt-5.2-codex, gpt-4o-mini
 **Languages:** 7 (Glyph, Rust, C, C++, Go, Java, Python)
-**Repetitions:** 7 per condition for statistical rigor
+**Repetitions:** 7 per condition
+
+### Changes from January Run
+
+1. **Fixed critical validation bug:** Glyph compiler was picking up stale `.glyph` temp files, causing 100% false failures. Fixed by using isolated temp directories.
+2. **Updated glyph_description.md:** Now 890 tokens (was 690) reflecting current language: methods-in-structs, range loops, enums, match, accurate stdlib.
+3. **Rebuilt compiler:** Includes all improvements since January (JSON parser V2, std/term, drop glue, etc.)
 
 ### Key Findings
 
-🎯 **Glyph ranks 2nd overall** out of 7 languages (statistically tied with Rust for 1st place!)
+**Glyph achieves 80% compilation success with gpt-5.2-codex** (28/35 runs pass `glyph-cli check`), with **100% on 4 of 5 tasks** (hello world, fibonacci, vector ops, error handling).
 
-🏆 **Glyph DOMINATES error handling** with massive effect sizes (Cohen's d > 2.0) vs C, C++, Go, Java
+**Glyph ranks 3rd overall** in token cost (tied with Go), behind Rust and Python.
 
-📊 **Overall Average Tokens (Mean ± SD):**
-1. Rust: 239.7 ± 91.5 tokens
-2. **Glyph: 242.4 ± 93.1 tokens** ✅
-3. Python: 255.5 ± 150.3 tokens
-4. Go: 273.9 ± 103.5 tokens
-5. C: 336.7 ± 160.2 tokens
-6. C++: 339.9 ± 180.0 tokens
-7. Java: 385.1 ± 238.2 tokens
+**Glyph wins error handling** outright at 281.6 tokens avg -- cheaper than all 6 other languages.
 
-### Validated Hypothesis
+**Overall Average Tokens (Mean +/- SD):**
+1. Rust: 249.5 +/- 89.2 tokens
+2. Python: 266.6 +/- 139.3 tokens
+3. **Glyph: 297.3 +/- 182.8 tokens** (80% compilation with codex)
+4. Go: 297.3 +/- 111.5 tokens
+5. C++: 354.1 +/- 180.7 tokens
+6. C: 360.2 +/- 195.3 tokens
+7. Java: 382.8 +/- 193.7 tokens
 
-✅ **Glyph achieves reasoning costs statistically equivalent to the best established languages**
+### Compilation Success Rates
 
-**Where Glyph Excels (statistically validated):**
-- Error handling (tied with Rust, p<0.001 better than all others)
-- Simple algorithms (p<0.001 better than all compiled languages)
-- File I/O (tied with Rust, Python, Go)
+| Language | codex | mini | Overall |
+|----------|-------|------|---------|
+| **Glyph** | **80%** | 0% | **40%** |
+| Java | ~50% | ~50% | 50% |
+| Python | ~50% | ~50% | 50% |
+| C++ | ~33% | ~33% | 33% |
+| C | ~30% | ~30% | 30% |
 
-**Where Glyph is Competitive:**
-- Generic collections (tied with C++, Rust, Go, Java)
-- Hello World (no significant differences)
+### Where Glyph Excels
 
-### Statistical Validation
+- **Error handling:** Cheapest language (281.6 tokens). `Result<T,E>` is dramatically more efficient for LLMs than exceptions.
+- **Simple algorithms:** 2nd cheapest for fibonacci (213.1 tokens). Beats all compiled languages.
+- **Compilation success:** 100% on 4/5 tasks with codex -- competitive with Python and Java.
 
-All results confirmed with:
-- Paired t-tests (7 repetitions per condition)
-- 95% confidence intervals
-- Cohen's d effect sizes
-- p-values < 0.05 for significant differences
+### Remaining Gap
+
+- **File I/O:** 0% success. The stdlib lacks a high-level File API (`File::create`/`write`). LLMs generate idiomatic Rust-like code that doesn't compile. Adding this API would likely bring Glyph to 100% across all tasks.
 
 ### Full Analysis
 
-See `results/processed/analysis.md` for complete statistical analysis, task-by-task breakdowns, and detailed findings.
+See `results/processed/analysis.md` for complete task-by-task breakdowns and comparison with the January run.
 
 ## File Structure
 

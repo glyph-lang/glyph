@@ -1,4 +1,3 @@
-```java
 public class Fibonacci {
     public static int fib(int n) {
         if (n < 2) {
@@ -14,4 +13,3 @@ public class Fibonacci {
         System.out.println(fib(10)); // Output: 55
     }
 }
-```

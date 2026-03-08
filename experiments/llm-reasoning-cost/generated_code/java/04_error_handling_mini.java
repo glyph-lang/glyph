@@ -1,4 +1,3 @@
-```java
 public class SafeDivide {
 
     public static Result<Integer, String> safeDivide(int numerator, int denominator) {
@@ -33,17 +32,16 @@ public class SafeDivide {
 
         public T getValue() {
             if (isError) {
-                throw new IllegalStateException("Cannot get value from an error result");
+                throw new IllegalStateException("No value present");
             }
             return value;
         }
 
         public E getError() {
             if (!isError) {
-                throw new IllegalStateException("Cannot get error from a success result");
+                throw new IllegalStateException("No error present");
             }
             return error;
         }
     }
 }
-```

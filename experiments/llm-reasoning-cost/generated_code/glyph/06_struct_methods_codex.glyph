@@ -1,0 +1,21 @@
+struct Point {
+  x: i32
+  y: i32
+
+  fn squared_mag(self: &Point) -> i32 {
+    self.x * self.x + self.y * self.y
+  }
+}
+
+fn filter_and_sum(points: Vec<Point>, max_mag: i32) -> i32 {
+  let mut total = 0
+
+  for p in points {
+    let mag = p.squared_mag()
+    if mag <= max_mag {
+      total = total + mag
+    }
+  }
+
+  total
+}

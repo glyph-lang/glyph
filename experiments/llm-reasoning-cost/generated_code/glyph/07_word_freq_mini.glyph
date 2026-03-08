@@ -1,0 +1,46 @@
+from std/map import Map
+from std/string import String
+from std import println
+
+fn count_words(text: str) -> Map<str, i32> {
+  let words = text.to_lowercase().split_whitespace()
+  let mut word_count: Map<str, i32> = Map::new()
+  
+  for word in words {
+    let count = word_count.get(word).unwrap_or(0)
+    word_count.add(word, count + 1)
+  }
+  
+  word_count
+}
+
+fn print_top(word_count: Map<str, i32>, n: i32) {
+  let mut entries: Vec<(str, i32)> = Vec::new()
+  
+  for (word, count) in word_count {
+    entries.push((word, count))
+  }
+  
+  entries.sort_by(|a, b| {
+    if a.1 != b.1 {
+      b.1.cmp(&a.1) // Sort by count descending
+    } else {
+      a.0.cmp(&b.0) // Sort by word ascending
+    }
+  })
+  
+  for i in 0..n {
+    if i >= entries.len() {
+      break
+    }
+    let (word, count) = entries[i]
+    println($"  {count} {word}")
+  }
+}
+
+fn main() -> i32 {
+  let text = "the cat sat on the mat the cat sat"
+  let word_count = count_words(text)
+  print_top(word_count, 5)
+  0
+}
