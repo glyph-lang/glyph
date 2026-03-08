@@ -264,7 +264,7 @@
     font-family: 'SF Mono', 'Fira Code', monospace;
     font-size: 1.75rem;
     font-weight: 700;
-    color: var(--glyph-color);
+    color: var(--accent);
   }
   .stat-card .label {
     font-size: 0.8rem;
@@ -303,10 +303,11 @@
 <header class="hero">
   <h1>LLM Token Cost:<br>How Much Do Languages Cost to Generate?</h1>
   <p class="subtitle">
-    An experiment comparing the token cost of LLM-generated code across 8 programming languages,
-    including <strong>Glyph</strong> &mdash; an experimental language designed for readability and token efficiency.
+    An experiment comparing the token cost of LLM-generated code across 8 programming languages &mdash;
+    Python, Clojure, Rust, Go, C++, Java, C, and the experimental language
+    <a href="book/index.html">Glyph</a>.
   </p>
-  <p class="date">March 7, 2026 &middot; Glyph Language Project</p>
+  <p class="date">March 7, 2026</p>
 </header>
 
 <!-- Introduction -->
@@ -316,18 +317,20 @@
     When LLMs generate code, they consume tokens &mdash; both reading the prompt (input) and producing the code (output).
     Different programming languages require different amounts of ceremony, boilerplate, and structural overhead,
     which directly affects the token cost of generation.
+    We set out to measure these differences across a range of languages and tasks.
   </p>
   <p>
-    <a href="book/index.html">Glyph</a> is an experimental compiled language with Rust-inspired syntax but dramatically simpler rules:
-    no lifetimes, no macros, optional semicolons, and built-in <code>Result&lt;T,E&gt;</code> error handling.
-    We hypothesized that its clean, minimal syntax would make it cheap for LLMs to generate.
+    The comparison includes seven established languages (Python, Clojure, Rust, Go, C++, Java, C)
+    and one experimental language, <a href="book/index.html">Glyph</a>, which has Rust-inspired
+    syntax but simpler rules (no lifetimes, no macros, optional semicolons, built-in <code>Result&lt;T,E&gt;</code>).
+    Since LLMs don't know Glyph natively, its prompts include a ~1,079-token language description &mdash;
+    making it an interesting case study in how an unknown language competes when the model
+    must be taught its syntax from scratch.
   </p>
   <p>
-    The results show that <strong>human readability is Glyph's dominant trait</strong>.
-    The generated code is remarkably clean and concise, but Glyph requires a ~1,079-token language description
-    in each prompt (since LLMs don't know Glyph natively). After adjusting for this one-time cost,
-    Glyph is <strong>competitive</strong> with established languages &mdash; and excels at tasks
-    that reward its type system, like error handling.
+    The results reveal substantial differences between languages: Python and Clojure are cheapest overall,
+    high-ceremony languages like Java and C are most expensive, and built-in abstractions
+    (like <code>Result</code> types) can cut error-handling token costs in half.
   </p>
 </section>
 
@@ -421,7 +424,7 @@
       </div>
     </div>
     <div class="bar-row">
-      <span class="bar-label"><strong>Glyph</strong></span>
+      <span class="bar-label">Glyph</span>
       <div class="bar-track">
         <div class="bar-fill glyph" style="width: 77.3%">326</div>
       </div>
@@ -453,9 +456,11 @@
   </div>
 
   <p>
-    Glyph ranks <strong>4th out of 8</strong>, ahead of Go, C++, Java, and C.
-    The top three (Python, Clojure, Rust) are languages the models know natively, requiring no description overhead.
-    Despite paying that overhead, Glyph remains competitive and significantly outperforms high-ceremony languages.
+    Dynamic languages (Python, Clojure) produce the shortest output and lead the ranking.
+    Rust places 3rd thanks to concise syntax and deep model familiarity.
+    High-ceremony languages (Java, C) are significantly more expensive.
+    Glyph places 4th despite requiring a language description in every prompt &mdash;
+    suggesting that even an unknown language can compete if its syntax is sufficiently minimal.
   </p>
 </section>
 
@@ -483,9 +488,9 @@
       <tr>
         <td>01 Hello World</td>
         <td class="num">102</td>
-        <td class="num winner">98</td>
+        <td class="num">98</td>
         <td class="num">109</td>
-        <td class="num">89</td>
+        <td class="num winner">89</td>
         <td class="num">96</td>
         <td class="num">105</td>
         <td class="num">103</td>
@@ -514,10 +519,10 @@
         <td class="num">387</td>
       </tr>
       <tr>
-        <td><strong>04 Error Handling</strong></td>
-        <td class="num winner" style="color: var(--glyph-color);">264</td>
+        <td>04 Error Handling</td>
+        <td class="num">264</td>
         <td class="num">302</td>
-        <td class="num">259</td>
+        <td class="num winner">259</td>
         <td class="num">265</td>
         <td class="num">303</td>
         <td class="num">412</td>
@@ -536,9 +541,9 @@
         <td class="num">312</td>
       </tr>
       <tr>
-        <td><strong>06 Struct Methods</strong></td>
-        <td class="num winner" style="color: var(--glyph-color);">437</td>
-        <td class="num">433</td>
+        <td>06 Struct Methods</td>
+        <td class="num">437</td>
+        <td class="num winner">433</td>
         <td class="num">436</td>
         <td class="num">519</td>
         <td class="num">456</td>
@@ -559,7 +564,7 @@
       </tr>
       <tr style="background: var(--code-bg); font-weight: 600;">
         <td>Overall Avg</td>
-        <td class="num" style="color: var(--glyph-color);">326</td>
+        <td class="num">326</td>
         <td class="num winner">286</td>
         <td class="num">290</td>
         <td class="num">309</td>
@@ -572,20 +577,26 @@
   </table>
   </div>
 
-  <div class="callout glyph-win">
-    <strong>Standout: Error Handling (Task 04)</strong>
-    Glyph generates error handling code for just 264 adjusted tokens &mdash;
-    on par with Rust (265) and Clojure (259), but dramatically cheaper than
-    C++ (412), C (402), or Java (533).
-    Java must define an entire generic <code>Result&lt;T,E&gt;</code> class from scratch;
-    Glyph has it built in.
+  <div class="callout">
+    <strong>Notable: Error Handling (Task 04)</strong>
+    Languages with built-in <code>Result</code> types (Clojure 259, Glyph 264, Rust 265) cluster
+    at roughly half the cost of languages without them (C++ 412, C 402, Java 533).
+    Java's cost is driven almost entirely by needing to define a generic <code>Result&lt;T,E&gt;</code>
+    class from scratch.
   </div>
 
-  <div class="callout glyph-win">
-    <strong>Standout: Struct Methods (Task 06)</strong>
-    Glyph at 437 tokens ties with Python (433) and Clojure (436) for cheapest,
-    beating Rust (519), C++ (485), C (485), and Java (461).
-    Glyph's in-body method syntax avoids the separate <code>impl</code> block overhead.
+  <div class="callout">
+    <strong>Notable: Struct Methods (Task 06)</strong>
+    Python (433), Clojure (436), and Glyph (437) cluster cheapest, while
+    Rust (519) pays overhead for its separate <code>impl</code> block pattern.
+    This is the only task where Rust is the most expensive language.
+  </div>
+
+  <div class="callout">
+    <strong>Notable: Word Frequency (Task 07)</strong>
+    The most complex task shows the widest spread: Python (489) vs. C (1,025).
+    Languages without a built-in hash map (C) pay dearly.
+    The gap between cheapest and most expensive is over 2x.
   </div>
 
   <h3>Error Handling &mdash; Token Cost by Language</h3>
@@ -593,13 +604,13 @@
     <div class="bar-row">
       <span class="bar-label">Clojure</span>
       <div class="bar-track">
-        <div class="bar-fill" style="width: 48.6%">259</div>
+        <div class="bar-fill best" style="width: 48.6%">259</div>
       </div>
     </div>
     <div class="bar-row">
-      <span class="bar-label"><strong>Glyph</strong></span>
+      <span class="bar-label">Glyph</span>
       <div class="bar-track">
-        <div class="bar-fill glyph" style="width: 49.5%">264</div>
+        <div class="bar-fill" style="width: 49.5%">264</div>
       </div>
     </div>
     <div class="bar-row">
@@ -650,7 +661,7 @@
   </p>
 
   <div class="code-comparison">
-    <div class="code-panel glyph-panel">
+    <div class="code-panel">
       <div class="code-panel-header">
         <span class="lang">Glyph</span>
         <span class="lines">6 lines &middot; 56 output tokens</span>
@@ -712,7 +723,7 @@
     The core logic is identical &mdash; a null check and a division &mdash; but Java requires
     <strong>7x more output tokens</strong> because it lacks a built-in <code>Result</code> type.
     The LLM must generate an entire generic class with constructors, accessors, and toString.
-    Glyph's built-in <code>Result&lt;T,E&gt;</code> eliminates this boilerplate entirely.
+    Languages with built-in <code>Result&lt;T,E&gt;</code> (Glyph, Rust, Clojure) avoid this entirely.
   </p>
 </section>
 
@@ -720,50 +731,37 @@
 <section>
   <h2>Discussion</h2>
 
-  <h3>Readability Is the Dominant Trait</h3>
+  <h3>What Drives Token Cost?</h3>
   <p>
-    The most striking result isn't the token count &mdash; it's how <em>readable</em> the generated Glyph code is.
-    With optional semicolons, implicit returns, and minimal ceremony, the output is clean and concise.
-    A 6-line function with clear intent, compared to 57 lines of Java boilerplate for the same task.
+    Two factors dominate: <strong>boilerplate</strong> and <strong>standard library coverage</strong>.
+    Languages that require class definitions, explicit access modifiers, or separate type declarations
+    (Java, C++) consistently produce more output tokens. Languages with rich standard libraries
+    (Python, Rust) avoid the LLM needing to implement common data structures from scratch.
   </p>
 
-  <h3>The Description Overhead</h3>
+  <h3>Built-in Abstractions Matter</h3>
   <p>
-    Glyph's main disadvantage is the ~1,079-token language description that must be included in every prompt.
-    For established languages, the LLM already knows the syntax; for Glyph, we must teach it each time.
-    This cost is <strong>fixed and amortizable</strong>: in a real coding assistant session,
-    the description is sent once and reused across many code generation requests.
-    As tasks grow more complex (producing more output tokens), the description's
-    share of total cost decreases.
+    The error handling task shows this most clearly. Languages with a built-in <code>Result</code>
+    type (Clojure, Glyph, Rust) cluster at 259&ndash;265 tokens, while Java requires 533 tokens &mdash;
+    more than double &mdash; because the LLM must generate an entire generic class. This suggests
+    that language-level abstractions for common patterns have a direct impact on LLM generation efficiency.
   </p>
 
-  <h3>Where Glyph Excels</h3>
+  <h3>Dynamic vs. Static Typing</h3>
   <p>
-    Glyph performs best on tasks where its type system provides built-in abstractions that other languages lack:
+    Python and Clojure lead overall, likely because dynamic typing eliminates type annotations,
+    generic parameters, and explicit type conversions from the output.
+    Among statically-typed compiled languages, Rust is cheapest thanks to concise syntax and deep model familiarity,
+    followed by Glyph and Go.
   </p>
-  <ul style="margin: 0.5rem 0 1rem 1.5rem;">
-    <li><strong>Error handling</strong> &mdash; built-in <code>Result&lt;T,E&gt;</code> saves 100&ndash;270 tokens vs. C++/Java/C</li>
-    <li><strong>Struct methods</strong> &mdash; in-body method syntax avoids separate impl blocks, saving 50&ndash;80 tokens vs. Rust</li>
-    <li><strong>Fibonacci</strong> &mdash; minimal syntax overhead ties Rust at 204 tokens, behind only Python (197)</li>
-  </ul>
 
-  <h3>Where Glyph Falls Short</h3>
+  <h3>The Unknown-Language Penalty</h3>
   <p>
-    Tasks requiring rich standard library support expose Glyph's youth:
-  </p>
-  <ul style="margin: 0.5rem 0 1rem 1.5rem;">
-    <li><strong>Word frequency</strong> (686 tokens) &mdash; complex string processing and sorting pushes costs higher.
-      Still, Glyph beats C (1,025) and is comparable to C++ (682).</li>
-    <li><strong>File I/O</strong> (320 tokens) &mdash; while the adjusted cost is reasonable,
-      compilation success depends on the LLM using the correct low-level API rather than inventing a high-level one.</li>
-  </ul>
-
-  <h3>Comparison to Established Languages</h3>
-  <p>
-    Python and Clojure lead overall because they are dynamically typed and highly expressive, producing
-    very short output. Rust places 3rd thanks to its concise syntax and the models' deep familiarity with it.
-    Glyph (4th) outperforms Go, C++, Java, and C despite the description overhead.
-    Among statically-typed compiled languages, Glyph trails only Rust.
+    Glyph is the only language the models don't know natively, requiring a ~1,079-token language description
+    in every prompt. Despite this overhead, it places 4th overall after adjustment &mdash; suggesting that
+    a sufficiently minimal syntax can partly compensate for the description cost.
+    This cost is also <strong>amortizable</strong>: in a coding assistant session, the description
+    is sent once and reused across many requests.
   </p>
 </section>
 
@@ -771,21 +769,53 @@
 <section>
   <h2>Conclusions</h2>
   <p>
-    Glyph is competitive on token cost and produces remarkably readable generated code.
-    It is not the cheapest language overall &mdash; that distinction goes to Python and Clojure &mdash;
-    but it demonstrates that a language <em>designed</em> for LLM generation can match or beat
-    established compiled languages even with the overhead of teaching the LLM its syntax from scratch.
+    Token cost varies substantially across languages, driven primarily by boilerplate requirements
+    and standard library coverage. Dynamic languages (Python, Clojure) are cheapest overall.
+    Among compiled languages, Rust leads thanks to concise syntax and deep model training.
+    High-ceremony languages (Java, C) are consistently the most expensive.
   </p>
   <p>
-    The error handling results validate the core hypothesis: when a language provides the right built-in
-    abstractions, LLMs produce less code, use fewer tokens, and generate more correct programs.
+    The strongest single finding is the impact of built-in abstractions: languages with a
+    <code>Result</code> type cut error-handling costs by 40&ndash;50% compared to languages without one.
+    This suggests that language design choices directly affect LLM generation efficiency.
   </p>
   <p>
-    As Glyph's standard library matures and LLMs potentially learn its syntax natively,
-    the description overhead will shrink or disappear, likely pushing Glyph higher in the rankings.
+    As a side study, Glyph demonstrates that an unknown language can compete with established ones
+    on token cost, provided its syntax is sufficiently minimal. Its generated code is notably
+    readable, though the ~1,079-token description overhead keeps it from topping the overall ranking.
   </p>
   <p style="margin-top: 1.5rem;">
-    <a href="book/index.html">Read the Glyph documentation &rarr;</a>
+    <a href="book/index.html">Learn more about Glyph &rarr;</a>
+  </p>
+</section>
+
+<!-- Generated code -->
+<section>
+  <h2>Generated Code</h2>
+  <p>
+    All LLM-generated code from this experiment is available in the repository.
+    Each language directory contains one file per task per model (e.g., <code>04_error_handling_codex.java</code>).
+  </p>
+
+  <table>
+    <thead>
+      <tr><th>Language</th><th>Browse Code</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Python</td><td><a href="https://github.com/glyph-lang/glyph/tree/master/experiments/llm-reasoning-cost/generated_code/python">generated_code/python/</a></td></tr>
+      <tr><td>Clojure</td><td><a href="https://github.com/glyph-lang/glyph/tree/master/experiments/llm-reasoning-cost/generated_code/clojure">generated_code/clojure/</a></td></tr>
+      <tr><td>Rust</td><td><a href="https://github.com/glyph-lang/glyph/tree/master/experiments/llm-reasoning-cost/generated_code/rust">generated_code/rust/</a></td></tr>
+      <tr><td>Glyph</td><td><a href="https://github.com/glyph-lang/glyph/tree/master/experiments/llm-reasoning-cost/generated_code/glyph">generated_code/glyph/</a></td></tr>
+      <tr><td>Go</td><td><a href="https://github.com/glyph-lang/glyph/tree/master/experiments/llm-reasoning-cost/generated_code/go">generated_code/go/</a></td></tr>
+      <tr><td>C++</td><td><a href="https://github.com/glyph-lang/glyph/tree/master/experiments/llm-reasoning-cost/generated_code/cpp">generated_code/cpp/</a></td></tr>
+      <tr><td>Java</td><td><a href="https://github.com/glyph-lang/glyph/tree/master/experiments/llm-reasoning-cost/generated_code/java">generated_code/java/</a></td></tr>
+      <tr><td>C</td><td><a href="https://github.com/glyph-lang/glyph/tree/master/experiments/llm-reasoning-cost/generated_code/c">generated_code/c/</a></td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    Raw results data, task prompts, and the runner script are also available:
+    <a href="https://github.com/glyph-lang/glyph/tree/master/experiments/llm-reasoning-cost">experiments/llm-reasoning-cost/</a>
   </p>
 </section>
 
@@ -794,9 +824,8 @@
 <footer>
   <div class="container">
     <p>
-      Glyph Language Project &middot;
-      <a href="https://github.com/glyph-lang/glyph">GitHub</a> &middot;
-      Data collected March 7, 2026 using OpenAI gpt-5.3-codex and gpt-4o-mini
+      Data collected March 7, 2026 using OpenAI gpt-5.3-codex and gpt-4o-mini &middot;
+      <a href="https://github.com/glyph-lang/glyph">Source on GitHub</a>
     </p>
   </div>
 </footer>
