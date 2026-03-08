@@ -36,8 +36,9 @@ jobs:
       - name: Prepare Pages artifact
         run: |
           rm -rf public
-          mkdir -p public/book
-          cp -R docs/book/book public/book/
+          mkdir -p public
+          cp -R docs/book/book public/book
+          cp docs/index.html public/
           cp docs/llm-token-cost.html public/
           touch public/.nojekyll
 
