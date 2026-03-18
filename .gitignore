@@ -10,3 +10,4 @@ docs/*
 !docs/todo/
 .opencode
 .env
+video/

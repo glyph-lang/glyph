@@ -26,10 +26,20 @@ impl CodegenContext {
             let name = CString::new("int.coerce").unwrap();
 
             if lw > rw {
-                let rhs2 = LLVMBuildSExt(self.builder, rhs, lhs_ty, name.as_ptr());
+                // Zero-extend when widening from i1 (bool) to avoid
+                // sign-extending true (i1 1) into i32 -1.
+                let rhs2 = if rw == 1 {
+                    LLVMBuildZExt(self.builder, rhs, lhs_ty, name.as_ptr())
+                } else {
+                    LLVMBuildSExt(self.builder, rhs, lhs_ty, name.as_ptr())
+                };
                 (lhs, rhs2)
             } else {
-                let lhs2 = LLVMBuildSExt(self.builder, lhs, rhs_ty, name.as_ptr());
+                let lhs2 = if lw == 1 {
+                    LLVMBuildZExt(self.builder, lhs, rhs_ty, name.as_ptr())
+                } else {
+                    LLVMBuildSExt(self.builder, lhs, rhs_ty, name.as_ptr())
+                };
                 (lhs2, rhs)
             }
         }

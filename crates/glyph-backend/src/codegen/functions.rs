@@ -423,6 +423,16 @@ impl CodegenContext {
                     else_bb,
                 } => {
                     let cond_val = self.codegen_value(cond, func, local_map)?;
+                    // Ensure condition is i1 for LLVMBuildCondBr.
+                    // Bare booleans loaded from untyped locals come back as i32;
+                    // truncate to i1 so LLVM doesn't reject the branch.
+                    let i1_ty = LLVMInt1TypeInContext(self.context);
+                    let cond_val = if LLVMTypeOf(cond_val) != i1_ty {
+                        let name = std::ffi::CString::new("bool.trunc").unwrap();
+                        LLVMBuildTrunc(self.builder, cond_val, i1_ty, name.as_ptr())
+                    } else {
+                        cond_val
+                    };
                     let then_block = bb_map
                         .get(then_bb)
                         .ok_or_else(|| anyhow!("undefined block {:?}", then_bb))?;
