@@ -35,6 +35,9 @@ impl CodegenContext {
         unsafe {
             let alloca_name = CString::new(format!("{}_tmp", enum_name))?;
             let alloca = LLVMBuildAlloca(self.builder, llvm_enum, alloca_name.as_ptr());
+            // Zero the full aggregate so inactive variant payloads are well-defined.
+            let zero_enum = LLVMConstNull(llvm_enum);
+            LLVMBuildStore(self.builder, zero_enum, alloca);
             let tag_ptr = LLVMBuildStructGEP2(
                 self.builder,
                 llvm_enum,
@@ -95,8 +98,21 @@ impl CodegenContext {
     pub(super) fn codegen_err_value(&mut self, message: &str) -> Result<LLVMValueRef> {
         let err_name = "Err";
         let llvm_err = self.get_struct_type(err_name)?;
-        let global_name = format!("map_err_{}", self.sanitize(message));
-        let msg_val = self.codegen_string_literal(message, &global_name)?;
+        let global_name = format!("err_msg_{}", self.sanitize(message));
+        let literal_ptr = self.codegen_string_literal(message, &global_name)?;
+        let strdup_fn = self.ensure_strdup_fn()?;
+        let strdup_ty = self.strdup_function_type();
+        let mut strdup_args = vec![literal_ptr];
+        let msg_val = unsafe {
+            LLVMBuildCall2(
+                self.builder,
+                strdup_ty,
+                strdup_fn,
+                strdup_args.as_mut_ptr(),
+                strdup_args.len() as u32,
+                CString::new("err.msg.dup")?.as_ptr(),
+            )
+        };
 
         unsafe {
             let alloca_name = CString::new("err.tmp")?;

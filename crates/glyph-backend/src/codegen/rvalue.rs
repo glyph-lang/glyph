@@ -376,72 +376,11 @@ impl CodegenContext {
                     variant_index,
                     payload,
                 } => {
-                    let llvm_enum = self.get_enum_type(enum_name)?;
-                    let layout = self
-                        .enum_layouts
-                        .get(enum_name)
-                        .ok_or_else(|| anyhow!("missing enum layout for {}", enum_name))?;
-
-                    let alloca_name = CString::new(format!("{}_tmp", enum_name))?;
-                    let alloca = LLVMBuildAlloca(self.builder, llvm_enum, alloca_name.as_ptr());
-
-                    // Store tag at field 0
-                    let tag_ptr = LLVMBuildStructGEP2(
-                        self.builder,
-                        llvm_enum,
-                        alloca,
-                        0,
-                        CString::new("enum.tag").unwrap().as_ptr(),
-                    );
-                    let tag_val = LLVMConstInt(
-                        LLVMInt32TypeInContext(self.context),
-                        *variant_index as u64,
-                        0,
-                    );
-                    LLVMBuildStore(self.builder, tag_val, tag_ptr);
-
-                    // Store payload into its slot (index offset by 1)
-                    let field_index = 1 + *variant_index;
-                    let field_ptr = LLVMBuildStructGEP2(
-                        self.builder,
-                        llvm_enum,
-                        alloca,
-                        field_index,
-                        CString::new("enum.payload").unwrap().as_ptr(),
-                    );
-
-                    let variant_ty = layout
-                        .variants
-                        .get(*variant_index as usize)
-                        .ok_or_else(|| anyhow!("invalid variant index for {}", enum_name))?
-                        .payload
-                        .clone();
-
-                    let variant_is_unit =
-                        variant_ty.as_ref().map(Self::is_unit_type).unwrap_or(true);
-
-                    if variant_is_unit {
-                        let zero = LLVMConstInt(LLVMInt8TypeInContext(self.context), 0, 0);
-                        LLVMBuildStore(self.builder, zero, field_ptr);
-                    } else if let Some(val) = payload {
-                        let llvm_val = self.codegen_value(val, func, local_map)?;
-                        LLVMBuildStore(self.builder, llvm_val, field_ptr);
-                    } else {
-                        let llvm_ty =
-                            self.get_llvm_type(variant_ty.as_ref().ok_or_else(|| {
-                                anyhow!("missing payload type for {}", enum_name)
-                            })?)?;
-                        let zero = LLVMConstNull(llvm_ty);
-                        LLVMBuildStore(self.builder, zero, field_ptr);
-                    }
-
-                    let load_name = CString::new(format!("{}_val", enum_name))?;
-                    Ok(LLVMBuildLoad2(
-                        self.builder,
-                        llvm_enum,
-                        alloca,
-                        load_name.as_ptr(),
-                    ))
+                    let payload_val = match payload {
+                        Some(val) => Some(self.codegen_value(val, func, local_map)?),
+                        None => None,
+                    };
+                    self.codegen_enum_value(enum_name, *variant_index, payload_val)
                 }
                 Rvalue::EnumTag { base } => {
                     let (enum_name, enum_ptr) =

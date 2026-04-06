@@ -135,30 +135,12 @@ fn guess_content_type(path: str) -> str {
   ret "application/octet-stream"
 }
 
-// Check if file exists using stat(). Returns 1 if exists, 0 otherwise.
-// Workaround: File::open Err match crashes (compiler bug), so check first.
-fn file_exists(path: str) -> i32 {
-  let size = file_size(path)
-  if size >= 0 {
-    ret 1
-  }
-  ret 0
-}
-
-// Read a file's contents. Returns empty String if file doesn't exist.
-// WORKAROUND: Cannot match on File::open Err (compiler crash).
-// Check existence with stat() first, then only open files we know exist.
+// Read a file's contents. Returns empty String if the file cannot be opened.
 fn read_file(path: str) -> String {
-  let exists = file_exists(path)
-  if exists == 0 {
-    ret String::from_str("")
-  }
-
   let open_result = File::open(path)
   let f = match open_result {
     Ok(file) => file,
     Err(_e) => {
-      // Should not reach here since we checked existence
       ret String::from_str("")
     },
   }

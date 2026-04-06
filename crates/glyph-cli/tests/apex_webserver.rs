@@ -89,8 +89,7 @@ fn combine_sources(fragments: &[&str]) -> String {
         for line in fragment.lines() {
             let trimmed = line.trim();
             // Skip inter-module imports
-            if trimmed.starts_with("from http import")
-                || trimmed.starts_with("from server import")
+            if trimmed.starts_with("from http import") || trimmed.starts_with("from server import")
             {
                 continue;
             }
@@ -583,12 +582,9 @@ fn main() -> i32 {
 
 // ---------------------------------------------------------------------------
 // Test 14: handle_request returns 404 for missing file
-// CODEGEN BUG: File::open error path (fopen NULL → Err Result) crashes in
-// codegen/file.rs regardless of Glyph match pattern. Ignored until codegen fix.
 // ---------------------------------------------------------------------------
 #[cfg(all(feature = "codegen", unix))]
 #[test]
-#[ignore = "Glyph runtime bug: File::open SIGABRT on nonexistent files — Result<File,Error> Err path double-free"]
 fn apex_handle_file_not_found() {
     let http_src = include_str!("../../../examples/apex/src/http.glyph");
     let server_src = include_str!("../../../examples/apex/src/server.glyph");
@@ -774,8 +770,8 @@ fn apex_serve_binary_file_loopback() {
     let bin_file = www_dir.join("test.bin");
     // 16 bytes: includes null bytes to verify no truncation
     let bin_content: Vec<u8> = vec![
-        0x89, 0x50, 0x4E, 0x47, 0x00, 0x00, 0x00, 0x0D,
-        0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x01, 0x00,
+        0x89, 0x50, 0x4E, 0x47, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x01,
+        0x00,
     ];
     std::fs::write(&bin_file, &bin_content).unwrap();
 

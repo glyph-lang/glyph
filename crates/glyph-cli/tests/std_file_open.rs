@@ -106,3 +106,30 @@ fn std_file_open_with_str_path_succeeds() {
 
     assert_eq!(build_and_run_exit_code(&source), 0);
 }
+
+#[cfg(all(feature = "codegen", unix))]
+#[test]
+fn std_file_open_missing_path_returns_err() {
+    let temp = TempDir::new().unwrap();
+    let file_path = temp.path().join("missing.txt");
+    let path_literal = escape_glyph_string(file_path.to_str().unwrap());
+
+    let source = format!(
+        r#"
+        from std/io import File
+        from std/enums import Result
+
+        fn main() -> i32 {{
+          let opened = File::open("{}")
+          let status = match opened {{
+            Ok(_f) => 0,
+            Err(_e) => 1,
+          }}
+          ret status
+        }}
+    "#,
+        path_literal
+    );
+
+    assert_eq!(build_and_run_exit_code(&source), 1);
+}
