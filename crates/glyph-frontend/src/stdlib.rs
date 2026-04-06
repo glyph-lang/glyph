@@ -466,6 +466,14 @@ pub fn std_modules() -> HashMap<String, Module> {
                 },
                 span,
             },
+            Import {
+                kind: ImportKind::Wildcard,
+                path: ImportPath {
+                    segments: vec!["std/net".into()],
+                    span,
+                },
+                span,
+            },
         ],
         items: vec![glyph_core::ast::Item::ExternFunction(std_println_extern)],
     };
@@ -901,6 +909,8 @@ pub fn std_modules() -> HashMap<String, Module> {
     modules.insert("std/time".into(), std_time_module);
     let std_term_module = parse_std_source("std/term", include_str!("stdlib/term.glyph"));
     modules.insert("std/term".into(), std_term_module);
+    let std_net_module = parse_std_source("std/net", include_str!("stdlib/net.glyph"));
+    modules.insert("std/net".into(), std_net_module);
 
     // std/process
     let run_extern = ExternFunctionDecl {

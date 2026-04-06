@@ -1,0 +1,52 @@
+// Apex Web Server — Entry Point
+//
+// Lightweight HTTP/1.1 static file server.
+// Binds to 0.0.0.0:8080, serves files from www/ directory.
+
+from std/io import puts
+from std/enums import Result
+from std/net import tcp_listen, TcpListener, TcpStream, NetError
+
+from http import parse_request, HttpRequest
+from server import serve_request
+
+fn main() -> i32 {
+  puts("Apex — binding to 0.0.0.0:8080, serving www/")
+
+  let lr = tcp_listen("0.0.0.0", 8080, 128)
+  let mut listener = match lr {
+    Ok(l) => l,
+    Err(_e) => {
+      puts("ERROR: failed to bind")
+      ret 1
+    },
+  }
+
+  puts("Apex is ready. Waiting for connections...")
+
+  while true {
+    let ar = listener.accept()
+    let mut stream = match ar {
+      Ok(s) => s,
+      Err(_e) => {
+        puts("accept error, continuing")
+        cont
+      },
+    }
+
+    let recv_r = stream.recv(8192)
+    let raw = match recv_r {
+      Ok(d) => d,
+      Err(_e) => {
+        let _ = stream.close()
+        cont
+      },
+    }
+
+    let request = parse_request(raw)
+    let _ = serve_request(request, "www", stream)
+    let _ = stream.close()
+  }
+
+  ret 0
+}

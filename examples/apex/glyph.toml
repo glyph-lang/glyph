@@ -1,0 +1,10 @@
+[package]
+name = "apex"
+version = "0.1.0"
+
+[dependencies]
+# none yet
+
+[[bin]]
+name = "apex"
+path = "src/main.glyph"

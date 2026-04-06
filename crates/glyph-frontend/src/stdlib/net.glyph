@@ -1,0 +1,201 @@
+from std/enums import Result
+
+// --- Extern C declarations ---
+
+extern "C" fn glyph_net_tcp_socket() -> i32;
+extern "C" fn glyph_net_tcp_connect(host: str, port: u32) -> i32;
+extern "C" fn glyph_net_bind(fd: i32, host: str, port: u32) -> i32;
+extern "C" fn glyph_net_listen(fd: i32, backlog: i32) -> i32;
+extern "C" fn glyph_net_accept(fd: i32) -> i32;
+extern "C" fn glyph_net_tcp_send(fd: i32, data: str) -> i32;
+extern "C" fn glyph_net_tcp_recv(fd: i32, max_bytes: u32) -> String;
+extern "C" fn glyph_net_close(fd: i32) -> i32;
+extern "C" fn glyph_net_set_reuse_addr(fd: i32) -> i32;
+extern "C" fn glyph_net_udp_socket() -> i32;
+extern "C" fn glyph_net_udp_bind(fd: i32, host: str, port: u32) -> i32;
+extern "C" fn glyph_net_udp_send_to(fd: i32, data: str, host: str, port: u32) -> i32;
+extern "C" fn glyph_net_udp_recv(fd: i32, max_bytes: u32) -> String;
+extern "C" fn glyph_net_get_last_error() -> i32;
+extern "C" fn glyph_net_local_port(fd: i32) -> u32;
+extern "C" fn glyph_file_size(path: str) -> i64;
+extern "C" fn glyph_net_tcp_send_file(fd: i32, path: str) -> i64;
+
+// --- Error type ---
+
+struct NetError {
+  message: String,
+  code: i32
+}
+
+fn net_error(msg: str, code: i32) -> NetError {
+  ret NetError {
+    message: String::from_str(msg),
+    code: code,
+  }
+}
+
+// --- TCP Stream (client connection) ---
+
+struct TcpStream {
+  fd: i32
+
+  fn send(self: &mut TcpStream, data: str) -> Result<i32, NetError> {
+    let n = glyph_net_tcp_send(self.fd, data)
+    if n < 0 {
+      ret Err(net_error("tcp send failed", n))
+    }
+    ret Ok(n)
+  }
+
+  fn recv(self: &mut TcpStream, max_bytes: u32) -> Result<String, NetError> {
+    let data = glyph_net_tcp_recv(self.fd, max_bytes)
+    let err = glyph_net_get_last_error()
+    if err != 0 {
+      ret Err(net_error("tcp recv failed", err))
+    }
+    ret Ok(data)
+  }
+
+  fn close(self: &mut TcpStream) -> Result<(), NetError> {
+    let rc = glyph_net_close(self.fd)
+    if rc != 0 {
+      ret Err(net_error("tcp close failed", rc))
+    }
+    ret Ok(())
+  }
+
+  fn send_file(self: &mut TcpStream, path: str) -> Result<i64, NetError> {
+    let n = glyph_net_tcp_send_file(self.fd, path)
+    if n < 0 {
+      ret Err(net_error("tcp send_file failed", n))
+    }
+    ret Ok(n)
+  }
+
+  fn raw_fd(self: &TcpStream) -> i32 {
+    ret self.fd
+  }
+}
+
+// --- TCP Listener (server) ---
+
+struct TcpListener {
+  fd: i32
+
+  fn accept(self: &mut TcpListener) -> Result<TcpStream, NetError> {
+    let client_fd = glyph_net_accept(self.fd)
+    if client_fd < 0 {
+      ret Err(net_error("tcp accept failed", client_fd))
+    }
+    ret Ok(TcpStream { fd: client_fd })
+  }
+
+  fn local_port(self: &TcpListener) -> u32 {
+    ret glyph_net_local_port(self.fd)
+  }
+
+  fn close(self: &mut TcpListener) -> Result<(), NetError> {
+    let rc = glyph_net_close(self.fd)
+    if rc != 0 {
+      ret Err(net_error("listener close failed", rc))
+    }
+    ret Ok(())
+  }
+
+  fn raw_fd(self: &TcpListener) -> i32 {
+    ret self.fd
+  }
+}
+
+// --- UDP Socket ---
+
+struct UdpSocket {
+  fd: i32
+
+  fn send_to(self: &mut UdpSocket, data: str, host: str, port: u32) -> Result<i32, NetError> {
+    let n = glyph_net_udp_send_to(self.fd, data, host, port)
+    if n < 0 {
+      ret Err(net_error("udp send failed", n))
+    }
+    ret Ok(n)
+  }
+
+  fn recv(self: &mut UdpSocket, max_bytes: u32) -> Result<String, NetError> {
+    let data = glyph_net_udp_recv(self.fd, max_bytes)
+    let err = glyph_net_get_last_error()
+    if err != 0 {
+      ret Err(net_error("udp recv failed", err))
+    }
+    ret Ok(data)
+  }
+
+  fn local_port(self: &UdpSocket) -> u32 {
+    ret glyph_net_local_port(self.fd)
+  }
+
+  fn close(self: &mut UdpSocket) -> Result<(), NetError> {
+    let rc = glyph_net_close(self.fd)
+    if rc != 0 {
+      ret Err(net_error("udp close failed", rc))
+    }
+    ret Ok(())
+  }
+
+  fn raw_fd(self: &UdpSocket) -> i32 {
+    ret self.fd
+  }
+}
+
+// --- Module-level convenience functions ---
+
+fn tcp_connect(host: str, port: u32) -> Result<TcpStream, NetError> {
+  let fd = glyph_net_tcp_connect(host, port)
+  if fd < 0 {
+    ret Err(net_error("tcp connect failed", fd))
+  }
+  ret Ok(TcpStream { fd: fd })
+}
+
+fn tcp_listen(host: str, port: u32, backlog: i32) -> Result<TcpListener, NetError> {
+  let fd = glyph_net_tcp_socket()
+  if fd < 0 {
+    ret Err(net_error("tcp socket failed", fd))
+  }
+  let _ = glyph_net_set_reuse_addr(fd)
+  let rc = glyph_net_bind(fd, host, port)
+  if rc != 0 {
+    let _ = glyph_net_close(fd)
+    ret Err(net_error("tcp bind failed", rc))
+  }
+  let lrc = glyph_net_listen(fd, backlog)
+  if lrc != 0 {
+    let _ = glyph_net_close(fd)
+    ret Err(net_error("tcp listen failed", lrc))
+  }
+  ret Ok(TcpListener { fd: fd })
+}
+
+fn udp_bind(host: str, port: u32) -> Result<UdpSocket, NetError> {
+  let fd = glyph_net_udp_socket()
+  if fd < 0 {
+    ret Err(net_error("udp socket failed", fd))
+  }
+  let rc = glyph_net_udp_bind(fd, host, port)
+  if rc != 0 {
+    let _ = glyph_net_close(fd)
+    ret Err(net_error("udp bind failed", rc))
+  }
+  ret Ok(UdpSocket { fd: fd })
+}
+
+fn udp_unbound() -> Result<UdpSocket, NetError> {
+  let fd = glyph_net_udp_socket()
+  if fd < 0 {
+    ret Err(net_error("udp socket failed", fd))
+  }
+  ret Ok(UdpSocket { fd: fd })
+}
+
+fn file_size(path: str) -> i64 {
+  ret glyph_file_size(path)
+}

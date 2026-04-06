@@ -1,0 +1,257 @@
+// Apex Web Server — HTTP Request Parser + Response Builder
+//
+// Handles parsing raw HTTP request strings into HttpRequest structs
+// and building HTTP response strings.
+
+from std/io import puts
+from std/enums import Result, Option
+from std/vec import Vec
+from std/string import string_from_i32, string_index_of
+
+struct HttpRequest {
+  method: String,
+  path: String,
+  version: String,
+  host: String,
+  valid: i32
+}
+
+fn empty_request() -> HttpRequest {
+  ret HttpRequest {
+    method: String::from_str(""),
+    path: String::from_str(""),
+    version: String::from_str("HTTP/1.1"),
+    host: String::from_str(""),
+    valid: 0,
+  }
+}
+
+// Extract a header value starting at `pos` with given prefix length.
+fn extract_header_value(headers: str, pos: i64, prefix_len: usize) -> String {
+  let val_start: usize = pos + prefix_len
+  let rem_len: usize = headers.len() - val_start
+  let rem: str = headers.slice(val_start, rem_len)
+  let eol: i64 = string_index_of(rem, "\r\n")
+  if eol > 0 {
+    let eol_usize: usize = eol
+    ret rem.slice(0, eol_usize)
+  }
+  ret rem.trim()
+}
+
+// Extract the Host header value from the headers portion of a request.
+fn extract_host_header(headers: str) -> String {
+  // Try "Host: " (standard capitalization)
+  let host_pos: i64 = string_index_of(headers, "Host: ")
+  if host_pos >= 0 {
+    ret extract_header_value(headers, host_pos, 6)
+  }
+
+  // Try "host: " (lowercase)
+  let host_pos2: i64 = string_index_of(headers, "host: ")
+  if host_pos2 >= 0 {
+    ret extract_header_value(headers, host_pos2, 6)
+  }
+
+  ret String::from_str("")
+}
+
+// Parse a raw HTTP request string into an HttpRequest struct.
+// Sets valid = 1 if method and path are present, 0 otherwise.
+// Uses manual string_index_of + slice parsing (Vec.get is unreliable for Strings).
+fn parse_request(raw: String) -> HttpRequest {
+  let rs: str = raw
+  if rs.len() == 0 {
+    ret empty_request()
+  }
+
+  // Find first \r\n to extract request line
+  let crlf_pos: i64 = string_index_of(rs, "\r\n")
+  if crlf_pos <= 0 {
+    ret empty_request()
+  }
+
+  let crlf_usize: usize = crlf_pos
+  let request_line = rs.slice(0, crlf_usize)
+  let rl: str = request_line
+  if rl.len() == 0 {
+    ret empty_request()
+  }
+
+  // Parse request line: "METHOD PATH VERSION"
+  // Find first space -> method
+  let sp1: i64 = string_index_of(rl, " ")
+  if sp1 <= 0 {
+    ret empty_request()
+  }
+
+  let sp1_usize: usize = sp1
+  let method = rl.slice(0, sp1_usize)
+  let ms: str = method
+  if ms.len() == 0 {
+    ret empty_request()
+  }
+
+  // Rest after method + space
+  let rest_start: usize = sp1 + 1
+  let rest_len: usize = rl.len() - rest_start
+  let rest = rl.slice(rest_start, rest_len)
+  let rr: str = rest
+
+  // Find second space -> path, version
+  let sp2: i64 = string_index_of(rr, " ")
+  let mut path_str = String::from_str("")
+  let mut version_str = String::from_str("HTTP/1.1")
+
+  if sp2 > 0 {
+    // Have both path and version
+    let sp2_usize: usize = sp2
+    path_str = rr.slice(0, sp2_usize)
+    let ver_start: usize = sp2 + 1
+    let ver_len: usize = rr.len() - ver_start
+    version_str = rr.slice(ver_start, ver_len)
+  } else {
+    // No version, rest is just the path
+    path_str = String::from_str(rr)
+  }
+
+  // Validate path is not empty (clone so we can still use path_str later)
+  let path_check: str = path_str
+  if path_check.len() == 0 {
+    ret empty_request()
+  }
+
+  // Scan headers for Host
+  let mut host_str = String::from_str("")
+  let header_start: usize = crlf_pos + 2
+  let total_len = rs.len()
+
+  if header_start < total_len {
+    let headers_raw = rs.slice(header_start, total_len - header_start)
+    let hr: str = headers_raw
+    host_str = extract_host_header(hr)
+  }
+
+  let vs2: str = version_str
+  let hs2: str = host_str
+
+  ret HttpRequest {
+    method: String::from_str(ms),
+    path: String::from_str(path_check),
+    version: String::from_str(vs2),
+    host: String::from_str(hs2),
+    valid: 1,
+  }
+}
+
+// Build a complete HTTP response string with headers and body.
+fn build_response(status_code: i32, status_text: str, content_type: str, body: str) -> String {
+  let crlf: str = "\r\n"
+  let code_str = string_from_i32(status_code)
+  let body_len: i32 = body.len()
+  let len_str = string_from_i32(body_len)
+
+  let mut resp = String::from_str("HTTP/1.1 ")
+  resp = resp.concat(code_str)
+  resp = resp.concat(String::from_str(" "))
+  resp = resp.concat(String::from_str(status_text))
+  resp = resp.concat(String::from_str(crlf))
+
+  resp = resp.concat(String::from_str("Server: Apex"))
+  resp = resp.concat(String::from_str(crlf))
+
+  resp = resp.concat(String::from_str("Content-Type: "))
+  resp = resp.concat(String::from_str(content_type))
+  resp = resp.concat(String::from_str(crlf))
+
+  resp = resp.concat(String::from_str("Content-Length: "))
+  resp = resp.concat(len_str)
+  resp = resp.concat(String::from_str(crlf))
+
+  resp = resp.concat(String::from_str("Connection: close"))
+  resp = resp.concat(String::from_str(crlf))
+
+  resp = resp.concat(String::from_str(crlf))
+
+  resp = resp.concat(String::from_str(body))
+
+  ret resp
+}
+
+// Build a HEAD response (headers only, no body).
+fn build_head_response(status_code: i32, status_text: str, content_type: str, content_length: i32) -> String {
+  let crlf: str = "\r\n"
+  let code_str = string_from_i32(status_code)
+  let len_str = string_from_i32(content_length)
+
+  let mut resp = String::from_str("HTTP/1.1 ")
+  resp = resp.concat(code_str)
+  resp = resp.concat(String::from_str(" "))
+  resp = resp.concat(String::from_str(status_text))
+  resp = resp.concat(String::from_str(crlf))
+
+  resp = resp.concat(String::from_str("Server: Apex"))
+  resp = resp.concat(String::from_str(crlf))
+
+  resp = resp.concat(String::from_str("Content-Type: "))
+  resp = resp.concat(String::from_str(content_type))
+  resp = resp.concat(String::from_str(crlf))
+
+  resp = resp.concat(String::from_str("Content-Length: "))
+  resp = resp.concat(len_str)
+  resp = resp.concat(String::from_str(crlf))
+
+  resp = resp.concat(String::from_str("Connection: close"))
+  resp = resp.concat(String::from_str(crlf))
+
+  resp = resp.concat(String::from_str(crlf))
+
+  ret resp
+}
+
+// Build headers-only response for file serving (body sent separately via send_file).
+// content_length is i64 from file_size, cast to i32 for string conversion.
+fn build_file_headers(status_code: i32, status_text: str, content_type: str, content_length: i64) -> String {
+  let crlf: str = "\r\n"
+  let code_str = string_from_i32(status_code)
+  let len_i32: i32 = content_length
+  let len_str = string_from_i32(len_i32)
+
+  let mut resp = String::from_str("HTTP/1.1 ")
+  resp = resp.concat(code_str)
+  resp = resp.concat(String::from_str(" "))
+  resp = resp.concat(String::from_str(status_text))
+  resp = resp.concat(String::from_str(crlf))
+
+  resp = resp.concat(String::from_str("Server: Apex"))
+  resp = resp.concat(String::from_str(crlf))
+
+  resp = resp.concat(String::from_str("Content-Type: "))
+  resp = resp.concat(String::from_str(content_type))
+  resp = resp.concat(String::from_str(crlf))
+
+  resp = resp.concat(String::from_str("Content-Length: "))
+  resp = resp.concat(len_str)
+  resp = resp.concat(String::from_str(crlf))
+
+  resp = resp.concat(String::from_str("Connection: close"))
+  resp = resp.concat(String::from_str(crlf))
+
+  resp = resp.concat(String::from_str(crlf))
+
+  ret resp
+}
+
+// Build an error response with a simple HTML body.
+fn build_error_response(status_code: i32, status_text: str) -> String {
+  let code_str = string_from_i32(status_code)
+
+  let mut body = String::from_str("<html><body><h1>")
+  body = body.concat(code_str)
+  body = body.concat(String::from_str(" "))
+  body = body.concat(String::from_str(status_text))
+  body = body.concat(String::from_str("</h1></body></html>"))
+
+  let bs: str = body
+  ret build_response(status_code, status_text, "text/html", bs)
+}

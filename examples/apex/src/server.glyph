@@ -1,0 +1,322 @@
+// Apex Web Server — Static File Server
+//
+// Handles path resolution, MIME type detection, file reading,
+// and dispatching requests to the response builder.
+//
+// Function order matters: Glyph requires callees to be defined
+// before callers. Helpers first, then handle_request last.
+
+from std/io import File, puts
+from std/enums import Result, Option
+from std/string import string_index_of, string_from_i32
+
+from http import HttpRequest, build_response, build_head_response, build_error_response, build_file_headers
+from std/net import TcpStream, file_size
+
+// Log a request: "METHOD PATH STATUS"
+fn log_request(method: str, path: str, status: i32) -> i32 {
+  let status_str = string_from_i32(status)
+  let mut line = String::from_str(method)
+  line = line.concat(String::from_str(" "))
+  line = line.concat(String::from_str(path))
+  line = line.concat(String::from_str(" "))
+  line = line.concat(status_str)
+  let ls: str = line
+  puts(ls)
+  ret 0
+}
+
+// Convert a URL path to a safe filesystem path.
+// Returns empty String on security violation. Reject, never sanitize.
+fn resolve_path(url_path: str, doc_root: str) -> String {
+  // 1. Reject paths not starting with /
+  let mut starts_slash: i32 = 0
+  if url_path.starts_with("/") {
+    starts_slash = 1
+  }
+  if starts_slash == 0 {
+    ret String::from_str("")
+  }
+
+  // 2. Reject path traversal
+  let dotdot_pos = string_index_of(url_path, "..")
+  if dotdot_pos >= 0 {
+    ret String::from_str("")
+  }
+
+  // 3. Reject null bytes
+  let null_pos = string_index_of(url_path, "\0")
+  if null_pos >= 0 {
+    ret String::from_str("")
+  }
+
+  // 4. Reject dotfiles (path segments starting with .)
+  let dotfile_pos = string_index_of(url_path, "/.")
+  if dotfile_pos >= 0 {
+    ret String::from_str("")
+  }
+
+  // 5. Strip leading /
+  let mut cleaned = String::from_str("")
+  if url_path.len() > 1 {
+    cleaned = url_path.slice(1, url_path.len() - 1)
+  }
+
+  // 6. Default to index.html for empty path or trailing /
+  let cs: str = cleaned
+  if cs.len() == 0 {
+    ret String::from_str(doc_root).concat(String::from_str("/index.html"))
+  }
+  if cs.ends_with("/") {
+    let mut result = String::from_str(doc_root)
+    result = result.concat(String::from_str("/"))
+    result = result.concat(String::from_str(cs))
+    result = result.concat(String::from_str("index.html"))
+    ret result
+  }
+
+  // 7. Concat: doc_root + "/" + cleaned_path
+  let mut result = String::from_str(doc_root)
+  result = result.concat(String::from_str("/"))
+  result = result.concat(String::from_str(cs))
+  ret result
+}
+
+// Return MIME type string based on file extension.
+fn guess_content_type(path: str) -> str {
+  if path.ends_with(".html") {
+    ret "text/html"
+  }
+  if path.ends_with(".css") {
+    ret "text/css"
+  }
+  if path.ends_with(".js") {
+    ret "application/javascript"
+  }
+  if path.ends_with(".json") {
+    ret "application/json"
+  }
+  if path.ends_with(".txt") {
+    ret "text/plain"
+  }
+  if path.ends_with(".svg") {
+    ret "image/svg+xml"
+  }
+  if path.ends_with(".xml") {
+    ret "application/xml"
+  }
+  if path.ends_with(".png") {
+    ret "image/png"
+  }
+  if path.ends_with(".jpg") {
+    ret "image/jpeg"
+  }
+  if path.ends_with(".jpeg") {
+    ret "image/jpeg"
+  }
+  if path.ends_with(".gif") {
+    ret "image/gif"
+  }
+  if path.ends_with(".ico") {
+    ret "image/x-icon"
+  }
+  if path.ends_with(".woff") {
+    ret "font/woff"
+  }
+  if path.ends_with(".woff2") {
+    ret "font/woff2"
+  }
+  if path.ends_with(".pdf") {
+    ret "application/pdf"
+  }
+  if path.ends_with(".webp") {
+    ret "image/webp"
+  }
+  ret "application/octet-stream"
+}
+
+// Check if file exists using stat(). Returns 1 if exists, 0 otherwise.
+// Workaround: File::open Err match crashes (compiler bug), so check first.
+fn file_exists(path: str) -> i32 {
+  let size = file_size(path)
+  if size >= 0 {
+    ret 1
+  }
+  ret 0
+}
+
+// Read a file's contents. Returns empty String if file doesn't exist.
+// WORKAROUND: Cannot match on File::open Err (compiler crash).
+// Check existence with stat() first, then only open files we know exist.
+fn read_file(path: str) -> String {
+  let exists = file_exists(path)
+  if exists == 0 {
+    ret String::from_str("")
+  }
+
+  let open_result = File::open(path)
+  let f = match open_result {
+    Ok(file) => file,
+    Err(_e) => {
+      // Should not reach here since we checked existence
+      ret String::from_str("")
+    },
+  }
+
+  let read_result = f.read_to_string()
+  let contents = match read_result {
+    Ok(data) => data,
+    Err(_e) => {
+      let _ = f.close()
+      ret String::from_str("")
+    },
+  }
+
+  let _ = f.close()
+  ret contents
+}
+
+// Top-level request handler. Returns a complete HTTP response string.
+// Defined last because it calls all helpers above.
+//
+// IMPORTANT: Struct field access via `let x: str = request.field` moves the
+// String out and borrows it. The String may be freed, leaving a dangling str.
+// Always clone struct String fields into owned Strings first.
+fn handle_request(request: HttpRequest, doc_root: str) -> String {
+  // Check valid
+  if request.valid == 0 {
+    ret build_error_response(400, "Bad Request")
+  }
+
+  // Clone method and path as owned Strings that stay alive.
+  let method_owned = request.method.clone()
+  let path_owned = request.path.clone()
+
+  // Determine method type. Use starts_with directly on owned Strings.
+  let mut is_get: i32 = 0
+  let mut is_head: i32 = 0
+  let m_check: str = method_owned
+  if m_check.starts_with("GET") {
+    is_get = 1
+  }
+  if m_check.starts_with("HEAD") {
+    is_head = 1
+  }
+
+  if is_get == 0 {
+    if is_head == 0 {
+      ret build_error_response(405, "Method Not Allowed")
+    }
+  }
+
+  // Resolve filesystem path.
+  // CRITICAL: convert path to str only for this call, then immediately use result.
+  let p_check: str = path_owned
+  let resolved = resolve_path(p_check, doc_root)
+  let resolved_str: str = resolved
+  if resolved_str.len() == 0 {
+    ret build_error_response(403, "Forbidden")
+  }
+
+  // Read file (returns empty string on failure)
+  let contents = read_file(resolved_str)
+  let body: str = contents
+  if body.len() == 0 {
+    ret build_error_response(404, "Not Found")
+  }
+
+  // Determine MIME type
+  let content_type = guess_content_type(resolved_str)
+
+  // HEAD response (headers only)
+  if is_head == 1 {
+    let content_len: i32 = body.len()
+    ret build_head_response(200, "OK", content_type, content_len)
+  }
+
+  // GET response with body
+  ret build_response(200, "OK", content_type, body)
+}
+
+// Streaming request handler for binary file serving.
+// Sends headers then streams file body via TcpStream, bypassing String system.
+// This allows binary files (images, fonts, PDFs) to be served correctly.
+fn serve_request(request: HttpRequest, doc_root: str, stream: TcpStream) -> i32 {
+  let mut s = stream
+
+  // Check valid
+  if request.valid == 0 {
+    let err_resp = build_error_response(400, "Bad Request")
+    let er: str = err_resp
+    let _ = s.send(er)
+    let _ = log_request("-", "-", 400)
+    ret 400
+  }
+
+  // Clone method and path as owned Strings that stay alive.
+  let method_owned = request.method.clone()
+  let path_owned = request.path.clone()
+
+  // Determine method type
+  let mut is_get: i32 = 0
+  let mut is_head: i32 = 0
+  let m_check: str = method_owned
+  let p_check: str = path_owned
+  if m_check.starts_with("GET") {
+    is_get = 1
+  }
+  if m_check.starts_with("HEAD") {
+    is_head = 1
+  }
+
+  if is_get == 0 {
+    if is_head == 0 {
+      let err_resp = build_error_response(405, "Method Not Allowed")
+      let er: str = err_resp
+      let _ = s.send(er)
+      let _ = log_request(m_check, p_check, 405)
+      ret 405
+    }
+  }
+
+  // Resolve filesystem path
+  let resolved = resolve_path(p_check, doc_root)
+  let resolved_str: str = resolved
+  if resolved_str.len() == 0 {
+    let err_resp = build_error_response(403, "Forbidden")
+    let er: str = err_resp
+    let _ = s.send(er)
+    let _ = log_request(m_check, p_check, 403)
+    ret 403
+  }
+
+  // Check file exists and get size
+  let fsize = file_size(resolved_str)
+  if fsize < 0 {
+    let err_resp = build_error_response(404, "Not Found")
+    let er: str = err_resp
+    let _ = s.send(er)
+    let _ = log_request(m_check, p_check, 404)
+    ret 404
+  }
+
+  // Determine MIME type
+  let content_type = guess_content_type(resolved_str)
+
+  // HEAD response (headers only, with Content-Length)
+  if is_head == 1 {
+    let headers = build_file_headers(200, "OK", content_type, fsize)
+    let hs: str = headers
+    let _ = s.send(hs)
+    let _ = log_request(m_check, p_check, 200)
+    ret 200
+  }
+
+  // GET response — send headers then stream file body
+  let headers = build_file_headers(200, "OK", content_type, fsize)
+  let hs: str = headers
+  let _ = s.send(hs)
+  let _ = s.send_file(resolved_str)
+  let _ = log_request(m_check, p_check, 200)
+  ret 200
+}
